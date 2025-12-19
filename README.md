@@ -159,4 +159,8 @@ MIT
 
 ## Credits
 
-Built to solve the "AppleScript playlist editing is broken" problem. Inspired by frustration with existing solutions that don't actually work.
+- [FastMCP](https://github.com/jlowin/fastmcp) - The MCP server framework
+- [Apple MusicKit](https://developer.apple.com/documentation/applemusicapi) - REST API documentation
+- [Model Context Protocol](https://modelcontextprotocol.io/) - The protocol specification by Anthropic
+
+Built to solve the "AppleScript playlist editing is broken" problem after discovering existing solutions don't actually work for playlist modification.
