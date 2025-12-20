@@ -255,3 +255,30 @@ class TestInputSanitization:
             # Should not raise an exception
             success, result = asc.search_library(query)
             assert isinstance(success, bool)
+
+
+class TestRemoveFromLibrary:
+    """Test remove_from_library function."""
+
+    def test_remove_nonexistent_track(self):
+        """Should return error for track not in library."""
+        success, result = asc.remove_from_library("__NONEXISTENT_TRACK_12345__")
+        assert success is False
+        assert "not found" in result.lower()
+
+    def test_remove_from_library_returns_tuple(self):
+        """Should return (success, message) tuple."""
+        success, result = asc.remove_from_library("test")
+        assert isinstance(success, bool)
+        assert isinstance(result, str)
+
+
+class TestOpenCatalogSong:
+    """Test open_catalog_song function."""
+
+    def test_open_catalog_song_returns_tuple(self):
+        """Should return (success, message) tuple."""
+        # Use a fake ID - will open Music app but not crash
+        success, result = asc.open_catalog_song("1234567890")
+        assert isinstance(success, bool)
+        assert isinstance(result, str)

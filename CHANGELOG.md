@@ -5,6 +5,25 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.1] - 2025-12-20
+
+### Added
+
+- **`remove_from_library`** - Remove tracks from library via AppleScript (macOS only)
+
+### Changed
+
+- **play_track enhanced** - Now properly handles catalog tracks not in library:
+  - `add_to_library=True`: Adds song to library first, then plays
+  - `reveal=True`: Opens song in Music app for manual play
+  - Clear messaging about AppleScript's inability to auto-play non-library catalog tracks
+- **Code refactoring** - Extracted `_search_catalog_songs()` and `_add_songs_to_library()` internal helpers to reduce duplication
+
+### Fixed
+
+- Fixed `play_track` calling non-existent `reveal_in_music` (now correctly calls `reveal_track`)
+- Replaced misleading `play_catalog_track` AppleScript function with honest `open_catalog_song`
+
 ## [0.2.0] - 2024-12-20
 
 ### Added

@@ -562,3 +562,145 @@ class TestFormatTrackList:
         lines, tier = server.format_track_list([])
         assert tier == "Full"
         assert lines == []
+
+
+class TestSearchCatalogSongsHelper:
+    """Tests for _search_catalog_songs internal helper."""
+
+    @responses.activate
+    def test_returns_songs_on_success(self, mock_config_dir, mock_developer_token, mock_user_token):
+        """Should return list of song dicts on successful search."""
+        # Setup tokens
+        dev_token_file = mock_config_dir / "developer_token.json"
+        with open(dev_token_file, "w") as f:
+            json.dump({"token": mock_developer_token, "expires": time.time() + 86400 * 60}, f)
+
+        user_token_file = mock_config_dir / "music_user_token.json"
+        with open(user_token_file, "w") as f:
+            json.dump({"music_user_token": mock_user_token}, f)
+
+        responses.add(
+            responses.GET,
+            "https://api.music.apple.com/v1/catalog/us/search",
+            json={
+                "results": {
+                    "songs": {
+                        "data": [
+                            {"id": "123", "attributes": {"name": "Test Song", "artistName": "Test Artist"}}
+                        ]
+                    }
+                }
+            },
+            status=200,
+        )
+
+        result = server._search_catalog_songs("test", limit=5)
+        assert len(result) == 1
+        assert result[0]["id"] == "123"
+
+    @responses.activate
+    def test_returns_empty_on_error(self, mock_config_dir, mock_developer_token, mock_user_token):
+        """Should return empty list on API error."""
+        # Setup tokens
+        dev_token_file = mock_config_dir / "developer_token.json"
+        with open(dev_token_file, "w") as f:
+            json.dump({"token": mock_developer_token, "expires": time.time() + 86400 * 60}, f)
+
+        user_token_file = mock_config_dir / "music_user_token.json"
+        with open(user_token_file, "w") as f:
+            json.dump({"music_user_token": mock_user_token}, f)
+
+        responses.add(
+            responses.GET,
+            "https://api.music.apple.com/v1/catalog/us/search",
+            json={"error": "Unauthorized"},
+            status=401,
+        )
+
+        result = server._search_catalog_songs("test")
+        assert result == []
+
+
+class TestAddSongsToLibraryHelper:
+    """Tests for _add_songs_to_library internal helper."""
+
+    def test_returns_error_for_empty_ids(self):
+        """Should return error tuple for empty ID list."""
+        success, msg = server._add_songs_to_library([])
+        assert success is False
+        assert "No catalog IDs" in msg
+
+    @responses.activate
+    def test_returns_success_on_valid_response(self, mock_config_dir, mock_developer_token, mock_user_token):
+        """Should return success tuple on successful add."""
+        # Setup tokens
+        dev_token_file = mock_config_dir / "developer_token.json"
+        with open(dev_token_file, "w") as f:
+            json.dump({"token": mock_developer_token, "expires": time.time() + 86400 * 60}, f)
+
+        user_token_file = mock_config_dir / "music_user_token.json"
+        with open(user_token_file, "w") as f:
+            json.dump({"music_user_token": mock_user_token}, f)
+
+        responses.add(
+            responses.POST,
+            "https://api.music.apple.com/v1/me/library",
+            status=202,
+        )
+
+        success, msg = server._add_songs_to_library(["123456789"])
+        assert success is True
+        assert "1 song" in msg
+
+    @responses.activate
+    def test_returns_error_on_api_failure(self, mock_config_dir, mock_developer_token, mock_user_token):
+        """Should return error tuple on API failure."""
+        # Setup tokens
+        dev_token_file = mock_config_dir / "developer_token.json"
+        with open(dev_token_file, "w") as f:
+            json.dump({"token": mock_developer_token, "expires": time.time() + 86400 * 60}, f)
+
+        user_token_file = mock_config_dir / "music_user_token.json"
+        with open(user_token_file, "w") as f:
+            json.dump({"music_user_token": mock_user_token}, f)
+
+        responses.add(
+            responses.POST,
+            "https://api.music.apple.com/v1/me/library",
+            status=401,
+        )
+
+        success, msg = server._add_songs_to_library(["123456789"])
+        assert success is False
+        assert "401" in msg
+
+
+class TestAddToLibraryTool:
+    """Tests for add_to_library MCP tool."""
+
+    def test_returns_error_for_empty_ids(self):
+        """Should return error for empty catalog IDs."""
+        result = server.add_to_library("")
+        assert "No catalog IDs" in result
+
+    @responses.activate
+    def test_adds_songs_successfully(self, mock_config_dir, mock_developer_token, mock_user_token):
+        """Should add songs and return success message."""
+        # Setup tokens
+        dev_token_file = mock_config_dir / "developer_token.json"
+        with open(dev_token_file, "w") as f:
+            json.dump({"token": mock_developer_token, "expires": time.time() + 86400 * 60}, f)
+
+        user_token_file = mock_config_dir / "music_user_token.json"
+        with open(user_token_file, "w") as f:
+            json.dump({"music_user_token": mock_user_token}, f)
+
+        responses.add(
+            responses.POST,
+            "https://api.music.apple.com/v1/me/library",
+            status=202,
+        )
+
+        result = server.add_to_library("123456789, 987654321")
+        assert "Successfully added" in result
+        assert "2 song" in result

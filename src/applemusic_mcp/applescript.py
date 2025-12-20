@@ -506,6 +506,43 @@ def remove_track_from_playlist(playlist_name: str, track_name: str, artist: Opti
     return success, output
 
 
+def remove_from_library(track_name: str, artist: Optional[str] = None) -> tuple[bool, str]:
+    """Remove a track from the library entirely.
+
+    Args:
+        track_name: Name of the track to remove
+        artist: Optional artist name to disambiguate
+
+    Returns:
+        Tuple of (success, message or error)
+    """
+    safe_track = _escape_for_applescript(track_name)
+
+    if artist:
+        safe_artist = _escape_for_applescript(artist)
+        track_filter = f'whose name contains "{safe_track}" and artist contains "{safe_artist}"'
+    else:
+        track_filter = f'whose name contains "{safe_track}"'
+
+    script = f'''
+    tell application "Music"
+        try
+            set targetTrack to (first track of library playlist 1 {track_filter})
+        on error
+            return "ERROR:Track not found in library: {safe_track}"
+        end try
+        set trackName to name of targetTrack
+        set trackArtist to artist of targetTrack
+        delete targetTrack
+        return "Removed from library: " & trackName & " by " & trackArtist
+    end tell
+    '''
+    success, output = run_applescript(script)
+    if output.startswith("ERROR:"):
+        return False, output[6:]
+    return success, output
+
+
 def play_playlist(playlist_name: str, shuffle: bool = False) -> tuple[bool, str]:
     """Start playing a playlist.
 
@@ -572,30 +609,29 @@ def play_track(track_name: str, artist: Optional[str] = None) -> tuple[bool, str
     return success, output
 
 
-def play_catalog_track(catalog_id: str, track_name: str = "", artist: str = "") -> tuple[bool, str]:
-    """Play a track from the Apple Music catalog (doesn't need to be in library).
+def open_catalog_song(catalog_id: str) -> tuple[bool, str]:
+    """Open a catalog song in the Music app (for browsing/manual play).
+
+    Note: AppleScript cannot auto-play catalog songs not in your library.
+    This opens the song page so the user can click play manually.
 
     Args:
         catalog_id: The catalog song ID (from search_catalog)
-        track_name: Track name for display (optional)
-        artist: Artist name for display (optional)
 
     Returns:
         Tuple of (success, message or error)
     """
-    # Use the Apple Music URL scheme to play catalog content, then ensure playback starts
     script = f'''
     tell application "Music"
         open location "music://music.apple.com/us/song/{catalog_id}"
-        delay 1
-        play
-        return "Now playing from catalog"
+        activate
+        return "Opened catalog song"
     end tell
     '''
     success, output = run_applescript(script)
     if not success:
         return False, output
-    return True, f"Now playing from catalog: {track_name} by {artist}"
+    return True, "Opened in Music app"
 
 
 # =============================================================================

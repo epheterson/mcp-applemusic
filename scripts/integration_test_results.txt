@@ -1,5 +1,5 @@
 Apple Music MCP Integration Test
-Started: 2025-12-20T10:36:39.840401
+Started: 2025-12-20T14:39:39.929411
 
 
 ============================================================
@@ -20,7 +20,7 @@ API Connection: OK
 TEST: get_library_playlists
 ============================================================
 Result preview:
-=== 81 playlists ===
+=== 83 playlists ===
 Full data: /Users/elp/.cache/applemusic-mcp/library_playlists.csv
 
 Barack Obama’s Summer 2024 (ID: p.9YMaUlGQlbJ, read-only, modified 2024-08-14)
@@ -75,7 +75,7 @@ Aaron B...
 TEST: get_library_albums
 ============================================================
 Result preview:
-=== 1747 albums ===
+=== 1748 albums ===
 Full data: /Users/elp/.cache/applemusic-mcp/library_albums.csv
 
 A a a a a Very Good Song - Single - Samir Mezrahi (1) l.hsreRMb
@@ -110,7 +110,7 @@ Full data: /Users/elp/.cache/applemusic-mcp/album_l_hsreRMb.csv
 TEST: get_library_artists
 ============================================================
 Result preview:
-=== 1071 artists ===
+=== 1072 artists ===
 Full data: /Users/elp/.cache/applemusic-mcp/library_artists.csv
 
 A Tribe Called Quest (r.BDaiew5)
@@ -140,7 +140,7 @@ TEST: search_library ('love')
 ============================================================
 Result preview:
 === 5 results for 'love' (Full format) ===
-Full data: /Users/elp/.cache/applemusic-mcp/search_library_love_20251220_103706.csv
+Full data: /Users/elp/.cache/applemusic-mcp/search_library_love_20251220_144008.csv
 
 She Comes In Colors - Love (2:46) Da Capo [1966] Rock i.GXR0af98l9O2
 Grace (Anxiety) - Louderbach (6:43) Enemy Love [2006] Electronic i.X6zF2Mo219
@@ -157,7 +157,7 @@ TEST: search_catalog ('Beatles')
 ============================================================
 Result preview:
 === 5 Songs (use add_to_library with these IDs) ===
-Full data: /Users/elp/.cache/applemusic-mcp/search_catalog_Beatles_20251220_103707.csv
+Full data: /Users/elp/.cache/applemusic-mcp/search_catalog_Beatles_20251220_144008.csv
 
 In My Life - The Beatles (2:26) Rubber Soul [1965] Rock 1441164829
 Yesterday - The Beatles (2:05) Help! [1965] Rock 1441164805
@@ -176,11 +176,11 @@ Result preview:
 === 5 recently played tracks (Full format) ===
 Full data: /Users/elp/.cache/applemusic-mcp/recently_played.csv
 
-gravity fAlls - erwOn (2:25) emerald CiTy - EP [2022] Hip-Hop/Rap 1647190291
-Every Little Thing She Does Is Magic - The Police (4:20) The Very Best of Sting & The Police [1981] Rock 1440883284
-Thursday - Noni (1:55) Thursday - Single [2025] Hip-Hop/Rap 1823843319
-I Won't Back Down - Tom Petty (2:55) Full Moon Fever [1989] Rock 1440825623
-Moving On - Dontcry & cxlt. (2:21) Moving On - S...
+leaves in the wind - quiet place (2:13) leaves in the wind - Single [2025] Hip-Hop/Rap 1826877193
+Still Sand - Moca Cabana (2:19) Still Sand - Single [2025] Downtempo 1823175329
+Those Moments - Kainbeats (2:00) Peace, Beyond All Else [2024] Hip-Hop/Rap 1729905083
+clouds passing by - Casiio & Kainbeats (2:13) clouds passing by - Single [2025] Hip-Hop/Rap 1785564058
+Stairway to Heaven - ...
 
   [PASS] Contains: recently played
   [PASS] Contains: Full data:
@@ -193,11 +193,12 @@ Result preview:
 === 10 recently added items ===
 Full data: /Users/elp/.cache/applemusic-mcp/recently_added.csv
 
-__TEST_PLAYLIST__ (playlists) [added 2025-12-20] [ID: p.0qo8haBlamO]
+__TEST_PLAYLIST__ (playlists) [added 2025-12-20] [ID: p.rxJ5i6qm6Y3]
+__TEST_PLAYLIST__ (playlists) [added 2025-12-20] [ID: p.vv53cbeVb8d]
+__TEST_PLAYLIST__ (playlists) [added 2025-12-20] [ID: p.rxlVs6qm6Y3]
+Fear of a Black Planet - Public Enemy (1 tracks) (albums) [added 2025-12-20] [ID: l.RjVgf8w]
 (What's the Story) Morning Glory? - Oasis (1 tracks) (albums) [added 2025-12-19] [ID: l.ms2nB5]
-Very Necessary - Salt-N-Pepa (1 tracks) (albums) [added 2025-12-19] [ID: l.Vmrb5t7]
-The Bodyguard (Original Soundtrack Album) - Whitney Houston (1 tracks) (albums) [added 2025-12-19] [ID: l.Gi1S6cl]
-Total - Joy Division & New Order (1 trac...
+Very Nec...
 
   [PASS] Contains: recently added
   [PASS] Contains: Full data:
@@ -323,11 +324,10 @@ Result preview:
   5. Choosin' Texas - Ella Langley
   6. Last Christmas (Single Version) - Wham!
   7. Rockin' Around the Christmas Tree (Single) - Brenda Lee
-  8. The Fate of Ophelia - Taylor Swift
-  9. Sleigh Ride - The Ronettes
-  10. It's the Most Wonderful Time of the Year - Andy Williams
-  11. Folded - Kehlani
-  12. The Christmas Song (Mer...
+  8. Sleigh Ride - The Ronettes
+  9. It's the Most Wonderful Time of the Year - Andy Williams
+  10. The Christmas Song (Merry Christmas to You) - Nat "King" Cole
+  11. Let It Snow! Let It...
 
   [PASS] Contains: ===
 
@@ -376,14 +376,14 @@ TEST: get_cache_info
 ============================================================
 Result preview:
 === Cache: /Users/elp/.cache/applemusic-mcp ===
-Total: 102 files, 656.8 KB
+Total: 127 files, 663.3 KB
 
 recommendations.csv (6KB, 0h ago)
 heavy_rotation.csv (2KB, 0h ago)
 recently_added.csv (3KB, 0h ago)
-recently_played.csv (441B, 0h ago)
-search_catalog_Beatles_20251220_103707.csv (405B, 0h ago)
-search_library_love_20251220_103706.csv (427B, 0h ago)
+recently_played.csv (478B, 0h ago)
+search_catalog_Beatles_20251220_144008.csv (405B, 0h ago)
+search_library_love_20251220_144008.csv (427B, 0h ago)
 library_artists.csv (26KB, 0h ago)
 album_l_hsreRMb.csv (175B, 0h ago)
 library_albums.csv (491KB, 0h ago)
@@ -397,7 +397,7 @@ playlist_p_9YMaUlGQlbJ.csv (4KB, 0h ag...
 TEST: create_playlist
 ============================================================
 Result preview:
-Created playlist '__TEST_PLAYLIST__' (ID: p.xVd1iEpKE5A)
+Created playlist '__TEST_PLAYLIST__' (ID: p.79eeU45r4dR)
 
   [PASS] Contains: Created
   [PASS] Contains: __TEST_PLAYLIST__
@@ -421,6 +421,6 @@ Failed: 0
 Total:  23
 
 CLEANUP NEEDED:
-  - Delete playlist: p.xVd1iEpKE5A
+  - Delete playlist: p.79eeU45r4dR
 
-Completed: 2025-12-20T10:37:15.162399
+Completed: 2025-12-20T14:40:15.760044

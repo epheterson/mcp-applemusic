@@ -222,6 +222,61 @@ def get_headers() -> dict:
     }
 
 
+# ============ INTERNAL HELPERS ============
+
+
+def _search_catalog_songs(query: str, limit: int = 5) -> list[dict]:
+    """Search catalog for songs and return raw song data.
+
+    Args:
+        query: Search term
+        limit: Max results (default 5)
+
+    Returns:
+        List of song dicts with 'id', 'attributes' (name, artistName, etc.)
+        Empty list on error.
+    """
+    try:
+        headers = get_headers()
+        response = requests.get(
+            f"{BASE_URL}/catalog/{STOREFRONT}/search",
+            headers=headers,
+            params={"term": query, "types": "songs", "limit": min(limit, 25)},
+        )
+        if response.status_code == 200:
+            data = response.json()
+            return data.get("results", {}).get("songs", {}).get("data", [])
+    except Exception:
+        pass
+    return []
+
+
+def _add_songs_to_library(catalog_ids: list[str]) -> tuple[bool, str]:
+    """Add songs to library by catalog ID.
+
+    Args:
+        catalog_ids: List of catalog song IDs
+
+    Returns:
+        Tuple of (success, message)
+    """
+    if not catalog_ids:
+        return False, "No catalog IDs provided"
+
+    try:
+        headers = get_headers()
+        response = requests.post(
+            f"{BASE_URL}/me/library",
+            headers=headers,
+            params={"ids[songs]": ",".join(catalog_ids)},
+        )
+        if response.status_code in (200, 201, 202, 204):
+            return True, f"Added {len(catalog_ids)} song(s) to library"
+        return False, f"API returned status {response.status_code}"
+    except Exception as e:
+        return False, str(e)
+
+
 # ============ PLAYLIST MANAGEMENT ============
 
 
@@ -618,7 +673,6 @@ def add_to_playlist(
 
         # Quick verify with polling
         if verify:
-            import time
             for _ in range(5):  # Try up to 5 times (0.5s total)
                 success, exists = asc.track_exists_in_playlist(
                     playlist_name, track_name, artist if artist else None
@@ -670,7 +724,6 @@ def add_to_playlist(
                         track_info[track_id] = f"{name} - {artist_name}"
 
                         # Poll library until track appears (up to 1s)
-                        import time
                         found_id = None
                         for attempt in range(10):
                             if attempt > 0:
@@ -891,31 +944,14 @@ def add_to_library(catalog_ids: str) -> str:
 
     Returns: Confirmation or error message
     """
-    try:
-        headers = get_headers()
+    ids = [s.strip() for s in catalog_ids.split(",") if s.strip()]
+    if not ids:
+        return "No catalog IDs provided"
 
-        ids = [s.strip() for s in catalog_ids.split(",") if s.strip()]
-        if not ids:
-            return "No catalog IDs provided"
-
-        params = {"ids[songs]": ",".join(ids)}
-
-        response = requests.post(
-            f"{BASE_URL}/me/library",
-            headers=headers,
-            params=params,
-        )
-
-        if response.status_code == 202:
-            return f"Successfully added {len(ids)} song(s) to your library. Use search_library to find their library IDs."
-        else:
-            response.raise_for_status()
-            return f"Added to library (status: {response.status_code})"
-
-    except requests.exceptions.RequestException as e:
-        return f"API Error: {str(e)}"
-    except (FileNotFoundError, ValueError) as e:
-        return str(e)
+    success, msg = _add_songs_to_library(ids)
+    if success:
+        return f"Successfully added {len(ids)} song(s) to your library. Use search_library to find their library IDs."
+    return f"API Error: {msg}"
 
 
 @mcp.tool()
@@ -2457,55 +2493,85 @@ def check_auth_status() -> str:
 if APPLESCRIPT_AVAILABLE:
 
     @mcp.tool()
-    def play_track(track_name: str, artist: str = "") -> str:
-        """Play a specific track (macOS only).
+    def play_track(
+        track_name: str,
+        artist: str = "",
+        reveal: bool = False,
+        add_to_library: bool = False,
+    ) -> str:
+        """Play a track from your library (macOS only).
 
-        First tries your library, then searches Apple Music catalog.
-        Can play ANY song from the catalog without adding to library.
+        Plays tracks from your library. For songs not in your library, use
+        reveal=True to open in Music app, or add_to_library=True to add first.
+
+        Note: AppleScript cannot directly play catalog songs not in your library.
+        This is a macOS limitation, not a bug.
 
         Args:
             track_name: Name of the track to play (can be partial match)
             artist: Optional artist name to disambiguate
+            reveal: If track not in library, open it in Music app
+            add_to_library: If track not in library, add it first then play
 
         Returns: Confirmation message or error
         """
         # Try library first
         success, result = asc.play_track(track_name, artist if artist else None)
         if success:
+            if reveal:
+                asc.reveal_track(track_name, artist if artist else None)
             return result
 
-        # Fallback to catalog search
-        try:
-            headers = get_headers()
-            search_term = f"{track_name} {artist}".strip() if artist else track_name
-            response = requests.get(
-                f"{BASE_URL}/catalog/us/search",
-                headers=headers,
-                params={"term": search_term, "types": "songs", "limit": 5},
-            )
-            if response.status_code == 200:
-                data = response.json()
-                songs = data.get("results", {}).get("songs", {}).get("data", [])
-                if songs:
-                    # Find best match
-                    for song in songs:
-                        attrs = song.get("attributes", {})
-                        song_name = attrs.get("name", "")
-                        song_artist = attrs.get("artistName", "")
-                        # Check if it's a reasonable match
-                        if track_name.lower() in song_name.lower():
-                            if not artist or artist.lower() in song_artist.lower():
-                                catalog_id = song.get("id")
-                                success, result = asc.play_catalog_track(
-                                    catalog_id, song_name, song_artist
-                                )
-                                if success:
-                                    return f"Playing from catalog: {song_name} by {song_artist}"
-                                return f"Error playing catalog track: {result}"
-        except Exception as e:
-            pass  # Fall through to error
+        # Track not in library - search catalog using helper
+        search_term = f"{track_name} {artist}".strip() if artist else track_name
+        songs = _search_catalog_songs(search_term, limit=5)
 
-        return f"Error: Track not found in library or catalog: {track_name}"
+        # Find best match
+        for song in songs:
+            attrs = song.get("attributes", {})
+            song_name = attrs.get("name", "")
+            song_artist = attrs.get("artistName", "")
+
+            # Check if it's a reasonable match
+            if track_name.lower() not in song_name.lower():
+                continue
+            if artist and artist.lower() not in song_artist.lower():
+                continue
+
+            catalog_id = song.get("id")
+
+            # Option 1: Add to library first, then play
+            if add_to_library:
+                add_ok, add_msg = _add_songs_to_library([catalog_id])
+                if add_ok:
+                    # Wait for sync, then play
+                    for attempt in range(15):
+                        if attempt > 0:
+                            time.sleep(0.2)
+                        success, result = asc.play_track(song_name, song_artist)
+                        if success:
+                            if reveal:
+                                asc.reveal_track(song_name, song_artist)
+                            return f"Added to library and playing: {song_name} by {song_artist}"
+                    return f"Added to library but couldn't play yet: {song_name} by {song_artist}"
+                return f"Failed to add to library: {add_msg}"
+
+            # Option 2: Just reveal in Music app
+            if reveal:
+                asc.open_catalog_song(catalog_id)
+                return (
+                    f"Opened in Music: {song_name} by {song_artist}. "
+                    f"Click play to start (AppleScript can't auto-play catalog songs not in library)."
+                )
+
+            # Neither flag set - explain limitation
+            return (
+                f"Found in catalog: {song_name} by {song_artist}. "
+                f"Use add_to_library=True to add and play, or reveal=True to open in Music app. "
+                f"(AppleScript cannot auto-play catalog songs not in your library)"
+            )
+
+        return f"Track not found in library or catalog: {track_name}"
 
     @mcp.tool()
     def play_playlist(playlist_name: str, shuffle: bool = False) -> str:
@@ -2670,6 +2736,23 @@ if APPLESCRIPT_AVAILABLE:
         success, result = asc.remove_track_from_playlist(
             playlist_name, track_name, artist if artist else None
         )
+        if success:
+            return result
+        return f"Error: {result}"
+
+    @mcp.tool()
+    def remove_from_library(track_name: str, artist: str = "") -> str:
+        """Remove a track from your library entirely (macOS only).
+
+        This deletes the track from your library. Use with caution.
+
+        Args:
+            track_name: Name of the track to remove (partial match)
+            artist: Optional artist name to disambiguate
+
+        Returns: Confirmation message or error
+        """
+        success, result = asc.remove_from_library(track_name, artist if artist else None)
         if success:
             return result
         return f"Error: {result}"
