@@ -89,7 +89,9 @@ applemusic-mcp generate-token
 applemusic-mcp authorize
 ```
 
-### 5. Add to Claude Code
+### 5. Add to Claude
+
+#### Claude Code
 
 Add to `~/.claude.json` (or project `.claude/settings.json`):
 
@@ -103,6 +105,23 @@ Add to `~/.claude.json` (or project `.claude/settings.json`):
   }
 }
 ```
+
+#### Claude Desktop
+
+Add to `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS) or `%APPDATA%\Claude\claude_desktop_config.json` (Windows):
+
+```json
+{
+  "mcpServers": {
+    "Apple Music": {
+      "command": "/full/path/to/mcp-applemusic-api/venv/bin/python",
+      "args": ["-m", "applemusic_mcp"]
+    }
+  }
+}
+```
+
+Restart Claude Code or Claude Desktop after adding the configuration.
 
 ### 6. Verify
 
