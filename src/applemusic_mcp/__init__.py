@@ -1,3 +1,6 @@
-"""MCP server for Apple Music playlist management via REST API."""
+"""MCP server for Apple Music playlist management via REST API.
 
-__version__ = "0.1.0"
+Cross-platform with macOS AppleScript integration for playback control.
+"""
+
+__version__ = "0.2.0"

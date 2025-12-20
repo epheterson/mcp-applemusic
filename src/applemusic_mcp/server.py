@@ -1,4 +1,8 @@
-"""MCP server for Apple Music API - Cross-platform playlist and library management."""
+"""MCP server for Apple Music - Cross-platform playlist and library management.
+
+On macOS, additional AppleScript-powered tools are available for playback control,
+deleting tracks from playlists, and other operations not supported by the REST API.
+"""
 
 import csv
 import json
@@ -9,6 +13,10 @@ import requests
 from mcp.server.fastmcp import FastMCP
 
 from .auth import get_developer_token, get_user_token, get_config_dir
+from . import applescript as asc
+
+# Check if AppleScript is available (macOS only)
+APPLESCRIPT_AVAILABLE = asc.is_available()
 
 # Max characters for track listing output
 MAX_OUTPUT_CHARS = 50000
@@ -2111,6 +2119,320 @@ def check_auth_status() -> str:
             status.append(f"API Connection: ERROR - {str(e)}")
 
     return "\n".join(status)
+
+
+# =============================================================================
+# AppleScript-powered tools (macOS only)
+# =============================================================================
+# These tools provide capabilities not available through the REST API:
+# - Playback control (play, pause, skip)
+# - Delete tracks from playlists
+# - Delete playlists
+# - Volume and shuffle control
+# - Get currently playing track
+
+if APPLESCRIPT_AVAILABLE:
+
+    @mcp.tool()
+    def play_track(track_name: str, artist: str = "") -> str:
+        """Play a specific track from your library (macOS only).
+
+        Args:
+            track_name: Name of the track to play (can be partial match)
+            artist: Optional artist name to disambiguate
+
+        Returns: Confirmation message or error
+        """
+        success, result = asc.play_track(track_name, artist if artist else None)
+        if success:
+            return result
+        return f"Error: {result}"
+
+    @mcp.tool()
+    def play_playlist(playlist_name: str, shuffle: bool = False) -> str:
+        """Start playing a playlist (macOS only).
+
+        Args:
+            playlist_name: Name of the playlist to play
+            shuffle: Whether to shuffle the playlist
+
+        Returns: Confirmation message or error
+        """
+        success, result = asc.play_playlist(playlist_name, shuffle)
+        if success:
+            return result
+        return f"Error: {result}"
+
+    @mcp.tool()
+    def playback_control(action: str) -> str:
+        """Control playback: play, pause, stop, next, previous (macOS only).
+
+        Args:
+            action: One of: play, pause, playpause, stop, next, previous
+
+        Returns: Confirmation message or error
+        """
+        action = action.lower().strip()
+        action_map = {
+            "play": asc.play,
+            "pause": asc.pause,
+            "playpause": asc.playpause,
+            "stop": asc.stop,
+            "next": asc.next_track,
+            "previous": asc.previous_track,
+        }
+        if action not in action_map:
+            return f"Invalid action: {action}. Use: play, pause, playpause, stop, next, previous"
+
+        success, result = action_map[action]()
+        if success:
+            return f"Playback: {action}"
+        return f"Error: {result}"
+
+    @mcp.tool()
+    def get_now_playing() -> str:
+        """Get info about the currently playing track (macOS only).
+
+        Returns: Track info (name, artist, album, position) or stopped message
+        """
+        success, info = asc.get_current_track()
+        if not success:
+            return f"Error: {info}"
+
+        if info.get("state") == "stopped":
+            return "Not currently playing"
+
+        parts = []
+        if "name" in info:
+            parts.append(f"Track: {info['name']}")
+        if "artist" in info:
+            parts.append(f"Artist: {info['artist']}")
+        if "album" in info:
+            parts.append(f"Album: {info['album']}")
+        if "position" in info and "duration" in info:
+            try:
+                pos = float(info["position"])
+                dur = float(info["duration"])
+                pos_min, pos_sec = int(pos) // 60, int(pos) % 60
+                dur_min, dur_sec = int(dur) // 60, int(dur) % 60
+                parts.append(f"Position: {pos_min}:{pos_sec:02d} / {dur_min}:{dur_sec:02d}")
+            except (ValueError, TypeError):
+                pass
+
+        return "\n".join(parts) if parts else "Playing (no track info available)"
+
+    @mcp.tool()
+    def set_volume(volume: int) -> str:
+        """Set the Music app volume (macOS only).
+
+        Args:
+            volume: Volume level 0-100
+
+        Returns: Confirmation message
+        """
+        volume = max(0, min(100, volume))
+        success, result = asc.set_volume(volume)
+        if success:
+            return f"Volume set to {volume}"
+        return f"Error: {result}"
+
+    @mcp.tool()
+    def get_volume_and_playback() -> str:
+        """Get current volume and playback settings (macOS only).
+
+        Returns: Volume, shuffle, repeat, and player state
+        """
+        success, stats = asc.get_library_stats()
+        if not success:
+            return f"Error: {stats}"
+
+        return (
+            f"Player state: {stats['player_state']}\n"
+            f"Volume: {stats['volume']}\n"
+            f"Shuffle: {'on' if stats['shuffle'] else 'off'}\n"
+            f"Repeat: {stats['repeat']}"
+        )
+
+    @mcp.tool()
+    def set_shuffle(enabled: bool) -> str:
+        """Turn shuffle on or off (macOS only).
+
+        Args:
+            enabled: True to enable shuffle, False to disable
+
+        Returns: Confirmation message
+        """
+        success, result = asc.set_shuffle(enabled)
+        if success:
+            return f"Shuffle {'enabled' if enabled else 'disabled'}"
+        return f"Error: {result}"
+
+    @mcp.tool()
+    def set_repeat(mode: str) -> str:
+        """Set repeat mode (macOS only).
+
+        Args:
+            mode: One of: off, one (repeat current track), all (repeat playlist)
+
+        Returns: Confirmation message
+        """
+        success, result = asc.set_repeat(mode.lower())
+        if success:
+            return f"Repeat mode set to: {mode}"
+        return f"Error: {result}"
+
+    @mcp.tool()
+    def seek_to_position(seconds: float) -> str:
+        """Seek to a specific position in the current track (macOS only).
+
+        Args:
+            seconds: Position in seconds from the start of the track
+
+        Returns: Confirmation message
+        """
+        success, result = asc.seek(seconds)
+        if success:
+            return f"Seeked to {int(seconds // 60)}:{int(seconds % 60):02d}"
+        return f"Error: {result}"
+
+    @mcp.tool()
+    def remove_from_playlist(playlist_name: str, track_name: str, artist: str = "") -> str:
+        """Remove a track from a playlist (macOS only).
+
+        This only removes the track from the playlist, not from your library.
+
+        Args:
+            playlist_name: Name of the playlist
+            track_name: Name of the track to remove
+            artist: Optional artist name to disambiguate
+
+        Returns: Confirmation message or error
+        """
+        success, result = asc.remove_track_from_playlist(
+            playlist_name, track_name, artist if artist else None
+        )
+        if success:
+            return result
+        return f"Error: {result}"
+
+    @mcp.tool()
+    def delete_playlist(playlist_name: str) -> str:
+        """Delete a playlist entirely (macOS only).
+
+        Warning: This permanently deletes the playlist. It cannot be undone.
+
+        Args:
+            playlist_name: Name of the playlist to delete
+
+        Returns: Confirmation message or error
+        """
+        success, result = asc.delete_playlist(playlist_name)
+        if success:
+            return result
+        return f"Error: {result}"
+
+    @mcp.tool()
+    def love_track(track_name: str, artist: str = "") -> str:
+        """Mark a track as loved in your library (macOS only).
+
+        Args:
+            track_name: Name of the track
+            artist: Optional artist name to disambiguate
+
+        Returns: Confirmation message or error
+        """
+        success, result = asc.love_track(track_name, artist if artist else None)
+        if success:
+            return result
+        return f"Error: {result}"
+
+    @mcp.tool()
+    def dislike_track(track_name: str, artist: str = "") -> str:
+        """Mark a track as disliked in your library (macOS only).
+
+        Args:
+            track_name: Name of the track
+            artist: Optional artist name to disambiguate
+
+        Returns: Confirmation message or error
+        """
+        success, result = asc.dislike_track(track_name, artist if artist else None)
+        if success:
+            return result
+        return f"Error: {result}"
+
+    @mcp.tool()
+    def reveal_in_music(track_name: str, artist: str = "") -> str:
+        """Reveal a track in the Music app window (macOS only).
+
+        Opens Music app and navigates to show the track.
+
+        Args:
+            track_name: Name of the track (can be partial match)
+            artist: Optional artist name to disambiguate
+
+        Returns: Confirmation message or error
+        """
+        success, result = asc.reveal_track(track_name, artist if artist else None)
+        if success:
+            return result
+        return f"Error: {result}"
+
+    @mcp.tool()
+    def get_airplay_devices() -> str:
+        """Get list of available AirPlay devices (macOS only).
+
+        Returns: List of AirPlay device names
+        """
+        success, devices = asc.get_airplay_devices()
+        if not success:
+            return f"Error: {devices}"
+
+        if not devices:
+            return "No AirPlay devices found"
+
+        return f"AirPlay devices ({len(devices)}):\n" + "\n".join(f"  - {d}" for d in devices)
+
+    @mcp.tool()
+    def local_search_library(query: str, search_type: str = "all") -> str:
+        """Search your local library via AppleScript (macOS only).
+
+        This uses AppleScript to search directly, which can be faster than the API
+        for local library searches. Limited to 100 results.
+
+        Args:
+            query: Search query
+            search_type: Type of search - all, artists, albums, or songs
+
+        Returns: Search results with track details
+        """
+        success, results = asc.search_library(query, search_type)
+        if not success:
+            return f"Error: {results}"
+
+        if not results:
+            return f"No results found for '{query}'"
+
+        # Format results
+        lines = [f"=== {len(results)} results for '{query}' (via AppleScript) ===\n"]
+        for t in results:
+            duration = t.get("duration", "")
+            genre = t.get("genre", "")
+            year = t.get("year", "")
+
+            line = f"{t['name']} - {t['artist']}"
+            if duration:
+                line += f" ({duration})"
+            if t.get("album"):
+                line += f" {t['album']}"
+            if year:
+                line += f" [{year}]"
+            if genre:
+                line += f" {genre}"
+            line += f" {t['id']}"
+            lines.append(line)
+
+        return "\n".join(lines)
 
 
 def main():

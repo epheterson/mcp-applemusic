@@ -3,9 +3,9 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "mcp-applemusic-api"
-version = "0.1.0"
-description = "MCP server for Apple Music playlist management via REST API"
+name = "mcp-applemusic"
+version = "0.2.0"
+description = "MCP server for Apple Music - playlist management, playback control (macOS), and library access"
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.10"
@@ -19,6 +19,8 @@ classifiers = [
     "Intended Audience :: Developers",
     "License :: OSI Approved :: MIT License",
     "Operating System :: MacOS",
+    "Operating System :: Microsoft :: Windows",
+    "Operating System :: POSIX :: Linux",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
@@ -47,9 +49,9 @@ dev = [
 applemusic-mcp = "applemusic_mcp.cli:main"
 
 [project.urls]
-Homepage = "https://github.com/epheterson/mcp-applemusic-api"
-Repository = "https://github.com/epheterson/mcp-applemusic-api"
-Issues = "https://github.com/epheterson/mcp-applemusic-api/issues"
+Homepage = "https://github.com/epheterson/mcp-applemusic"
+Repository = "https://github.com/epheterson/mcp-applemusic"
+Issues = "https://github.com/epheterson/mcp-applemusic/issues"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/applemusic_mcp"]

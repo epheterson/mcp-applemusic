@@ -1,8 +1,8 @@
-# mcp-applemusic-api
+# mcp-applemusic
 
-An MCP server for managing Apple Music playlists and library via the official REST API.
+An MCP server for managing Apple Music playlists and library.
 
-**Cross-platform** · **Claude Code integration** · **Actually works for playlist editing**
+**Cross-platform REST API** · **macOS AppleScript integration** · **Full playback control on Mac**
 
 ---
 
@@ -17,11 +17,31 @@ An MCP server for managing Apple Music playlists and library via the official RE
 
 ---
 
+## Platform Capabilities
+
+| Feature | macOS | Windows/Linux |
+|---------|:-----:|:-------------:|
+| Search catalog | ✅ | ✅ |
+| Add to library | ✅ | ✅ |
+| Create playlists | ✅ | ✅ |
+| Add to playlists | ✅ | ✅ |
+| Get recommendations | ✅ | ✅ |
+| **Play/pause/skip** | ✅ | ❌ |
+| **Delete from playlists** | ✅ | ❌ |
+| **Delete playlists** | ✅ | ❌ |
+| **Volume/shuffle/repeat** | ✅ | ❌ |
+| **AirPlay control** | ✅ | ❌ |
+
+On macOS, additional tools are available via AppleScript that provide playback control and playlist management features not available through Apple's REST API.
+
+---
+
 ## Table of Contents
 
 - [Setup (~10 minutes)](#setup)
 - [Usage Examples](#usage)
 - [Available Tools](#tools-available)
+- [macOS-Only Tools](#macos-only-tools-applescript)
 - [Limitations](#important-limitations)
 - [Troubleshooting](#troubleshooting)
 - [CLI Reference](#cli-reference)
@@ -52,8 +72,8 @@ An MCP server for managing Apple Music playlists and library via the official RE
 ### 2. Install
 
 ```bash
-git clone https://github.com/epheterson/mcp-applemusic-api.git
-cd mcp-applemusic-api
+git clone https://github.com/epheterson/mcp-applemusic.git
+cd mcp-applemusic
 python3 -m venv venv
 source venv/bin/activate  # Windows: venv\Scripts\activate
 pip install -e .
@@ -99,7 +119,7 @@ Add to `~/.claude.json` (or project `.claude/settings.json`):
 {
   "mcpServers": {
     "applemusic": {
-      "command": "/full/path/to/mcp-applemusic-api/venv/bin/python",
+      "command": "/full/path/to/mcp-applemusic/venv/bin/python",
       "args": ["-m", "applemusic_mcp"]
     }
   }
@@ -114,7 +134,7 @@ Add to `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS)
 {
   "mcpServers": {
     "Apple Music": {
-      "command": "/full/path/to/mcp-applemusic-api/venv/bin/python",
+      "command": "/full/path/to/mcp-applemusic/venv/bin/python",
       "args": ["-m", "applemusic_mcp"]
     }
   }
@@ -161,7 +181,7 @@ Ask Claude things like:
 
 ---
 
-## Tools Available (33 total)
+## Tools Available (33 cross-platform + 16 macOS-only)
 
 ### Playlists
 
@@ -184,8 +204,7 @@ Ask Claude things like:
 | `get_album_tracks` | Get all tracks from an album (library or catalog) |
 | `search_library` | Search your library → library IDs |
 | `get_recently_added` | Content recently added to your library |
-| `get_recently_played` | Recent listening history (albums/playlists) |
-| `get_recently_played_tracks` | Recent listening history (individual songs) |
+| `get_recently_played` | Recent listening history (individual tracks) |
 | `add_to_library` | Add catalog songs to your library |
 | `rate_song` | Love or dislike a song |
 
@@ -225,10 +244,53 @@ Ask Claude things like:
 
 Track listings automatically select the most detailed format that fits within the MCP response limit (~50K characters):
 - **Full**: `Name - Artist (duration) Album [Year] Genre id`
+- **Clipped**: Same as Full but with truncated names (for medium-large results)
 - **Compact**: `Name - Artist (duration) id` (for larger results)
 - **Minimal**: `Name - Artist id` (for very large results)
 
 CSV exports always include complete data regardless of display tier. Core fields: `name, duration, artist, album, year, genre, id`. Pass `include_extras=True` for additional metadata (track numbers, artwork URLs, ISRC, etc.)
+
+---
+
+## macOS-Only Tools (AppleScript)
+
+These tools are automatically available when running on macOS with the Music app installed. They provide capabilities not available through Apple's REST API.
+
+### Playback Control
+
+| Tool | Description |
+|------|-------------|
+| `play_track` | Play a specific track by name (with optional artist) |
+| `play_playlist` | Start playing a playlist (with optional shuffle) |
+| `playback_control` | Play, pause, stop, next, previous |
+| `get_now_playing` | Get currently playing track info |
+| `set_volume` | Set Music app volume (0-100) |
+| `get_volume_and_playback` | Get current volume, shuffle, repeat settings |
+| `set_shuffle` | Turn shuffle on/off |
+| `set_repeat` | Set repeat mode (off, one, all) |
+| `seek_to_position` | Seek to a position in current track |
+
+### Playlist Management
+
+| Tool | Description |
+|------|-------------|
+| `remove_from_playlist` | Remove a track from a playlist |
+| `delete_playlist` | Permanently delete a playlist |
+
+### Track Ratings
+
+| Tool | Description |
+|------|-------------|
+| `love_track` | Mark a track as loved |
+| `dislike_track` | Mark a track as disliked |
+
+### Other
+
+| Tool | Description |
+|------|-------------|
+| `reveal_in_music` | Open Music app and navigate to a track |
+| `get_airplay_devices` | List available AirPlay devices |
+| `local_search_library` | Search library via AppleScript (faster for local) |
 
 ---
 
@@ -252,14 +314,16 @@ Playlists created in iTunes/Music app are **read-only** via API.
 
 **Workaround:** `copy_playlist` creates an editable copy.
 
-### No Playlist Deletion or Track Removal
+### No Playlist Deletion or Track Removal (API limitation)
 
-Apple's API doesn't support:
+Apple's REST API doesn't support:
 - Deleting playlists
 - Removing individual tracks from playlists
 - Updating playlist names/descriptions
 
-**Workaround:** Create a new playlist with the content you want.
+**macOS workaround:** Use the AppleScript-powered `delete_playlist` and `remove_from_playlist` tools.
+
+**Cross-platform workaround:** Create a new playlist with the content you want.
 
 ### Two Types of Song IDs
 
@@ -342,7 +406,7 @@ applemusic-mcp serve           # Run MCP server (usually auto-launched)
 # Install dev dependencies
 pip install -e ".[dev]"
 
-# Run unit tests (48 tests)
+# Run unit tests (69 tests on macOS, 50 on Windows/Linux)
 pytest
 
 # Run integration tests against your live library
