@@ -277,6 +277,35 @@ def _add_songs_to_library(catalog_ids: list[str]) -> tuple[bool, str]:
         return False, str(e)
 
 
+def _rate_song_api(song_id: str, rating: str) -> tuple[bool, str]:
+    """Rate a song via API.
+
+    Args:
+        song_id: Catalog song ID
+        rating: 'love' or 'dislike'
+
+    Returns:
+        Tuple of (success, message)
+    """
+    rating_value = {"love": 1, "dislike": -1}.get(rating.lower())
+    if rating_value is None:
+        return False, "rating must be 'love' or 'dislike'"
+
+    try:
+        headers = get_headers()
+        body = {"type": "rating", "attributes": {"value": rating_value}}
+        response = requests.put(
+            f"{BASE_URL}/me/ratings/songs/{song_id}",
+            headers=headers,
+            json=body,
+        )
+        if response.status_code in (200, 201, 204):
+            return True, f"Marked as {rating}"
+        return False, f"API returned status {response.status_code}"
+    except Exception as e:
+        return False, str(e)
+
+
 # ============ PLAYLIST MANAGEMENT ============
 
 
@@ -1788,7 +1817,7 @@ def get_song_station(song_id: str) -> str:
 @mcp.tool()
 def rate_song(song_id: str, rating: str) -> str:
     """
-    Rate a song (love/dislike). Use catalog song IDs (from search_catalog).
+    Rate a song by ID (love/dislike).
 
     Args:
         song_id: The catalog song ID (numeric, from search_catalog)
@@ -1798,35 +1827,88 @@ def rate_song(song_id: str, rating: str) -> str:
 
     Note: Removing ratings (DELETE) is not supported by Apple's API.
     """
-    try:
-        headers = get_headers()
+    success, msg = _rate_song_api(song_id, rating)
+    if success:
+        return f"Successfully set rating to '{rating}' for song {song_id}"
+    return f"Error: {msg}"
 
-        rating_value = {"love": 1, "dislike": -1}.get(rating.lower())
-        if rating_value is None:
-            return "Error: rating must be 'love' or 'dislike'"
 
-        body = {
-            "type": "rating",
-            "attributes": {"value": rating_value}
-        }
-        response = requests.put(
-            f"{BASE_URL}/me/ratings/songs/{song_id}",
-            headers=headers,
-            json=body,
-        )
+@mcp.tool()
+def love_track(track_name: str, artist: str = "") -> str:
+    """
+    Mark a track as loved (by name).
 
-        if response.status_code in [200, 201]:
-            return f"Successfully set rating to '{rating}' for song {song_id}"
-        elif response.status_code == 204:
-            return f"Rating already set to '{rating}'"
-        else:
-            response.raise_for_status()
-            return f"Rating set (status: {response.status_code})"
+    On macOS uses AppleScript for direct library access.
+    On other platforms searches library for catalog ID and uses API.
 
-    except requests.exceptions.RequestException as e:
-        return f"API Error: {str(e)}"
-    except (FileNotFoundError, ValueError) as e:
-        return str(e)
+    Args:
+        track_name: Name of the track
+        artist: Optional artist name to disambiguate
+
+    Returns: Confirmation message or error
+    """
+    # Try AppleScript first on macOS
+    if APPLESCRIPT_AVAILABLE:
+        success, result = asc.love_track(track_name, artist if artist else None)
+        if success:
+            return result
+        # Fall through to API if AppleScript fails
+
+    # API fallback: search library for catalog ID
+    search_term = f"{track_name} {artist}".strip() if artist else track_name
+    songs = _search_catalog_songs(search_term, limit=5)
+
+    for song in songs:
+        attrs = song.get("attributes", {})
+        song_name = attrs.get("name", "")
+        song_artist = attrs.get("artistName", "")
+        if track_name.lower() in song_name.lower():
+            if not artist or artist.lower() in song_artist.lower():
+                success, msg = _rate_song_api(song.get("id"), "love")
+                if success:
+                    return f"Loved: {song_name} by {song_artist}"
+                return f"Error: {msg}"
+
+    return f"Track not found: {track_name}"
+
+
+@mcp.tool()
+def dislike_track(track_name: str, artist: str = "") -> str:
+    """
+    Mark a track as disliked (by name).
+
+    On macOS uses AppleScript for direct library access.
+    On other platforms searches library for catalog ID and uses API.
+
+    Args:
+        track_name: Name of the track
+        artist: Optional artist name to disambiguate
+
+    Returns: Confirmation message or error
+    """
+    # Try AppleScript first on macOS
+    if APPLESCRIPT_AVAILABLE:
+        success, result = asc.dislike_track(track_name, artist if artist else None)
+        if success:
+            return result
+        # Fall through to API if AppleScript fails
+
+    # API fallback: search catalog for ID
+    search_term = f"{track_name} {artist}".strip() if artist else track_name
+    songs = _search_catalog_songs(search_term, limit=5)
+
+    for song in songs:
+        attrs = song.get("attributes", {})
+        song_name = attrs.get("name", "")
+        song_artist = attrs.get("artistName", "")
+        if track_name.lower() in song_name.lower():
+            if not artist or artist.lower() in song_artist.lower():
+                success, msg = _rate_song_api(song.get("id"), "dislike")
+                if success:
+                    return f"Disliked: {song_name} by {song_artist}"
+                return f"Error: {msg}"
+
+    return f"Track not found: {track_name}"
 
 
 # ============ CATALOG DETAILS ============
@@ -2780,36 +2862,6 @@ if APPLESCRIPT_AVAILABLE:
         Returns: Confirmation message or error
         """
         success, result = asc.delete_playlist(playlist_name)
-        if success:
-            return result
-        return f"Error: {result}"
-
-    @mcp.tool()
-    def love_track(track_name: str, artist: str = "") -> str:
-        """Mark a track as loved in your library (macOS only).
-
-        Args:
-            track_name: Name of the track
-            artist: Optional artist name to disambiguate
-
-        Returns: Confirmation message or error
-        """
-        success, result = asc.love_track(track_name, artist if artist else None)
-        if success:
-            return result
-        return f"Error: {result}"
-
-    @mcp.tool()
-    def dislike_track(track_name: str, artist: str = "") -> str:
-        """Mark a track as disliked in your library (macOS only).
-
-        Args:
-            track_name: Name of the track
-            artist: Optional artist name to disambiguate
-
-        Returns: Confirmation message or error
-        """
-        success, result = asc.dislike_track(track_name, artist if artist else None)
         if success:
             return result
         return f"Error: {result}"

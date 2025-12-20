@@ -124,9 +124,9 @@ Ask Claude things like:
 | `get_recently_added` | Recently added content | API | All |
 | `add_to_library` | Add song from catalog | API | All |
 | `remove_from_library` | Remove song from library | AppleScript | macOS |
-| `rate_song` | Love or dislike | API | All |
-| `love_track` | Mark as loved | AppleScript | macOS |
-| `dislike_track` | Mark as disliked | AppleScript | macOS |
+| `rate_song` | Love or dislike (by ID) | API | All |
+| `love_track` | Mark as loved (by name) | API + AS | All |
+| `dislike_track` | Mark as disliked (by name) | API + AS | All |
 | `get_track_rating` | Get star rating | AppleScript | macOS |
 | `set_track_rating` | Set star rating | AppleScript | macOS |
 

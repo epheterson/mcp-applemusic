@@ -10,8 +10,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - **`remove_from_library`** - Remove tracks from library via AppleScript (macOS only)
+- **`_rate_song_api`** - Internal helper for rating songs via API
 
 ### Changed
+
+- **`love_track` / `dislike_track` now cross-platform** - Uses AppleScript on macOS, falls back to API elsewhere
 
 - **play_track enhanced** - Now properly handles catalog tracks not in library:
   - `add_to_library=True`: Adds song to library first, then plays
