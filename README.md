@@ -166,9 +166,9 @@ Most list tools support these output options:
 
 | Parameter | Values | Description |
 |-----------|--------|-------------|
-| `format` | `"text"` (default), `"json"`, `"none"` | Response format (`none` = export only) |
-| `export` | `""` (none), `"csv"`, `"json"` | Write file to disk |
-| `full` | `False` (default), `True` | Include all metadata in exports |
+| `format` | `"text"` (default), `"json"`, `"csv"`, `"none"` | Response format |
+| `export` | `"none"` (default), `"csv"`, `"json"` | Write file to disk |
+| `full` | `False` (default), `True` | Include all metadata |
 
 **Text format** auto-selects the best tier that fits:
 - **Full**: Name - Artist (duration) Album [Year] Genre id

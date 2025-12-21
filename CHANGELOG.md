@@ -23,9 +23,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `airplay` - list or switch devices (merged 2 tools)
   - `cache` - view or clear cache (merged 2 tools)
 - **Unified output format** - List tools now support:
-  - `format="text"` (default), `"json"`, or `"none"` (export only, saves tokens)
-  - `export="csv"` or `"json"` to optionally write files (disabled by default)
-  - `full=True` to include all metadata in exports
+  - `format="text"` (default), `"json"`, `"csv"`, or `"none"` (export only)
+  - `export="none"` (default), `"csv"`, or `"json"` to write files
+  - `full=True` to include all metadata
 - **Extended iCloud sync wait** - `play_track` now waits ~10s for add-to-library sync (was ~7s)
 
 ## [0.2.1] - 2025-12-20

@@ -5,6 +5,7 @@ deleting tracks from playlists, and other operations not supported by the REST A
 """
 
 import csv
+import io
 import json
 import time
 from pathlib import Path
@@ -187,7 +188,7 @@ def format_track_list(track_data: list[dict]) -> tuple[list[str], str]:
 def format_output(
     items: list[dict],
     format: str = "text",
-    export: str = "",
+    export: str = "none",
     full: bool = False,
     file_prefix: str = "export",
 ) -> str:
@@ -195,8 +196,8 @@ def format_output(
 
     Args:
         items: List of item dicts (tracks, albums, etc.)
-        format: "text" for human-readable, "json" for JSON, "none" for export only
-        export: "" for no file, "csv" or "json" to write file
+        format: "text" for human-readable, "json", "csv", or "none" (export only)
+        export: "none" (default), "csv", or "json" to write file
         full: Include all metadata in exports (extras like artwork, track numbers)
         file_prefix: Prefix for export filename
 
@@ -219,6 +220,20 @@ def format_output(
                            "track_count", "release_date"}
             filtered = [{k: v for k, v in item.items() if k in standard_keys} for item in items]
             result_parts.append(json.dumps(filtered, indent=2))
+    elif format == "csv":
+        # CSV response inline
+        output = io.StringIO()
+        if items and "duration" in items[0]:
+            csv_fields = ["name", "duration", "artist", "album", "year", "genre", "id"]
+            if full:
+                csv_fields += ["track_number", "disc_number", "has_lyrics", "catalog_id",
+                               "composer", "isrc", "is_explicit", "preview_url", "artwork_url"]
+        else:
+            csv_fields = list(items[0].keys()) if items else []
+        writer = csv.DictWriter(output, fieldnames=csv_fields, extrasaction="ignore")
+        writer.writeheader()
+        writer.writerows(items)
+        result_parts.append(output.getvalue())
     elif format == "text":
         # Text response - use tiered formatting for tracks
         if items and "duration" in items[0]:
@@ -425,15 +440,15 @@ def _rate_song_api(song_id: str, rating: str) -> tuple[bool, str]:
 @mcp.tool()
 def get_library_playlists(
     format: str = "text",
-    export: str = "",
+    export: str = "none",
     full: bool = False,
 ) -> str:
     """
     Get all playlists from your Apple Music library.
 
     Args:
-        format: "text" (default) or "json" for response format
-        export: "" (none), "csv", or "json" to write file
+        format: "text" (default), "json", "csv", or "none" (export only)
+        export: "none" (default), "csv", or "json" to write file
         full: Include all metadata in exports
 
     Returns: Playlist listing in requested format
@@ -497,7 +512,7 @@ def get_playlist_tracks(
     filter: str = "",
     limit: int = 0,
     format: str = "text",
-    export: str = "",
+    export: str = "none",
     full: bool = False,
 ) -> str:
     """
@@ -510,8 +525,8 @@ def get_playlist_tracks(
         playlist_name: Playlist name (macOS only, uses AppleScript)
         filter: Filter tracks by name/artist (case-insensitive substring match)
         limit: Max tracks to return (0 = all). Use with large playlists.
-        format: "text" (default) or "json" for response format
-        export: "" (none), "csv", or "json" to write file
+        format: "text" (default), "json", "csv", or "none" (export only)
+        export: "none" (default), "csv", or "json" to write file
         full: Include all metadata in exports
 
     Returns: Track listing in requested format
@@ -1054,7 +1069,7 @@ def search_library(
     search_type: str = "songs",
     limit: int = 25,
     format: str = "text",
-    export: str = "",
+    export: str = "none",
     full: bool = False,
 ) -> str:
     """
@@ -1066,8 +1081,8 @@ def search_library(
         query: Search term
         search_type: Type of search - songs, artists, albums, or all (macOS only)
         limit: Max results (default 25, up to 100 on macOS)
-        format: "text" (default) or "json" for response format
-        export: "" (none), "csv", or "json" to write file
+        format: "text" (default), "json", "csv", or "none" (export only)
+        export: "none" (default), "csv", or "json" to write file
         full: Include all metadata in exports (artwork, track numbers, etc.)
 
     Returns: Library items with IDs (library IDs can be added to playlists)
@@ -1128,7 +1143,7 @@ def add_to_library(catalog_ids: str) -> str:
 def get_recently_played(
     limit: int = 30,
     format: str = "text",
-    export: str = "",
+    export: str = "none",
     full: bool = False,
 ) -> str:
     """
@@ -1136,8 +1151,8 @@ def get_recently_played(
 
     Args:
         limit: Number of tracks to return (default 30, max 50)
-        format: "text" (default) or "json" for response format
-        export: "" (none), "csv", or "json" to write file
+        format: "text" (default), "json", "csv", or "none" (export only)
+        export: "none" (default), "csv", or "json" to write file
         full: Include all metadata in exports
 
     Returns: Recently played tracks in requested format
@@ -1183,7 +1198,7 @@ def search_catalog(
     types: str = "songs",
     limit: int = 15,
     format: str = "text",
-    export: str = "",
+    export: str = "none",
     full: bool = False,
 ) -> str:
     """
@@ -1193,8 +1208,8 @@ def search_catalog(
         query: Search term
         types: Comma-separated types (songs, albums, artists, playlists)
         limit: Max results per type (default 15)
-        format: "text" (default) or "json" for response format
-        export: "" (none), "csv", or "json" to write file (songs only)
+        format: "text" (default), "json", "csv", or "none" (export only)
+        export: "none" (default), "csv", or "json" to write file (songs only)
         full: Include all metadata in exports
 
     Returns: Search results with catalog IDs (use add_to_library to add songs)
@@ -1284,7 +1299,7 @@ def search_catalog(
 def get_album_tracks(
     album_id: str,
     format: str = "text",
-    export: str = "",
+    export: str = "none",
     full: bool = False,
 ) -> str:
     """
@@ -1293,8 +1308,8 @@ def get_album_tracks(
 
     Args:
         album_id: Library album ID (l.xxx) or catalog album ID (numeric)
-        format: "text" (default) or "json" for response format
-        export: "" (none), "csv", or "json" to write file
+        format: "text" (default), "json", "csv", or "none" (export only)
+        export: "none" (default), "csv", or "json" to write file
         full: Include all metadata in exports (composer, artwork, etc.)
 
     Returns: Track listing in requested format
@@ -1351,7 +1366,7 @@ def browse_library(
     item_type: str = "songs",
     limit: int = 100,
     format: str = "text",
-    export: str = "",
+    export: str = "none",
     full: bool = False,
 ) -> str:
     """
@@ -1360,8 +1375,8 @@ def browse_library(
     Args:
         item_type: What to browse - songs, albums, artists, or videos
         limit: Max items (default 100, use 0 for all). Only applies to songs.
-        format: "text" (default) or "json" for response format
-        export: "" (none), "csv", or "json" to write file
+        format: "text" (default), "json", "csv", or "none" (export only)
+        export: "none" (default), "csv", or "json" to write file
         full: Include all metadata in exports
 
     Returns: Item listing in requested format
@@ -1445,15 +1460,15 @@ def browse_library(
 @mcp.tool()
 def get_recommendations(
     format: str = "text",
-    export: str = "",
+    export: str = "none",
     full: bool = False,
 ) -> str:
     """
     Get personalized music recommendations based on your listening history.
 
     Args:
-        format: "text" (default) or "json" for response format
-        export: "" (none), "csv", or "json" to write file
+        format: "text" (default), "json", "csv", or "none" (export only)
+        export: "none" (default), "csv", or "json" to write file
         full: Include all metadata in exports
 
     Returns: Recommendations in requested format
@@ -1497,15 +1512,15 @@ def get_recommendations(
 @mcp.tool()
 def get_heavy_rotation(
     format: str = "text",
-    export: str = "",
+    export: str = "none",
     full: bool = False,
 ) -> str:
     """
     Get your heavy rotation - content you've been playing frequently.
 
     Args:
-        format: "text" (default) or "json" for response format
-        export: "" (none), "csv", or "json" to write file
+        format: "text" (default), "json", "csv", or "none" (export only)
+        export: "none" (default), "csv", or "json" to write file
         full: Include all metadata in exports
 
     Returns: Heavy rotation items in requested format
@@ -1553,7 +1568,7 @@ def get_heavy_rotation(
 def get_recently_added(
     limit: int = 50,
     format: str = "text",
-    export: str = "",
+    export: str = "none",
     full: bool = False,
 ) -> str:
     """
@@ -1561,8 +1576,8 @@ def get_recently_added(
 
     Args:
         limit: Number of items to return (default 50)
-        format: "text" (default) or "json" for response format
-        export: "" (none), "csv", or "json" to write file
+        format: "text" (default), "json", "csv", or "none" (export only)
+        export: "none" (default), "csv", or "json" to write file
         full: Include all metadata in exports
 
     Returns: Recently added items in requested format
