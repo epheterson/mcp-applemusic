@@ -95,7 +95,7 @@ Ask Claude things like:
 
 ---
 
-## Tools (55 total)
+## Tools (42 total)
 
 ### Playlists
 | Tool | Description | Method | Platform |
@@ -114,22 +114,14 @@ Ask Claude things like:
 ### Library
 | Tool | Description | Method | Platform |
 |------|-------------|--------|----------|
-| `search_library` | Search your library | API | All |
-| `local_search_library` | Search via Music app | AppleScript | macOS |
-| `get_library_songs` | List songs | API | All |
-| `get_library_albums` | List albums | API | All |
-| `get_library_artists` | List artists | API | All |
-| `get_library_music_videos` | List music videos | API | All |
+| `search_library` | Search your library (fast local on macOS) | AS + API | All |
+| `browse_library` | List songs/albums/artists/videos by type | API | All |
 | `get_album_tracks` | Get tracks from album | API | All |
 | `get_recently_played` | Recent listening history | API | All |
 | `get_recently_added` | Recently added content | API | All |
 | `add_to_library` | Add song from catalog | API | All |
 | `remove_from_library` | Remove song from library | AppleScript | macOS |
-| `rate_song` | Love or dislike (by ID) | API | All |
-| `love_track` | Mark as loved (by name) | API + AS | All |
-| `dislike_track` | Mark as disliked (by name) | API + AS | All |
-| `get_track_rating` | Get star rating | AppleScript | macOS |
-| `set_track_rating` | Set star rating | AppleScript | macOS |
+| `rating` | Love/dislike/get/set star ratings | API + AS | All (stars: macOS) |
 
 ### Catalog & Discovery
 | Tool | Description | Method | Platform |
@@ -158,29 +150,47 @@ Ask Claude things like:
 | `get_now_playing` | Current track info | AppleScript | macOS |
 | `get_player_state` | Get playing/paused/stopped state | AppleScript | macOS |
 | `seek_to_position` | Seek within current track | AppleScript | macOS |
-| `set_volume` | Set volume (0-100) | AppleScript | macOS |
-| `set_shuffle` | Toggle shuffle | AppleScript | macOS |
-| `set_repeat` | Set repeat mode (off, one, all) | AppleScript | macOS |
-| `get_volume_and_playback` | Get current settings | AppleScript | macOS |
+| `playback_settings` | Get/set volume, shuffle, repeat | AppleScript | macOS |
 
 ### Utilities
 | Tool | Description | Method | Platform |
 |------|-------------|--------|----------|
 | `check_auth_status` | Verify tokens and API connection | API | All |
-| `get_airplay_devices` | List AirPlay devices | AppleScript | macOS |
-| `set_airplay_device` | Switch audio to AirPlay device | AppleScript | macOS |
+| `airplay` | List or switch AirPlay devices | AppleScript | macOS |
 | `reveal_in_music` | Show track in Music app | AppleScript | macOS |
-| `get_cache_info` | Show CSV cache info | Local | All |
-| `clear_cache` | Clear cached exports | Local | All |
+| `cache` | View or clear CSV cache | Local | All |
 
 ### Output Format
 
-Track listings auto-select the best format that fits:
+Most list tools support these output options:
+
+| Parameter | Values | Description |
+|-----------|--------|-------------|
+| `format` | `"text"` (default), `"json"`, `"none"` | Response format (`none` = export only) |
+| `export` | `""` (none), `"csv"`, `"json"` | Write file to disk |
+| `full` | `False` (default), `True` | Include all metadata in exports |
+
+**Text format** auto-selects the best tier that fits:
 - **Full**: Name - Artist (duration) Album [Year] Genre id
 - **Compact**: Name - Artist (duration) id
 - **Minimal**: Name - Artist id
 
-CSV exports include complete data regardless of display format.
+**Examples:**
+```
+search_library("beatles", format="json")                      # JSON response
+browse_library("songs", export="csv")                         # Text + CSV file
+browse_library("songs", format="none", export="csv")          # CSV only (saves tokens)
+get_playlist_tracks("p.123", export="json", full=True)        # JSON file with all metadata
+```
+
+### MCP Resources
+
+Exported files are accessible via MCP resources (Claude Desktop can read these):
+
+| Resource | Description |
+|----------|-------------|
+| `exports://list` | List all exported files |
+| `exports://{filename}` | Read a specific export file |
 
 ---
 

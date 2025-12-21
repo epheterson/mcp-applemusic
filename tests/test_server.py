@@ -101,9 +101,9 @@ class TestGetLibraryPlaylists:
 
         assert "Test Playlist" in result
         assert "p.abc123" in result
-        assert "editable" in result
         assert "Read Only" in result
-        assert "read-only" in result
+        assert "p.def456" in result
+        assert "2 items" in result
 
     @responses.activate
     def test_handles_api_error(self, mock_config_dir, mock_developer_token, mock_user_token):
@@ -205,8 +205,11 @@ class TestSearchLibrary:
     """Tests for search_library function."""
 
     @responses.activate
-    def test_returns_search_results(self, mock_config_dir, mock_developer_token, mock_user_token):
-        """Should return formatted search results."""
+    def test_returns_search_results(self, mock_config_dir, mock_developer_token, mock_user_token, monkeypatch):
+        """Should return formatted search results via API fallback."""
+        # Force API path by disabling AppleScript
+        monkeypatch.setattr(server, "APPLESCRIPT_AVAILABLE", False)
+
         # Setup tokens
         dev_token_file = mock_config_dir / "developer_token.json"
         with open(dev_token_file, "w") as f:

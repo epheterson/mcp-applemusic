@@ -5,6 +5,29 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.2] - 2025-12-20
+
+### Added
+
+- **MCP Resources for exports** - Claude Desktop can now read exported files:
+  - `exports://list` - List all exported files
+  - `exports://{filename}` - Read a specific export file
+
+### Changed
+
+- **Tool consolidation (55 → 42 tools)** - The answer to life, the universe, and everything:
+  - `browse_library(type=songs|albums|artists|videos)` - merged 4 library listing tools
+  - `rating(action=love|dislike|get|set)` - merged 5 rating tools into one
+  - `playback_settings(volume, shuffle, repeat)` - merged 4 settings tools
+  - `search_library` - now uses AppleScript on macOS (faster), API fallback elsewhere
+  - `airplay` - list or switch devices (merged 2 tools)
+  - `cache` - view or clear cache (merged 2 tools)
+- **Unified output format** - List tools now support:
+  - `format="text"` (default), `"json"`, or `"none"` (export only, saves tokens)
+  - `export="csv"` or `"json"` to optionally write files (disabled by default)
+  - `full=True` to include all metadata in exports
+- **Extended iCloud sync wait** - `play_track` now waits ~10s for add-to-library sync (was ~7s)
+
 ## [0.2.1] - 2025-12-20
 
 ### Added
