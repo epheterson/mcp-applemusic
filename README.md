@@ -6,11 +6,14 @@ MCP server for Apple Music - manage playlists, control playback, browse your lib
 
 | Feature | macOS | API |
 |---------|:-----:|:---:|
-| Search catalog & library | ✓ | ✓ |
-| Add songs to library | ✓ | ✓ |
+| List playlists | ✓ | ✓ |
+| Browse library songs | ✓ | ✓ |
 | Create playlists | ✓ | ✓ |
+| Search library | ✓ | ✓ |
+| Search catalog |   | ✓ |
+| Add songs to library |   | ✓ |
 | Add tracks to playlists | ✓ | API-created |
-| Recommendations, charts, radio stations | ✓ | ✓ |
+| Recommendations, charts, radio |   | ✓ |
 | Love/dislike tracks | ✓ | ✓ |
 | CSV/JSON export | ✓ | ✓ |
 | Play tracks | ✓ |   |
@@ -22,11 +25,13 @@ MCP server for Apple Music - manage playlists, control playback, browse your lib
 
 **macOS** uses AppleScript for full control. **API** mode works on Windows/Linux.
 
+> **No credentials needed on macOS!** Many features work instantly via AppleScript - list playlists, browse library, create playlists, search, play tracks. API setup only needed for catalog search, recommendations, and adding songs from Apple Music.
+
 ---
 
 ## Setup
 
-**You'll need:** Apple Developer Account (free), Python 3.10+, Apple Music subscription
+**You'll need:** Python 3.10+, Apple Music subscription. API credentials optional on macOS.
 
 ### 1. Get MusicKit Key
 

@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.4] - 2025-12-21
+
+### Added
+
+- **No-credentials mode on macOS** - Many features now work without API setup:
+  - `get_library_playlists` - Lists playlists via AppleScript first
+  - `create_playlist` - Creates playlists via AppleScript first
+  - `browse_library(songs)` - Lists library songs via AppleScript first
+  - New `get_library_songs()` AppleScript helper function
+- **Test cleanup** - Automatically removes test playlists after test runs
+
+### Changed
+
+- **AppleScript-first approach** - macOS tools try AppleScript before falling back to API
+- **README** - Documents no-credentials mode, simplified requirements
+
 ## [0.2.3] - 2025-12-21
 
 ### Changed

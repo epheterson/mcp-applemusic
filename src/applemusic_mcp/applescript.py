@@ -660,6 +660,77 @@ def open_catalog_song(song_url: str) -> tuple[bool, str]:
 # Library Search
 # =============================================================================
 
+def get_library_songs(limit: int = 100) -> tuple[bool, list[dict]]:
+    """Get songs from the library (no search query required).
+
+    Args:
+        limit: Maximum number of songs to return (default 100, 0 for all)
+
+    Returns:
+        Tuple of (success, list of track dicts or error)
+
+    Note: Large libraries (10,000+ tracks) with limit=0 may timeout (30s).
+    """
+    if limit < 0:
+        return False, "limit must be >= 0 (use 0 for all songs)"
+    limit_clause = f"if resultCount >= {limit} then exit repeat" if limit > 0 else ""
+
+    script = f'''
+    tell application "Music"
+        set output to ""
+        set resultCount to 0
+        repeat with t in tracks of library playlist 1
+            {limit_clause}
+            set tName to name of t
+            set tArtist to artist of t
+            set tAlbum to album of t
+            set tDuration to duration of t
+            set tId to persistent ID of t
+            try
+                set tGenre to genre of t
+            on error
+                set tGenre to ""
+            end try
+            try
+                set tYear to year of t as string
+            on error
+                set tYear to ""
+            end try
+            set output to output & tName & "|||" & tArtist & "|||" & tAlbum & "|||" & tDuration & "|||" & tGenre & "|||" & tYear & "|||" & tId & "\\n"
+            set resultCount to resultCount + 1
+        end repeat
+        return output
+    end tell
+    '''
+    success, output = run_applescript(script)
+    if not success:
+        return False, output
+
+    tracks = []
+    for line in output.split('\n'):
+        if '|||' in line:
+            parts = line.split('|||')
+            if len(parts) >= 7:
+                try:
+                    dur_sec = float(parts[3])
+                    minutes = int(dur_sec) // 60
+                    seconds = int(dur_sec) % 60
+                    duration = f"{minutes}:{seconds:02d}"
+                except (ValueError, TypeError):
+                    duration = ""
+
+                tracks.append({
+                    'name': parts[0],
+                    'artist': parts[1],
+                    'album': parts[2],
+                    'duration': duration,
+                    'genre': parts[4],
+                    'year': parts[5],
+                    'id': parts[6]
+                })
+    return True, tracks
+
+
 def search_library(query: str, search_type: str = "all") -> tuple[bool, list[dict]]:
     """Search the local library.
 

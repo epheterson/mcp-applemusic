@@ -64,11 +64,14 @@ class TestGetHeaders:
 
 
 class TestGetLibraryPlaylists:
-    """Tests for get_library_playlists function."""
+    """Tests for get_library_playlists function (API path)."""
 
     @responses.activate
-    def test_returns_playlists(self, mock_config_dir, mock_developer_token, mock_user_token):
-        """Should return formatted playlist list."""
+    def test_returns_playlists(self, mock_config_dir, mock_developer_token, mock_user_token, monkeypatch):
+        """Should return formatted playlist list via API."""
+        # Disable AppleScript to test API path
+        monkeypatch.setattr(server, "APPLESCRIPT_AVAILABLE", False)
+
         # Setup tokens
         dev_token_file = mock_config_dir / "developer_token.json"
         with open(dev_token_file, "w") as f:
@@ -106,8 +109,11 @@ class TestGetLibraryPlaylists:
         assert "2 items" in result
 
     @responses.activate
-    def test_handles_api_error(self, mock_config_dir, mock_developer_token, mock_user_token):
+    def test_handles_api_error(self, mock_config_dir, mock_developer_token, mock_user_token, monkeypatch):
         """Should return error message on API failure."""
+        # Disable AppleScript to test API path
+        monkeypatch.setattr(server, "APPLESCRIPT_AVAILABLE", False)
+
         # Setup tokens
         dev_token_file = mock_config_dir / "developer_token.json"
         with open(dev_token_file, "w") as f:
@@ -130,11 +136,14 @@ class TestGetLibraryPlaylists:
 
 
 class TestCreatePlaylist:
-    """Tests for create_playlist function."""
+    """Tests for create_playlist function (API path)."""
 
     @responses.activate
-    def test_creates_playlist_successfully(self, mock_config_dir, mock_developer_token, mock_user_token):
-        """Should create playlist and return ID."""
+    def test_creates_playlist_successfully(self, mock_config_dir, mock_developer_token, mock_user_token, monkeypatch):
+        """Should create playlist via API and return ID."""
+        # Disable AppleScript to test API path
+        monkeypatch.setattr(server, "APPLESCRIPT_AVAILABLE", False)
+
         # Setup tokens
         dev_token_file = mock_config_dir / "developer_token.json"
         with open(dev_token_file, "w") as f:

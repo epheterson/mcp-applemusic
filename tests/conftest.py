@@ -7,6 +7,21 @@ from unittest.mock import patch
 
 import pytest
 
+from applemusic_mcp import applescript as asc
+
+
+# Clean up test playlists after all tests
+@pytest.fixture(scope="session", autouse=True)
+def cleanup_test_playlists():
+    """Remove test playlists created by tests."""
+    yield  # Run tests first
+
+    if not asc.is_available():
+        return
+
+    # Only remove the test-specific playlist (ignore if doesn't exist)
+    asc.delete_playlist("__TEST_PLAYLIST__")
+
 
 @pytest.fixture
 def temp_config_dir(tmp_path):

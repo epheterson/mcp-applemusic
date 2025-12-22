@@ -453,6 +453,26 @@ def get_library_playlists(
 
     Returns: Playlist listing in requested format
     """
+    playlist_data = []
+
+    # Try AppleScript first (local, instant, no auth required)
+    if APPLESCRIPT_AVAILABLE:
+        success, as_playlists = asc.get_playlists()
+        if success:
+            if not as_playlists:
+                return "No playlists in library"
+            for p in as_playlists:
+                playlist_data.append({
+                    "id": p.get("id", ""),
+                    "name": p.get("name", "Unknown"),
+                    "track_count": p.get("track_count", 0),
+                    "smart": p.get("smart", False),
+                    "can_edit": True,  # AS can edit any playlist
+                })
+            return format_output(playlist_data, format, export, full, "playlists")
+        # AppleScript failed - fall through to API
+
+    # Fall back to API
     try:
         headers = get_headers()
         all_playlists = []
@@ -477,7 +497,6 @@ def get_library_playlists(
             offset += 100
 
         # Extract playlist data
-        playlist_data = []
         for playlist in all_playlists:
             attrs = playlist.get("attributes", {})
             desc = attrs.get("description", {})
@@ -753,7 +772,6 @@ def _find_track_in_list(
 def create_playlist(name: str, description: str = "") -> str:
     """
     Create a new playlist in your Apple Music library.
-    Playlists created via API are editable via API.
 
     Args:
         name: Name for the new playlist
@@ -761,6 +779,13 @@ def create_playlist(name: str, description: str = "") -> str:
 
     Returns: The new playlist ID
     """
+    # Try AppleScript first (local, instant, no auth required)
+    if APPLESCRIPT_AVAILABLE:
+        success, result = asc.create_playlist(name, description)
+        if success:
+            return f"Created playlist '{name}' (ID: {result})"
+
+    # Fall back to API
     try:
         headers = get_headers()
 
@@ -1454,9 +1479,31 @@ def browse_library(
 
     Returns: Item listing in requested format
     """
+    item_type = item_type.lower().strip()
+
+    # Try AppleScript first for songs (local, instant, no auth required)
+    if APPLESCRIPT_AVAILABLE and item_type == "songs":
+        success, as_songs = asc.get_library_songs(limit)
+        if success:
+            if not as_songs:
+                return f"No {item_type} in library"
+            data = []
+            for s in as_songs:
+                data.append({
+                    "name": s.get("name", ""),
+                    "artist": s.get("artist", ""),
+                    "album": s.get("album", ""),
+                    "duration": s.get("duration", ""),
+                    "genre": s.get("genre", ""),
+                    "year": s.get("year", ""),
+                    "id": s.get("id", ""),
+                })
+            return format_output(data, format, export, full, "songs")
+        # AppleScript failed - fall through to API
+
+    # Fall back to API
     try:
         headers = get_headers()
-        item_type = item_type.lower().strip()
 
         # Map type to API endpoint
         type_map = {
