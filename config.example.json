@@ -5,6 +5,7 @@
   "preferences": {
     "fetch_explicit": true,
     "reveal_on_library_miss": true,
-    "clean_only": false
+    "clean_only": false,
+    "auto_search": true
   }
 }

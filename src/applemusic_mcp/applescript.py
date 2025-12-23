@@ -440,8 +440,8 @@ def add_track_to_playlist(playlist_name: str, track_name: str, artist: Optional[
 
     Args:
         playlist_name: Target playlist name
-        track_name: Name of the track to add
-        artist: Optional artist name to disambiguate
+        track_name: Name of the track to add (partial match supported)
+        artist: Optional artist name to disambiguate (partial match supported)
 
     Returns:
         Tuple of (success, message or error)
@@ -451,9 +451,9 @@ def add_track_to_playlist(playlist_name: str, track_name: str, artist: Optional[
 
     if artist:
         safe_artist = _escape_for_applescript(artist)
-        track_query = f'first track of library playlist 1 whose name is "{safe_track}" and artist contains "{safe_artist}"'
+        track_query = f'first track of library playlist 1 whose name contains "{safe_track}" and artist contains "{safe_artist}"'
     else:
-        track_query = f'first track of library playlist 1 whose name is "{safe_track}"'
+        track_query = f'first track of library playlist 1 whose name contains "{safe_track}"'
 
     script = f'''
     tell application "Music"
@@ -847,8 +847,8 @@ def love_track(track_name: str, artist: Optional[str] = None) -> tuple[bool, str
     """Mark a track as loved.
 
     Args:
-        track_name: Name of the track
-        artist: Optional artist name to disambiguate
+        track_name: Name of the track (partial match supported)
+        artist: Optional artist name to disambiguate (partial match supported)
 
     Returns:
         Tuple of (success, message or error)
@@ -857,9 +857,9 @@ def love_track(track_name: str, artist: Optional[str] = None) -> tuple[bool, str
 
     if artist:
         safe_artist = _escape_for_applescript(artist)
-        track_query = f'first track of library playlist 1 whose name is "{safe_track}" and artist contains "{safe_artist}"'
+        track_query = f'first track of library playlist 1 whose name contains "{safe_track}" and artist contains "{safe_artist}"'
     else:
-        track_query = f'first track of library playlist 1 whose name is "{safe_track}"'
+        track_query = f'first track of library playlist 1 whose name contains "{safe_track}"'
 
     script = f'''
     tell application "Music"
@@ -883,8 +883,8 @@ def dislike_track(track_name: str, artist: Optional[str] = None) -> tuple[bool, 
     """Mark a track as disliked.
 
     Args:
-        track_name: Name of the track
-        artist: Optional artist name to disambiguate
+        track_name: Name of the track (partial match supported)
+        artist: Optional artist name to disambiguate (partial match supported)
 
     Returns:
         Tuple of (success, message or error)
@@ -893,9 +893,9 @@ def dislike_track(track_name: str, artist: Optional[str] = None) -> tuple[bool, 
 
     if artist:
         safe_artist = _escape_for_applescript(artist)
-        track_query = f'first track of library playlist 1 whose name is "{safe_track}" and artist contains "{safe_artist}"'
+        track_query = f'first track of library playlist 1 whose name contains "{safe_track}" and artist contains "{safe_artist}"'
     else:
-        track_query = f'first track of library playlist 1 whose name is "{safe_track}"'
+        track_query = f'first track of library playlist 1 whose name contains "{safe_track}"'
 
     script = f'''
     tell application "Music"
@@ -919,8 +919,8 @@ def get_rating(track_name: str, artist: Optional[str] = None) -> tuple[bool, int
     """Get track rating (0-100, where 20=1 star, 40=2 stars, etc).
 
     Args:
-        track_name: Name of the track
-        artist: Optional artist name to disambiguate
+        track_name: Name of the track (partial match supported)
+        artist: Optional artist name to disambiguate (partial match supported)
 
     Returns:
         Tuple of (success, rating 0-100 or error message)
@@ -929,9 +929,9 @@ def get_rating(track_name: str, artist: Optional[str] = None) -> tuple[bool, int
 
     if artist:
         safe_artist = _escape_for_applescript(artist)
-        track_query = f'first track of library playlist 1 whose name is "{safe_track}" and artist contains "{safe_artist}"'
+        track_query = f'first track of library playlist 1 whose name contains "{safe_track}" and artist contains "{safe_artist}"'
     else:
-        track_query = f'first track of library playlist 1 whose name is "{safe_track}"'
+        track_query = f'first track of library playlist 1 whose name contains "{safe_track}"'
 
     script = f'''
     tell application "Music"
@@ -956,9 +956,9 @@ def set_rating(track_name: str, rating: int, artist: Optional[str] = None) -> tu
     """Set track rating (0-100, where 20=1 star, 40=2 stars, etc).
 
     Args:
-        track_name: Name of the track
+        track_name: Name of the track (partial match supported)
         rating: Rating value 0-100
-        artist: Optional artist name to disambiguate
+        artist: Optional artist name to disambiguate (partial match supported)
 
     Returns:
         Tuple of (success, message or error)
@@ -968,9 +968,9 @@ def set_rating(track_name: str, rating: int, artist: Optional[str] = None) -> tu
 
     if artist:
         safe_artist = _escape_for_applescript(artist)
-        track_query = f'first track of library playlist 1 whose name is "{safe_track}" and artist contains "{safe_artist}"'
+        track_query = f'first track of library playlist 1 whose name contains "{safe_track}" and artist contains "{safe_artist}"'
     else:
-        track_query = f'first track of library playlist 1 whose name is "{safe_track}"'
+        track_query = f'first track of library playlist 1 whose name contains "{safe_track}"'
 
     script = f'''
     tell application "Music"

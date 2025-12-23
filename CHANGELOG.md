@@ -5,6 +5,42 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.6] - 2025-12-22
+
+### Added
+
+- **Auto-search feature** - Automatically find and add tracks from catalog when not in library (opt-in):
+  - New `auto_search` parameter for `add_to_playlist` (uses preference if not specified, default: false)
+  - When track not in library: searches catalog → adds to library → adds to playlist (one operation!)
+  - Uses optimized API flow: `/catalog/{catalog_id}/library` to get library ID instantly (no retry loop)
+  - Includes API verification to confirm track added to playlist
+  - Reduces 7-step manual process to 1 call
+  - Set via `system(action="set-pref", preference="auto_search", value=True)` to enable by default
+- **New `auto_search` preference** - Control automatic catalog search behavior (default: false, respects user choice)
+
+### Changed
+
+- **Partial matching everywhere** - ALL track operations now support partial name matching:
+  - `add_track_to_playlist` - Changed from `is` to `contains` (CRITICAL FIX)
+  - `love_track` - Now supports partial matching
+  - `dislike_track` - Now supports partial matching
+  - `get_rating` - Now supports partial matching
+  - `set_rating` - Now supports partial matching
+  - No more frustration with exact titles like "Song (Live at Venue, Date)"
+- **Optimized auto_search flow** - Minimal API calls:
+  1. Search catalog → get catalog_id
+  2. Add to library via API
+  3. Get library ID from `/catalog/{catalog_id}/library` (instant!)
+  4. Get playlist ID from name (AppleScript, local)
+  5. Add to playlist via API
+  6. Verify via API
+
+### Fixed
+
+- **Critical:** `add_to_playlist` with track names required EXACT match (now uses `contains`)
+  - Example: "Give Up the Funk" now finds "Give up the Funk (Tear the Roof Off the Sucker)"
+  - Fixes the user's exact scenario where 7 attempts were needed to add one song
+
 ## [0.2.5] - 2025-12-22
 
 ### Added

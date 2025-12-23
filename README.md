@@ -62,7 +62,8 @@ Create `~/.config/applemusic-mcp/config.json`:
   "preferences": {
     "fetch_explicit": false,
     "reveal_on_library_miss": false,
-    "clean_only": false
+    "clean_only": false,
+    "auto_search": false
   }
 }
 ```
@@ -71,6 +72,7 @@ Create `~/.config/applemusic-mcp/config.json`:
 - `fetch_explicit`: Always fetch explicit content status via API (default: false)
 - `reveal_on_library_miss`: Auto-reveal catalog tracks in Music app (default: false)
 - `clean_only`: Filter explicit content in catalog searches (default: false)
+- `auto_search`: Automatically search catalog and add to library when tracks not found (default: false)
 
 See `config.example.json` for full example.
 
@@ -121,13 +123,13 @@ Ask Claude things like:
 | `get_library_playlists` | List all playlists | API | All |
 | `get_playlist_tracks` | Get tracks with filter/limit, optional explicit status | API or AS | All (by-name: macOS) |
 | `create_playlist` | Create new playlist | API | All |
-| `add_to_playlist` | Smart add: auto-adds to library, skips duplicates | API or AS | All (by-name: macOS) |
+| `add_to_playlist` | Smart add: auto-search catalog, auto-add to library, skip duplicates | API or AS | All (by-name: macOS) |
 | `copy_playlist` | Copy playlist to editable version (by ID or name) | API or AS | All (by-name: macOS) |
 | `remove_from_playlist` | Remove track(s): single, array, or by ID | AppleScript | macOS |
 | `delete_playlist` | Delete playlist | AppleScript | macOS |
 | `check_playlist` | Quick check if song/artist in playlist | API or AS | All |
 
-`add_to_playlist` accepts catalog IDs (auto-adds to library first) or library IDs. Duplicate checking is on by default. By-name mode uses AppleScript and can edit ANY playlist.
+`add_to_playlist` accepts catalog IDs (auto-adds to library first) or library IDs. With `auto_search=True`, tracks not in your library are automatically found in the Apple Music catalog, added to your library, then added to the playlist—all in one call. Duplicate checking is on by default. By-name mode uses AppleScript and supports partial matching (e.g., "Give Up the Funk" finds "Give up the Funk (Tear the Roof Off the Sucker)").
 
 `remove_from_playlist` and `remove_from_library` support multiple formats: single track by name/ID, comma-separated lists (`track_name="Song1,Song2"`), multiple IDs (`track_ids="ID1,ID2"`), or JSON arrays for different artists.
 
@@ -141,7 +143,7 @@ Ask Claude things like:
 | `get_recently_added` | Recently added content | API | All |
 | `add_to_library` | Add song from catalog | API | All |
 | `remove_from_library` | Remove song(s): single, array, or by ID | AppleScript | macOS |
-| `rating` | Love/dislike/get/set star ratings | API + AS | All (stars: macOS) |
+| `rating` | Love/dislike/get/set star ratings (partial matching) | API + AS | All (stars: macOS) |
 
 ### Catalog & Discovery
 | Tool | Description | Method | Platform |

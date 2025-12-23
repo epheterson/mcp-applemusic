@@ -947,6 +947,7 @@ def add_to_playlist(
     artist: str = "",
     allow_duplicates: bool = False,
     verify: bool = True,
+    auto_search: Optional[bool] = None,
 ) -> str:
     """
     Add songs to a playlist with smart handling.
@@ -954,6 +955,7 @@ def add_to_playlist(
     Automatically:
     - Adds catalog songs to library first if needed
     - Checks for duplicates (skips by default)
+    - Auto-searches catalog and adds to library if track not found (opt-in, default: off)
     - Optionally verifies the add succeeded
     - Works with ANY playlist on macOS via AppleScript
 
@@ -969,10 +971,11 @@ def add_to_playlist(
         playlist_id: Playlist ID (from get_library_playlists) - API mode
         track_ids: Track IDs - catalog (numeric) or library IDs
         playlist_name: Playlist name (macOS only, uses AppleScript)
-        track_name: Track name (macOS only, for name-based matching)
-        artist: Artist name (optional, helps with matching)
+        track_name: Track name (macOS only, for name-based matching, partial match supported)
+        artist: Artist name (optional, helps with matching, partial match supported)
         allow_duplicates: If False (default), skip tracks already in playlist
         verify: If True, verify track was added (slower but confirms success)
+        auto_search: Auto-search catalog and add to library if not found (uses preference if not specified, default: True)
 
     Returns: Detailed result of what happened
     """
@@ -1065,6 +1068,11 @@ def add_to_playlist(
             return "\n".join(steps)
 
         # track_name mode (original AppleScript behavior)
+        # Apply auto_search preference
+        if auto_search is None:
+            prefs = get_user_preferences()
+            auto_search = prefs["auto_search"]
+
         # Quick duplicate check
         if not allow_duplicates:
             success, exists = asc.track_exists_in_playlist(
@@ -1077,17 +1085,122 @@ def add_to_playlist(
         success, result = asc.add_track_to_playlist(
             playlist_name, track_name, artist if artist else None
         )
-        if not success:
-            # Add helpful guidance for track not found
+
+        # Auto-search fallback if track not found and auto_search enabled
+        if not success and "Track not found" in result and auto_search:
+            steps.append(f"Track not in library, searching catalog...")
+            catalog_search = f"{track_name} {artist}" if artist else track_name
+
+            try:
+                headers = get_headers()
+                # Search catalog
+                response = requests.get(
+                    f"{BASE_URL}/catalog/us/search",
+                    headers=headers,
+                    params={"term": catalog_search, "types": "songs", "limit": 3}
+                )
+
+                if response.status_code == 200:
+                    data = response.json()
+                    songs = data.get("results", {}).get("songs", {}).get("data", [])
+
+                    if songs:
+                        # Take the first match
+                        song = songs[0]
+                        catalog_id = song["id"]
+                        attrs = song.get("attributes", {})
+                        found_name = attrs.get("name", "")
+                        found_artist = attrs.get("artistName", "")
+
+                        steps.append(f"Found in catalog: {found_name} - {found_artist} (ID: {catalog_id})")
+                        steps.append(f"Adding to library via API...")
+
+                        # Add to library via API
+                        add_response = requests.post(
+                            f"{BASE_URL}/me/library",
+                            headers=headers,
+                            params={"ids[songs]": catalog_id}
+                        )
+
+                        if add_response.status_code in (200, 202):
+                            # Get library ID from catalog song's library relationship (instant!)
+                            lib_response = requests.get(
+                                f"{BASE_URL}/catalog/us/songs/{catalog_id}/library",
+                                headers=headers
+                            )
+
+                            library_id = None
+                            if lib_response.status_code == 200:
+                                lib_data = lib_response.json()
+                                lib_songs = lib_data.get("data", [])
+                                if lib_songs:
+                                    library_id = lib_songs[0]["id"]
+
+                            if library_id:
+                                steps.append(f"Added to library (library ID: {library_id})")
+
+                                # Get playlist ID from name via AppleScript
+                                pl_success, playlists = asc.get_playlists()
+                                playlist_id = None
+                                if pl_success:
+                                    for pl in playlists:
+                                        if playlist_name.lower() in pl.get("name", "").lower():
+                                            playlist_id = pl.get("id")
+                                            break
+
+                                if playlist_id:
+                                    steps.append(f"Adding to playlist via API (no sync wait needed)...")
+
+                                    # Add to playlist via API
+                                    pl_add_response = requests.post(
+                                        f"{BASE_URL}/me/library/playlists/{playlist_id}/tracks",
+                                        headers=headers,
+                                        json={"data": [{"id": library_id, "type": "library-songs"}]}
+                                    )
+
+                                    if pl_add_response.status_code in (200, 201, 204):
+                                        steps.append(f"✓ Success: Added {found_name} to {playlist_name}")
+
+                                        # Verify via API (AppleScript won't see it yet due to sync lag)
+                                        verify_response = requests.get(
+                                            f"{BASE_URL}/me/library/playlists/{playlist_id}/tracks",
+                                            headers=headers,
+                                            params={"limit": 100}
+                                        )
+                                        if verify_response.status_code == 200:
+                                            verify_data = verify_response.json()
+                                            track_ids = [t["id"] for t in verify_data.get("data", [])]
+                                            if library_id in track_ids:
+                                                steps.append(f"✓ Verified via API: Track in playlist")
+                                    else:
+                                        return f"Error: Added to library but failed to add to playlist via API (status {pl_add_response.status_code})"
+                                else:
+                                    return f"Error: Could not find playlist ID for '{playlist_name}'"
+                            else:
+                                return "Error: Added to library but could not find library ID"
+                        else:
+                            return f"Error: Found in catalog but failed to add to library (status {add_response.status_code})"
+                    else:
+                        return f"Error: Track not found in library or catalog\n" + "\n".join(steps)
+                else:
+                    return f"Error: Catalog search failed (status {response.status_code})"
+
+            except Exception as e:
+                return f"Error during auto-search: {str(e)}\n" + "\n".join(steps)
+
+        elif not success:
+            # Auto-search disabled or error wasn't "Track not found"
             if "Track not found" in result:
                 catalog_search = f"{track_name} {artist}" if artist else track_name
                 return (
                     f"Error: {result}\n\n"
                     f"💡 Tip: Use search_catalog(query='{catalog_search}') to find the catalog ID, "
                     f"then call add_to_playlist again with track_ids=<catalog_id>. "
-                    f"Catalog tracks are automatically added to your library."
+                    f"Catalog tracks are automatically added to your library.\n"
+                    f"Or enable auto_search preference: system(action='set-pref', preference='auto_search', value=True)"
                 )
             return f"Error: {result}"
+
         steps.append(result)
 
         # Quick verify with polling
@@ -2561,12 +2674,13 @@ def system(
     Args:
         action: One of: info, set-pref, clear-tracks, clear-exports
         days_old: When clearing exports, only delete files older than this (0 = all)
-        preference: For set-pref: fetch_explicit, reveal_on_library_miss, or clean_only
+        preference: For set-pref: fetch_explicit, reveal_on_library_miss, clean_only, or auto_search
         value: For set-pref: true or false
 
     Examples:
         system()  # Show everything
         system(action="set-pref", preference="fetch_explicit", value=True)
+        system(action="set-pref", preference="auto_search", value=True)  # Enable auto-search
         system(action="clear-tracks")  # Clear track metadata cache
         system(action="clear-exports", days_old=7)  # Clear old exports
 
@@ -2580,7 +2694,7 @@ def system(
             if not preference or value is None:
                 return "Error: set-pref requires both 'preference' and 'value' parameters"
 
-            valid_prefs = ["fetch_explicit", "reveal_on_library_miss", "clean_only"]
+            valid_prefs = ["fetch_explicit", "reveal_on_library_miss", "clean_only", "auto_search"]
             if preference not in valid_prefs:
                 return f"Error: preference must be one of: {', '.join(valid_prefs)}"
 
