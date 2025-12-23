@@ -618,6 +618,112 @@ def _add_songs_to_library(catalog_ids: list[str]) -> tuple[bool, str]:
     return _add_to_library_api(catalog_ids, "songs")
 
 
+def _auto_search_and_add_to_playlist(
+    track_name: str,
+    artist: str,
+    playlist_name: str,
+    playlist_id: str | None = None,
+) -> tuple[bool, str, list[str]]:
+    """Search catalog for track, add to library, add to playlist.
+
+    Args:
+        track_name: Track name to search for
+        artist: Artist name (optional but helps matching)
+        playlist_name: Playlist name for messaging
+        playlist_id: Playlist ID for API add (optional, will look up if not provided)
+
+    Returns:
+        Tuple of (success, result_message, steps_log)
+    """
+    steps = []
+    catalog_search = f"{track_name} {artist}" if artist else track_name
+
+    try:
+        headers = get_headers()
+
+        # Search catalog
+        response = requests.get(
+            f"{BASE_URL}/catalog/{get_storefront()}/search",
+            headers=headers,
+            params={"term": catalog_search, "types": "songs", "limit": 3},
+            timeout=REQUEST_TIMEOUT,
+        )
+
+        if response.status_code != 200:
+            return False, f"Catalog search failed (status {response.status_code})", steps
+
+        data = response.json()
+        songs = data.get("results", {}).get("songs", {}).get("data", [])
+
+        if not songs:
+            return False, f"Not found in library or catalog", steps
+
+        # Take the first match
+        song = songs[0]
+        catalog_id = song["id"]
+        attrs = song.get("attributes", {})
+        found_name = attrs.get("name", "")
+        found_artist = attrs.get("artistName", "")
+
+        steps.append(f"Found in catalog: {found_name} - {found_artist}")
+
+        # Add to library via API
+        add_response = requests.post(
+            f"{BASE_URL}/me/library",
+            headers=headers,
+            params={"ids[songs]": catalog_id},
+            timeout=REQUEST_TIMEOUT,
+        )
+
+        if add_response.status_code not in (200, 202):
+            return False, f"Failed to add to library (status {add_response.status_code})", steps
+
+        # Get library ID from catalog song's library relationship
+        lib_response = requests.get(
+            f"{BASE_URL}/catalog/{get_storefront()}/songs/{catalog_id}/library",
+            headers=headers,
+            timeout=REQUEST_TIMEOUT,
+        )
+
+        library_id = None
+        if lib_response.status_code == 200:
+            lib_data = lib_response.json()
+            lib_songs = lib_data.get("data", [])
+            if lib_songs:
+                library_id = lib_songs[0]["id"]
+
+        if not library_id:
+            return False, "Added to library but could not get library ID", steps
+
+        # Get playlist ID if not provided
+        if not playlist_id:
+            pl_success, playlists = asc.get_playlists()
+            if pl_success:
+                for pl in playlists:
+                    if playlist_name.lower() in pl.get("name", "").lower():
+                        playlist_id = pl.get("id")
+                        break
+
+        if not playlist_id:
+            return False, f"Could not find playlist ID for '{playlist_name}'", steps
+
+        # Add to playlist via API
+        pl_add_response = requests.post(
+            f"{BASE_URL}/me/library/playlists/{playlist_id}/tracks",
+            headers=headers,
+            json={"data": [{"id": library_id, "type": "library-songs"}]},
+            timeout=REQUEST_TIMEOUT,
+        )
+
+        if pl_add_response.status_code in (200, 201, 204):
+            return True, f"{found_name} - {found_artist}", steps
+        else:
+            return False, f"Failed to add to playlist (status {pl_add_response.status_code})", steps
+
+    except Exception as e:
+        return False, f"Error: {str(e)}", steps
+
+
 def _rate_song_api(song_id: str, rating: str) -> tuple[bool, str]:
     """Rate a song via API.
 
@@ -1238,6 +1344,11 @@ def add_to_playlist(
         if not APPLESCRIPT_AVAILABLE:
             return "Error: Playlist name requires macOS (use playlist ID like 'p.XXX' for cross-platform)"
 
+        # Apply auto_search preference once (used by JSON tracks and track_name modes)
+        if auto_search is None:
+            prefs = get_user_preferences()
+            auto_search = prefs["auto_search"]
+
         # === MODE 3: JSON array of tracks ===
         if has_tracks:
             track_list, error = _parse_tracks_json(tracks)
@@ -1267,6 +1378,15 @@ def add_to_playlist(
                 )
                 if success:
                     added.append(f"{name} - {track_artist}" if track_artist else name)
+                elif "Track not found" in result and auto_search:
+                    # Auto-search fallback: search catalog, add to library, add to playlist
+                    search_success, search_result, _ = _auto_search_and_add_to_playlist(
+                        name, track_artist or "", playlist_name
+                    )
+                    if search_success:
+                        added.append(search_result)
+                    else:
+                        errors.append(f"{name}: {search_result}")
                 else:
                     errors.append(f"{name}: {result}")
 
@@ -1362,11 +1482,6 @@ def add_to_playlist(
             return "\n".join(steps)
 
         # track_name mode (original AppleScript behavior)
-        # Apply auto_search preference
-        if auto_search is None:
-            prefs = get_user_preferences()
-            auto_search = prefs["auto_search"]
-
         # Quick duplicate check
         if not allow_duplicates:
             success, exists = asc.track_exists_in_playlist(
@@ -1383,118 +1498,21 @@ def add_to_playlist(
         # Auto-search fallback if track not found and auto_search enabled
         if not success and "Track not found" in result and auto_search:
             steps.append(f"Track not in library, searching catalog...")
-            catalog_search = f"{track_name} {artist}" if artist else track_name
+            search_success, search_result, search_steps = _auto_search_and_add_to_playlist(
+                track_name, artist or "", playlist_name
+            )
+            steps.extend(search_steps)
 
-            try:
-                headers = get_headers()
-                # Search catalog
-                response = requests.get(
-                    f"{BASE_URL}/catalog/{get_storefront()}/search",
-                    headers=headers,
-                    params={"term": catalog_search, "types": "songs", "limit": 3},
-                    timeout=REQUEST_TIMEOUT,
+            if search_success:
+                steps.append(f"✓ Success: Added {search_result} to {playlist_name}")
+                audit_log.log_action(
+                    "add_to_playlist",
+                    {"playlist": playlist_name, "tracks": [search_result], "method": "auto_search"},
+                    undo_info={"playlist_name": playlist_name}
                 )
-
-                if response.status_code == 200:
-                    data = response.json()
-                    songs = data.get("results", {}).get("songs", {}).get("data", [])
-
-                    if songs:
-                        # Take the first match
-                        song = songs[0]
-                        catalog_id = song["id"]
-                        attrs = song.get("attributes", {})
-                        found_name = attrs.get("name", "")
-                        found_artist = attrs.get("artistName", "")
-
-                        steps.append(f"Found in catalog: {found_name} - {found_artist} (ID: {catalog_id})")
-                        steps.append(f"Adding to library via API...")
-
-                        # Add to library via API
-                        add_response = requests.post(
-                            f"{BASE_URL}/me/library",
-                            headers=headers,
-                            params={"ids[songs]": catalog_id},
-                            timeout=REQUEST_TIMEOUT,
-                        )
-
-                        if add_response.status_code in (200, 202):
-                            # Get library ID from catalog song's library relationship (instant!)
-                            lib_response = requests.get(
-                                f"{BASE_URL}/catalog/{get_storefront()}/songs/{catalog_id}/library",
-                                headers=headers,
-                                timeout=REQUEST_TIMEOUT,
-                            )
-
-                            library_id = None
-                            if lib_response.status_code == 200:
-                                lib_data = lib_response.json()
-                                lib_songs = lib_data.get("data", [])
-                                if lib_songs:
-                                    library_id = lib_songs[0]["id"]
-
-                            if library_id:
-                                steps.append(f"Added to library (library ID: {library_id})")
-
-                                # Get playlist ID from name via AppleScript
-                                pl_success, playlists = asc.get_playlists()
-                                playlist_id = None
-                                if pl_success:
-                                    for pl in playlists:
-                                        if playlist_name.lower() in pl.get("name", "").lower():
-                                            playlist_id = pl.get("id")
-                                            break
-
-                                if playlist_id:
-                                    steps.append(f"Adding to playlist via API (no sync wait needed)...")
-
-                                    # Add to playlist via API
-                                    pl_add_response = requests.post(
-                                        f"{BASE_URL}/me/library/playlists/{playlist_id}/tracks",
-                                        headers=headers,
-                                        json={"data": [{"id": library_id, "type": "library-songs"}]},
-                                        timeout=REQUEST_TIMEOUT,
-                                    )
-
-                                    if pl_add_response.status_code in (200, 201, 204):
-                                        steps.append(f"✓ Success: Added {found_name} to {playlist_name}")
-
-                                        # Verify via API (AppleScript won't see it yet due to sync lag)
-                                        verify_response = requests.get(
-                                            f"{BASE_URL}/me/library/playlists/{playlist_id}/tracks",
-                                            headers=headers,
-                                            params={"limit": 100},
-                                            timeout=REQUEST_TIMEOUT,
-                                        )
-                                        if verify_response.status_code == 200:
-                                            verify_data = verify_response.json()
-                                            verified_ids = [t["id"] for t in verify_data.get("data", [])]
-                                            if library_id in verified_ids:
-                                                steps.append(f"✓ Verified via API: Track in playlist")
-
-                                        # Log and return for auto-search success
-                                        audit_log.log_action(
-                                            "add_to_playlist",
-                                            {"playlist": playlist_name, "tracks": [f"{found_name} - {found_artist}"],
-                                             "method": "auto_search", "catalog_id": catalog_id},
-                                            undo_info={"playlist_name": playlist_name, "library_id": library_id}
-                                        )
-                                        return "\n".join(steps)
-                                    else:
-                                        return f"Error: Added to library but failed to add to playlist via API (status {pl_add_response.status_code})"
-                                else:
-                                    return f"Error: Could not find playlist ID for '{playlist_name}'"
-                            else:
-                                return "Error: Added to library but could not find library ID"
-                        else:
-                            return f"Error: Found in catalog but failed to add to library (status {add_response.status_code})"
-                    else:
-                        return f"Error: Track not found in library or catalog\n" + "\n".join(steps)
-                else:
-                    return f"Error: Catalog search failed (status {response.status_code})"
-
-            except Exception as e:
-                return f"Error during auto-search: {str(e)}\n" + "\n".join(steps)
+                return "\n".join(steps)
+            else:
+                return f"Error: {search_result}\n" + "\n".join(steps)
 
         elif not success:
             # Auto-search disabled or error wasn't "Track not found"

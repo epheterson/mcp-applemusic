@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.2.10] - 2025-12-23
 
+### Fixed
+
+- **`auto_search` now works with batch add** - JSON tracks mode (`tracks='[...]'`) now falls back to auto_search when tracks aren't found in library
+- **DRY refactoring** - Consolidated auto_search logic into `_auto_search_and_add_to_playlist()` helper (~100 lines reduced to ~15)
+
 ### Changed
 
 - **Unified playlist parameters** - All playlist-related tools now accept a single `playlist` parameter:
