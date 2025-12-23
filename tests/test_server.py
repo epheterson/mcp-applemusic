@@ -207,7 +207,7 @@ class TestAddToPlaylist:
 
         result = server.add_to_playlist(playlist_id="p.test123", track_ids="")
 
-        assert "track_ids or track_name" in result
+        assert "track_ids, track_name, or tracks" in result
 
 
 class TestSearchLibrary:
@@ -691,9 +691,9 @@ class TestAddToLibraryTool:
     """Tests for add_to_library MCP tool."""
 
     def test_returns_error_for_empty_ids(self):
-        """Should return error for empty catalog IDs."""
-        result = server.add_to_library("")
-        assert "No catalog IDs" in result
+        """Should return error when no input provided."""
+        result = server.add_to_library()
+        assert "Error: Provide catalog_ids, track_name, or tracks" in result
 
     @responses.activate
     def test_adds_songs_successfully(self, mock_config_dir, mock_developer_token, mock_user_token):

@@ -5,6 +5,31 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.9] - 2025-12-23
+
+### Added
+
+- **Audit logging for destructive operations** - All library/playlist modifications now logged:
+  - Logs to `~/.cache/applemusic-mcp/audit_log.jsonl`
+  - Operations: add_to_library, remove_from_library, add_to_playlist, remove_from_playlist, create_playlist, delete_playlist, copy_playlist, rating
+  - View via `config(action="audit-log")`, clear via `config(action="clear-audit-log")`
+  - Includes undo hints for recovery guidance
+- **JSON `tracks` parameter for `add_to_playlist`** - Consistent with `add_to_library`:
+  - `add_to_playlist(playlist_name="Mix", tracks='[{"name":"Song","artist":"Artist"},...]')`
+  - Supports multiple tracks with different artists in a single call
+
+### Changed
+
+- **Renamed `system` tool to `config`** - Better reflects purpose (configuration, preferences, cache management)
+- **Improved limit parameter docs** - Now says "default: all" instead of "0 = all" to discourage explicit 0
+- **DRY refactoring of track operations** - Extracted common patterns into reusable helpers:
+  - `_split_csv()` - Consistent comma-separated value parsing
+  - `_parse_tracks_json()` - Standardized JSON tracks array parsing
+  - `_validate_track_object()` - Unified track object validation
+  - `_find_matching_catalog_song()` - Shared catalog search with partial matching
+  - `_build_track_results()` - Consistent success/error message formatting
+  - Reduced code duplication across `add_to_library`, `add_to_playlist`, `remove_from_library`, `remove_from_playlist`
+
 ## [0.2.8] - 2025-12-23
 
 ### Added

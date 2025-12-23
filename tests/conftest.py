@@ -8,6 +8,18 @@ from unittest.mock import patch
 import pytest
 
 from applemusic_mcp import applescript as asc
+from applemusic_mcp import audit_log
+
+
+# Mock audit log for all tests to avoid polluting real audit log
+@pytest.fixture(autouse=True)
+def mock_audit_log_for_all_tests(tmp_path):
+    """Ensure all tests use a temp audit log, not the real one."""
+    audit_dir = tmp_path / ".cache" / "applemusic-mcp"
+    audit_dir.mkdir(parents=True)
+    log_path = audit_dir / "audit_log.jsonl"
+    with patch.object(audit_log, "get_audit_log_path", return_value=log_path):
+        yield log_path
 
 
 # Clean up test playlists after all tests

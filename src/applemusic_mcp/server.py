@@ -16,7 +16,8 @@ from mcp.server.fastmcp import FastMCP
 
 from .auth import get_developer_token, get_user_token, get_config_dir, get_user_preferences
 from . import applescript as asc
-from .track_cache import get_track_cache
+from .track_cache import get_track_cache, get_cache_dir
+from . import audit_log
 
 # Check if AppleScript is available (macOS only)
 APPLESCRIPT_AVAILABLE = asc.is_available()
@@ -28,15 +29,6 @@ MAX_OUTPUT_CHARS = 50000
 def truncate(s: str, max_len: int) -> str:
     """Truncate string with ellipsis if longer than max_len."""
     return s[:max_len] + "..." if len(s) > max_len else s
-
-
-def get_cache_dir() -> Path:
-    """Get cache directory for CSV exports."""
-    cache_dir = Path.home() / ".cache" / "applemusic-mcp"
-    cache_dir.mkdir(parents=True, exist_ok=True)
-    return cache_dir
-
-
 
 
 def get_timestamp() -> str:
@@ -302,7 +294,6 @@ REQUEST_TIMEOUT = 30  # seconds
 PLAY_TRACK_INITIAL_DELAY = 1.0  # seconds before first retry
 PLAY_TRACK_RETRY_DELAY = 0.2  # seconds between retries
 PLAY_TRACK_MAX_ATTEMPTS = 45  # total retry attempts (~10 seconds)
-PLAY_TRACK_READD_AT_ATTEMPT = 20  # retry add at ~5s mark
 
 
 def get_storefront() -> str:
@@ -371,6 +362,136 @@ def get_headers() -> dict:
 
 
 # ============ INTERNAL HELPERS ============
+
+
+def _split_csv(value: str) -> list[str]:
+    """Split comma-separated string into list of trimmed non-empty values.
+
+    Args:
+        value: Comma-separated string (e.g., "a, b, c")
+
+    Returns:
+        List of trimmed values, excluding empty strings
+    """
+    return [s.strip() for s in value.split(",") if s.strip()]
+
+
+def _parse_tracks_json(tracks: str) -> tuple[list[dict], str | None]:
+    """Parse JSON tracks array parameter.
+
+    Args:
+        tracks: JSON string like '[{"name":"Song","artist":"Artist"},...]'
+
+    Returns:
+        Tuple of (track_list, error_message)
+        - On success: (list of track dicts, None)
+        - On error: ([], error message string)
+    """
+    try:
+        track_list = json.loads(tracks)
+        if not isinstance(track_list, list):
+            return [], "Error: tracks must be a JSON array"
+        return track_list, None
+    except json.JSONDecodeError as e:
+        return [], f"Error: Invalid JSON - {e}"
+
+
+def _validate_track_object(track_obj: dict) -> tuple[str, str, str | None]:
+    """Validate and extract name/artist from a track object.
+
+    Args:
+        track_obj: Dict with 'name' and optional 'artist' fields
+
+    Returns:
+        Tuple of (name, artist, error_message)
+        - On success: (name, artist, None)
+        - On error: ("", "", error message)
+    """
+    if not isinstance(track_obj, dict):
+        return "", "", "Invalid track object (must be dict)"
+    name = track_obj.get("name", "")
+    if not name:
+        return "", "", "Track missing 'name' field"
+    artist = track_obj.get("artist", "")
+    return name, artist, None
+
+
+def _build_track_results(
+    results: list[str],
+    errors: list[str],
+    success_prefix: str = "✓",
+    error_prefix: str = "✗",
+    success_verb: str = "processed",
+    error_verb: str = "failed",
+) -> str:
+    """Build formatted results message from success/error lists.
+
+    Args:
+        results: List of success messages
+        errors: List of error messages
+        success_prefix: Prefix for success section (default: ✓)
+        error_prefix: Prefix for error section (default: ✗)
+        success_verb: Verb for success count (default: processed)
+        error_verb: Verb for error count (default: failed)
+
+    Returns:
+        Formatted multi-line message, or "No tracks were processed" if empty
+    """
+    output = []
+
+    if results:
+        output.append(f"{success_prefix} {success_verb.capitalize()} {len(results)} track(s):")
+        for r in results:
+            output.append(f"  {r}")
+
+    if errors:
+        if output:
+            output.append("")  # Blank line between sections
+        output.append(f"{error_prefix} {error_verb.capitalize()} {len(errors)} track(s):")
+        for e in errors:
+            output.append(f"  {e}")
+
+    if not output:
+        return f"No tracks were {success_verb}"
+
+    return "\n".join(output)
+
+
+def _find_matching_catalog_song(
+    name: str, artist: str = ""
+) -> tuple[dict | None, str | None]:
+    """Search catalog and find a song matching name and optional artist.
+
+    Uses partial matching: name must be contained in song name,
+    artist (if provided) must be contained in artist name.
+
+    Args:
+        name: Track name to search for (partial match)
+        artist: Artist name (optional, partial match)
+
+    Returns:
+        Tuple of (song_dict, error_message)
+        - On success: (song dict with 'id' and 'attributes', None)
+        - On not found: (None, "Not found in catalog")
+    """
+    search_term = f"{name} {artist}".strip() if artist else name
+    songs = _search_catalog_songs(search_term, limit=3)
+
+    for song in songs:
+        attrs = song.get("attributes", {})
+        song_name = attrs.get("name", "")
+        song_artist = attrs.get("artistName", "")
+
+        # Check if name matches (partial)
+        if name.lower() not in song_name.lower():
+            continue
+        # Check artist if provided
+        if artist and artist.lower() not in song_artist.lower():
+            continue
+
+        return song, None
+
+    return None, "Not found in catalog"
 
 
 def _search_catalog_songs(query: str, limit: int = 5) -> list[dict]:
@@ -568,7 +689,7 @@ def get_playlist_tracks(
         playlist_id: Playlist ID (from get_library_playlists)
         playlist_name: Playlist name (macOS only, uses AppleScript)
         filter: Filter tracks by name/artist (case-insensitive substring match)
-        limit: Max tracks to return (0 = all). Use with large playlists.
+        limit: Max tracks (default: all). Specify to limit results for large playlists.
         format: "text" (default), "json", "csv", or "none" (export only)
         export: "none" (default), "csv", or "json" to write file
         full: Include all metadata in exports
@@ -579,7 +700,7 @@ def get_playlist_tracks(
     Set fetch_explicit=True to get accurate explicit info via API. Uses intelligent
     caching - first check is ~1-2 sec, subsequent checks are instant for known tracks.
 
-    To set default: system(action="set-pref", preference="fetch_explicit", value=True)
+    To set default: config(action="set-pref", preference="fetch_explicit", value=True)
 
     Returns: Track listing in requested format
     """
@@ -834,7 +955,9 @@ def search_playlist(
         success, result = asc.search_playlist(playlist_name, query)
         if not success:
             return f"Error: {result}"
-        matches = [f"{t['name']} by {t['artist']}" for t in result]
+        for t in result:
+            track_id = t.get("id", "")
+            matches.append({"name": t["name"], "artist": t["artist"], "id": track_id})
     else:
         # API path: manually filter tracks (cross-platform)
         query_lower = query.lower()
@@ -845,27 +968,42 @@ def search_playlist(
             name = t.get("name", "")
             artist = t.get("artist", "")
             album = t.get("album", "")
+            track_id = t.get("id", "")
             if (query_lower in name.lower() or
                 query_lower in artist.lower() or
                 query_lower in album.lower()):
-                matches.append(f"{name} by {artist}")
+                matches.append({"name": name, "artist": artist, "id": track_id})
 
     if not matches:
         return f"No matches for '{query}'"
 
-    if len(matches) == 1:
-        return f"Found: {matches[0]}"
+    def format_match(m: dict) -> str:
+        return f"{m['name']} by {m['artist']} {m['id']}"
 
-    result = f"Found {len(matches)} matches:\n"
-    result += "\n".join(f"  - {m}" for m in matches[:10])
+    if len(matches) == 1:
+        return f"Found: {format_match(matches[0])}"
+
+    output = f"Found {len(matches)} matches:\n"
+    output += "\n".join(f"  - {format_match(m)}" for m in matches[:10])
     if len(matches) > 10:
-        result += f"\n  ...and {len(matches) - 10} more"
-    return result
+        output += f"\n  ...and {len(matches) - 10} more"
+    return output
 
 
 def _is_catalog_id(track_id: str) -> bool:
-    """Check if an ID is a catalog ID (numeric) vs library ID (hex/prefixed)."""
-    return track_id.isdigit()
+    """Check if an ID is a catalog ID (numeric) vs library ID (prefixed or hex).
+
+    Catalog IDs are purely numeric (e.g., "1440783617").
+    Library IDs are either prefixed (i.XXX, l.XXX, p.XXX) or hexadecimal strings.
+    """
+    # Library IDs have known prefixes
+    if track_id.startswith(("i.", "l.", "p.")):
+        return False
+    # Catalog IDs are purely numeric
+    if track_id.isdigit():
+        return True
+    # Anything else (hex strings, etc.) is assumed to be a library ID
+    return False
 
 
 def _get_playlist_track_names(playlist_id: str) -> tuple[bool, list[dict] | str]:
@@ -938,6 +1076,11 @@ def create_playlist(name: str, description: str = "") -> str:
     if APPLESCRIPT_AVAILABLE:
         success, result = asc.create_playlist(name, description)
         if success:
+            audit_log.log_action(
+                "create_playlist",
+                {"name": name, "playlist_id": result, "method": "applescript"},
+                undo_info={"playlist_name": name, "playlist_id": result}
+            )
             return f"Created playlist '{name}' (ID: {result})"
 
     # Fall back to API
@@ -953,6 +1096,11 @@ def create_playlist(name: str, description: str = "") -> str:
         data = response.json()
 
         playlist_id = data.get("data", [{}])[0].get("id")
+        audit_log.log_action(
+            "create_playlist",
+            {"name": name, "playlist_id": playlist_id, "method": "api"},
+            undo_info={"playlist_name": name, "playlist_id": playlist_id}
+        )
         return f"Created playlist '{name}' (ID: {playlist_id})"
 
     except requests.exceptions.RequestException as e:
@@ -968,6 +1116,7 @@ def add_to_playlist(
     playlist_name: str = "",
     track_name: str = "",
     artist: str = "",
+    tracks: str = "",
     allow_duplicates: bool = False,
     verify: bool = True,
     auto_search: Optional[bool] = None,
@@ -990,12 +1139,16 @@ def add_to_playlist(
         add_to_playlist(playlist_name="Road Trip", track_name="Hey Jude", artist="The Beatles")
         add_to_playlist(playlist_name="Road Trip", track_ids="1440783617")  # also works!
 
+    MODE 3 - Multiple tracks with different artists (JSON array):
+        add_to_playlist(playlist_name="Mix", tracks='[{"name":"Hey Jude","artist":"Beatles"},{"name":"Bohemian","artist":"Queen"}]')
+
     Args:
         playlist_id: Playlist ID (from get_library_playlists) - API mode
         track_ids: Track IDs - catalog (numeric) or library IDs
         playlist_name: Playlist name (macOS only, uses AppleScript)
         track_name: Track name (macOS only, for name-based matching, partial match supported)
         artist: Artist name (optional, helps with matching, partial match supported)
+        tracks: JSON array of track objects with name/artist fields (for multiple tracks with different artists)
         allow_duplicates: If False (default), skip tracks already in playlist
         verify: If True, verify track was added (slower but confirms success)
         auto_search: Auto-search catalog and add to library if not found (uses preference if not specified, default: True)
@@ -1009,6 +1162,7 @@ def add_to_playlist(
     has_playlist_name = bool(playlist_name)
     has_track_ids = bool(track_ids)
     has_track_name = bool(track_name)
+    has_tracks = bool(tracks)
 
     # Validate combinations
     if has_playlist_id and has_playlist_name:
@@ -1017,18 +1171,68 @@ def add_to_playlist(
     if not has_playlist_id and not has_playlist_name:
         return "Error: Provide playlist_id or playlist_name"
 
-    if not has_track_ids and not has_track_name:
-        return "Error: Provide track_ids or track_name"
+    if not has_track_ids and not has_track_name and not has_tracks:
+        return "Error: Provide track_ids, track_name, or tracks"
 
     # === AppleScript mode (playlist by name) ===
     if has_playlist_name:
         if not APPLESCRIPT_AVAILABLE:
             return "Error: playlist_name requires macOS (use playlist_id for cross-platform)"
 
+        # === MODE 3: JSON array of tracks ===
+        if has_tracks:
+            track_list, error = _parse_tracks_json(tracks)
+            if error:
+                return error
+
+            added = []
+            errors = []
+            for track_obj in track_list:
+                name, track_artist, error = _validate_track_object(track_obj)
+                if error:
+                    errors.append(error)
+                    continue
+
+                # Check for duplicates
+                if not allow_duplicates:
+                    success, exists = asc.track_exists_in_playlist(
+                        playlist_name, name, track_artist or None
+                    )
+                    if success and exists:
+                        steps.append(f"Skipped duplicate: {name}")
+                        continue
+
+                # Add track
+                success, result = asc.add_track_to_playlist(
+                    playlist_name, name, track_artist or None
+                )
+                if success:
+                    added.append(f"{name} - {track_artist}" if track_artist else name)
+                else:
+                    errors.append(f"{name}: {result}")
+
+            # Log successful adds
+            if added:
+                audit_log.log_action(
+                    "add_to_playlist",
+                    {"playlist": playlist_name, "tracks": added, "method": "applescript_json"},
+                    undo_info={"playlist_name": playlist_name, "tracks": added}
+                )
+
+            # Build result
+            if added and not errors:
+                return f"Added {len(added)} track(s) to '{playlist_name}':\n" + "\n".join(f"  + {t}" for t in added)
+            elif added and errors:
+                return f"Added {len(added)} track(s), {len(errors)} failed:\n" + "\n".join(f"  + {t}" for t in added) + "\nErrors:\n" + "\n".join(f"  - {e}" for e in errors)
+            elif errors:
+                return "Errors:\n" + "\n".join(f"  - {e}" for e in errors)
+            else:
+                return "No tracks added"
+
         # If we have track_ids but not track_name, look up track info first
         if has_track_ids and not has_track_name:
             headers = get_headers()
-            ids = [s.strip() for s in track_ids.split(",") if s.strip()]
+            ids = _split_csv(track_ids)
             results = []
 
             for track_id in ids:
@@ -1041,7 +1245,7 @@ def add_to_playlist(
 
                     # Get catalog info
                     response = requests.get(
-                        f"{BASE_URL}/catalog/us/songs/{track_id}", headers=headers, timeout=REQUEST_TIMEOUT,
+                        f"{BASE_URL}/catalog/{get_storefront()}/songs/{track_id}", headers=headers, timeout=REQUEST_TIMEOUT,
                     )
                     if response.status_code != 200:
                         steps.append(f"  Error: Could not get info for {track_id}")
@@ -1088,6 +1292,14 @@ def add_to_playlist(
 
             if not results:
                 return "Error: No tracks could be added\n" + "\n".join(steps)
+            # Log successful adds
+            added_tracks = [s.replace("Added: ", "") for s in steps if s.startswith("Added: ")]
+            if added_tracks:
+                audit_log.log_action(
+                    "add_to_playlist",
+                    {"playlist": playlist_name, "tracks": added_tracks, "method": "applescript_by_id"},
+                    undo_info={"playlist_name": playlist_name, "tracks": added_tracks}
+                )
             return "\n".join(steps)
 
         # track_name mode (original AppleScript behavior)
@@ -1118,7 +1330,7 @@ def add_to_playlist(
                 headers = get_headers()
                 # Search catalog
                 response = requests.get(
-                    f"{BASE_URL}/catalog/us/search",
+                    f"{BASE_URL}/catalog/{get_storefront()}/search",
                     headers=headers,
                     params={"term": catalog_search, "types": "songs", "limit": 3},
                     timeout=REQUEST_TIMEOUT,
@@ -1150,7 +1362,7 @@ def add_to_playlist(
                         if add_response.status_code in (200, 202):
                             # Get library ID from catalog song's library relationship (instant!)
                             lib_response = requests.get(
-                                f"{BASE_URL}/catalog/us/songs/{catalog_id}/library",
+                                f"{BASE_URL}/catalog/{get_storefront()}/songs/{catalog_id}/library",
                                 headers=headers,
                                 timeout=REQUEST_TIMEOUT,
                             )
@@ -1200,6 +1412,15 @@ def add_to_playlist(
                                             track_ids = [t["id"] for t in verify_data.get("data", [])]
                                             if library_id in track_ids:
                                                 steps.append(f"✓ Verified via API: Track in playlist")
+
+                                        # Log and return for auto-search success
+                                        audit_log.log_action(
+                                            "add_to_playlist",
+                                            {"playlist": playlist_name, "tracks": [f"{found_name} - {found_artist}"],
+                                             "method": "auto_search", "catalog_id": catalog_id},
+                                            undo_info={"playlist_name": playlist_name, "library_id": library_id}
+                                        )
+                                        return "\n".join(steps)
                                     else:
                                         return f"Error: Added to library but failed to add to playlist via API (status {pl_add_response.status_code})"
                                 else:
@@ -1225,7 +1446,7 @@ def add_to_playlist(
                     f"💡 Tip: Use search_catalog(query='{catalog_search}') to find the catalog ID, "
                     f"then call add_to_playlist again with track_ids=<catalog_id>. "
                     f"Catalog tracks are automatically added to your library.\n"
-                    f"Or enable auto_search preference: system(action='set-pref', preference='auto_search', value=True)"
+                    f"Or enable auto_search preference: config(action='set-pref', preference='auto_search', value=True)"
                 )
             return f"Error: {result}"
 
@@ -1244,12 +1465,19 @@ def add_to_playlist(
             else:
                 steps.append("Warning: could not verify add")
 
+        # Log successful add (track_name mode)
+        track_desc = f"{track_name} - {artist}" if artist else track_name
+        audit_log.log_action(
+            "add_to_playlist",
+            {"playlist": playlist_name, "tracks": [track_desc], "method": "applescript_by_name"},
+            undo_info={"playlist_name": playlist_name, "tracks": [track_desc]}
+        )
         return "\n".join(steps)
 
     # === API mode (playlist by ID) ===
     try:
         headers = get_headers()
-        ids = [s.strip() for s in track_ids.split(",") if s.strip()]
+        ids = _split_csv(track_ids)
         if not ids:
             return "Error: No track IDs provided"
 
@@ -1272,7 +1500,7 @@ def add_to_playlist(
 
                 # Get catalog info for the track name
                 cat_response = requests.get(
-                    f"{BASE_URL}/catalog/us/songs/{track_id}",
+                    f"{BASE_URL}/catalog/{get_storefront()}/songs/{track_id}",
                     headers=headers,
                     timeout=REQUEST_TIMEOUT,
                 )
@@ -1374,6 +1602,13 @@ def add_to_playlist(
         if success:
             steps.append(f"Verified: playlist now has {len(updated)} tracks")
 
+        # Log successful add (API mode)
+        added_tracks = [track_info.get(tid, tid) for tid in library_ids]
+        audit_log.log_action(
+            "add_to_playlist",
+            {"playlist": playlist_id, "tracks": added_tracks, "method": "api"},
+            undo_info={"playlist_id": playlist_id, "library_ids": library_ids}
+        )
         return "\n".join(steps)
 
     except requests.exceptions.RequestException as e:
@@ -1434,14 +1669,34 @@ def copy_playlist(
                 return f"Error creating playlist: {new_playlist_id}"
 
             # Add tracks to new playlist via AppleScript
+            added = 0
+            failed = []
             for track in source_tracks:
                 track_name = track.get("name", "")
                 artist = track.get("artist", "")
                 if track_name:
-                    # Use add_to_playlist AppleScript function
-                    asc.add_track_to_playlist(new_name, track_name, artist if artist else None)
+                    success, _ = asc.add_track_to_playlist(new_name, track_name, artist if artist else None)
+                    if success:
+                        added += 1
+                    else:
+                        failed.append(track_name)
 
-            return f"Created '{new_name}' (ID: {new_playlist_id}) with {len(source_tracks)} tracks (macOS)"
+            if failed:
+                failed_list = ", ".join(failed[:5])
+                if len(failed) > 5:
+                    failed_list += f", ... (+{len(failed) - 5} more)"
+                audit_log.log_action(
+                    "copy_playlist",
+                    {"source": source_playlist_name, "destination": new_name, "track_count": added, "failed_count": len(failed), "method": "applescript"},
+                    undo_info={"playlist_name": new_name, "playlist_id": new_playlist_id}
+                )
+                return f"Created '{new_name}' (ID: {new_playlist_id}) with {added}/{len(source_tracks)} tracks. Failed: {failed_list}"
+            audit_log.log_action(
+                "copy_playlist",
+                {"source": source_playlist_name, "destination": new_name, "track_count": added, "method": "applescript"},
+                undo_info={"playlist_name": new_name, "playlist_id": new_playlist_id}
+            )
+            return f"Created '{new_name}' (ID: {new_playlist_id}) with {added} tracks (macOS)"
 
         # === API mode (by ID) ===
         # Get source playlist tracks
@@ -1485,6 +1740,11 @@ def copy_playlist(
                 timeout=REQUEST_TIMEOUT,
             )
 
+        audit_log.log_action(
+            "copy_playlist",
+            {"source": source_playlist_id, "destination": new_name, "track_count": len(all_tracks), "method": "api"},
+            undo_info={"playlist_name": new_name, "playlist_id": new_id}
+        )
         return f"Created '{new_name}' (ID: {new_id}) with {len(all_tracks)} tracks"
 
     except requests.exceptions.RequestException as e:
@@ -1553,24 +1813,107 @@ def search_library(
 
 
 @mcp.tool()
-def add_to_library(catalog_ids: str) -> str:
+def add_to_library(
+    catalog_ids: str = "",
+    track_name: str = "",
+    artist: str = "",
+    tracks: str = "",
+) -> str:
     """
     Add songs from the Apple Music catalog to your personal library.
     After adding, use search_library to find the library IDs for playlist operations.
 
+    Supports multiple formats:
+
+    1. By catalog IDs (from search_catalog):
+       add_to_library(catalog_ids="1440783617,1440783618")
+
+    2. By name (searches catalog, takes first match):
+       add_to_library(track_name="Hey Jude", artist="Beatles")
+
+    3. Multiple tracks, same artist:
+       add_to_library(track_name="Hey Jude,Let It Be", artist="Beatles")
+
+    4. Multiple tracks, different artists (JSON):
+       add_to_library(tracks='[{"name":"Hey Jude","artist":"Beatles"},{"name":"Bohemian","artist":"Queen"}]')
+
     Args:
         catalog_ids: Comma-separated catalog song IDs (from search_catalog)
+        track_name: Track name(s) - single or comma-separated
+        artist: Artist name for all tracks (when using track_name)
+        tracks: JSON array of track objects with name/artist fields
 
     Returns: Confirmation or error message
     """
-    ids = [s.strip() for s in catalog_ids.split(",") if s.strip()]
-    if not ids:
-        return "No catalog IDs provided"
+    added = []
+    errors = []
 
-    success, msg = _add_songs_to_library(ids)
-    if success:
-        return f"Successfully added {len(ids)} song(s) to your library. Use search_library to find their library IDs."
-    return f"API Error: {msg}"
+    # Helper to add a song by catalog search
+    def _add_by_search(name: str, search_artist: str) -> None:
+        song, error = _find_matching_catalog_song(name, search_artist)
+        if error:
+            errors.append(f"{name}: {error}")
+            return
+        attrs = song.get("attributes", {})
+        catalog_id = song.get("id")
+        success, msg = _add_songs_to_library([catalog_id])
+        if success:
+            added.append(f"{attrs.get('name', name)} by {attrs.get('artistName', 'Unknown')}")
+        else:
+            errors.append(f"{name}: {msg}")
+
+    # === MODE 1: By catalog IDs ===
+    if catalog_ids:
+        ids = _split_csv(catalog_ids)
+        if not ids:
+            return "No catalog IDs provided"
+        success, msg = _add_songs_to_library(ids)
+        if success:
+            audit_log.log_action(
+                "add_to_library",
+                {"tracks": [f"catalog:{id}" for id in ids], "mode": "catalog_ids"},
+                undo_info={"catalog_ids": ids}
+            )
+            return f"Successfully added {len(ids)} song(s) to your library. Use search_library to find their library IDs."
+        return f"API Error: {msg}"
+
+    # === MODE 2: By track name(s) ===
+    elif track_name:
+        for name in _split_csv(track_name):
+            _add_by_search(name, artist)
+
+    # === MODE 3: By JSON array (different artists) ===
+    elif tracks:
+        track_list, error = _parse_tracks_json(tracks)
+        if error:
+            return error
+
+        for track_obj in track_list:
+            name, track_artist, error = _validate_track_object(track_obj)
+            if error:
+                errors.append(error)
+                continue
+            _add_by_search(name, track_artist)
+
+    else:
+        return "Error: Provide catalog_ids, track_name, or tracks"
+
+    # Log successful additions
+    if added:
+        audit_log.log_action(
+            "add_to_library",
+            {"tracks": added, "mode": "name_search"},
+        )
+
+    # Build result message
+    if added and not errors:
+        return f"Added {len(added)} track(s): {', '.join(added)}"
+    elif added and errors:
+        return f"Added {len(added)} track(s): {', '.join(added)}. Errors: {', '.join(errors)}"
+    elif errors:
+        return f"Errors: {', '.join(errors)}"
+    else:
+        return "No tracks added"
 
 
 @mcp.tool()
@@ -1650,7 +1993,7 @@ def search_catalog(
         clean_only: If True, filter out explicit content (songs only).
                    Uses user preference from config if not specified.
 
-    To set default: system(action="set-pref", preference="clean_only", value=True)
+    To set default: config(action="set-pref", preference="clean_only", value=True)
 
     Returns: Search results with catalog IDs (use add_to_library to add songs)
     """
@@ -1825,7 +2168,7 @@ def browse_library(
 
     Args:
         item_type: What to browse - songs, albums, artists, or videos
-        limit: Max items (default 100, use 0 for all). Only applies to songs.
+        limit: Max items (default 100). Omit or set higher to retrieve more.
         format: "text" (default), "json", "csv", or "none" (export only)
         export: "none" (default), "csv", or "json" to write file
         full: Include all metadata in exports
@@ -1871,7 +2214,7 @@ def browse_library(
         endpoint = type_map[item_type]
         all_items = []
         offset = 0
-        fetch_all = limit == 0 or item_type != "songs"
+        fetch_all = limit == 0
         max_to_fetch = limit if not fetch_all else float('inf')
 
         # Paginate
@@ -2288,15 +2631,42 @@ def rating(
     """
     action = action.lower().strip()
 
-    # Direct ID-based rating
+    # Direct ID-based rating for love/dislike via API
     if song_id and action in ("love", "dislike"):
         success, msg = _rate_song_api(song_id, action)
         if success:
+            audit_log.log_action(
+                "rating",
+                {"track": f"song_id:{song_id}", "type": action, "method": "api"},
+            )
             return f"Set '{action}' for song {song_id}"
         return f"Error: {msg}"
 
+    # For song_id with get/set, look up track info first
+    if song_id and action in ("get", "set"):
+        if not APPLESCRIPT_AVAILABLE:
+            return "Error: Star ratings require macOS"
+        # Look up track name and artist from catalog ID
+        try:
+            headers = get_headers()
+            response = requests.get(
+                f"{BASE_URL}/catalog/{get_storefront()}/songs/{song_id}",
+                headers=headers,
+                timeout=REQUEST_TIMEOUT,
+            )
+            if response.status_code == 200:
+                data = response.json().get("data", [])
+                if data:
+                    attrs = data[0].get("attributes", {})
+                    track_name = attrs.get("name", "")
+                    artist = attrs.get("artistName", "")
+        except Exception:
+            pass
+        if not track_name:
+            return f"Error: Could not find track info for song_id {song_id}"
+
     if not track_name:
-        return "Error: track_name required (or song_id for love/dislike)"
+        return "Error: track_name required (or song_id for API-based operations)"
 
     # Star ratings (macOS only)
     if action == "get":
@@ -2314,6 +2684,11 @@ def rating(
         r = max(0, min(5, stars)) * 20
         success, result = asc.set_rating(track_name, r, artist if artist else None)
         if success:
+            track_desc = f"{track_name} - {artist}" if artist else track_name
+            audit_log.log_action(
+                "rating",
+                {"track": track_desc, "type": "set_stars", "value": stars, "method": "applescript"},
+            )
             return f"Set {track_name} to {'★' * stars}{'☆' * (5 - stars)}"
         return f"Error: {result}"
 
@@ -2326,6 +2701,11 @@ def rating(
         func = asc.love_track if action == "love" else asc.dislike_track
         success, result = func(track_name, artist if artist else None)
         if success:
+            track_desc = f"{track_name} - {artist}" if artist else track_name
+            audit_log.log_action(
+                "rating",
+                {"track": track_desc, "type": action, "method": "applescript"},
+            )
             return result
 
     # API fallback
@@ -2340,6 +2720,10 @@ def rating(
             if not artist or artist.lower() in song_artist.lower():
                 success, msg = _rate_song_api(song.get("id"), action)
                 if success:
+                    audit_log.log_action(
+                        "rating",
+                        {"track": f"{song_name} by {song_artist}", "type": action, "method": "api_fallback"},
+                    )
                     return f"{action.capitalize()}d: {song_name} by {song_artist}"
                 return f"Error: {msg}"
 
@@ -2713,40 +3097,46 @@ def get_personal_station() -> str:
 
 
 @mcp.tool()
-def system(
+def config(
     action: str = "info",
     days_old: int = 0,
     preference: str = "",
     value: Optional[bool] = None,
     string_value: str = "",
+    limit: int = 20,
 ) -> str:
     """
-    System configuration, preferences, and cache management.
+    Configuration, preferences, cache management, and audit log.
 
     Actions:
         - info (default): Show preferences, cache stats, and export files
         - set-pref: Update a preference (requires preference and value/string_value params)
         - list-storefronts: Show available Apple Music storefronts (regions)
+        - audit-log: Show recent audit log entries (library/playlist changes)
         - clear-tracks: Clear track metadata cache
         - clear-exports: Delete CSV/JSON export files (optionally by age)
+        - clear-audit-log: Clear the audit log
 
     Args:
-        action: One of: info, set-pref, list-storefronts, clear-tracks, clear-exports
+        action: One of: info, set-pref, list-storefronts, audit-log, clear-tracks, clear-exports, clear-audit-log
         days_old: When clearing exports, only delete files older than this (0 = all)
         preference: For set-pref: fetch_explicit, reveal_on_library_miss, clean_only, auto_search, or storefront
         value: For set-pref (bool prefs): true or false
         string_value: For set-pref (string prefs like storefront): e.g., "us", "gb", "de"
+        limit: For audit-log: max entries to show (default 20)
 
     Examples:
-        system()  # Show everything
-        system(action="set-pref", preference="fetch_explicit", value=True)
-        system(action="set-pref", preference="auto_search", value=True)  # Enable auto-search
-        system(action="set-pref", preference="storefront", string_value="gb")  # Set UK storefront
-        system(action="list-storefronts")  # List all available regions
-        system(action="clear-tracks")  # Clear track metadata cache
-        system(action="clear-exports", days_old=7)  # Clear old exports
+        config()  # Show everything
+        config(action="set-pref", preference="fetch_explicit", value=True)
+        config(action="set-pref", preference="auto_search", value=True)  # Enable auto-search
+        config(action="set-pref", preference="storefront", string_value="gb")  # Set UK storefront
+        config(action="list-storefronts")  # List all available regions
+        config(action="audit-log")  # Show recent library/playlist changes
+        config(action="audit-log", limit=50)  # Show more entries
+        config(action="clear-tracks")  # Clear track metadata cache
+        config(action="clear-exports", days_old=7)  # Clear old exports
 
-    Returns: System info, preference update, or cache deletion summary
+    Returns: Config info, preference update, or cache deletion summary
     """
     try:
         action = action.lower()
@@ -2790,7 +3180,7 @@ def system(
             with open(config_file, "w") as f:
                 json.dump(config, f, indent=2)
 
-            return f"✓ Updated: {preference} = {pref_value}\n\nUse system() to see current preferences."
+            return f"✓ Updated: {preference} = {pref_value}\n\nUse config() to see current preferences."
 
         # === LIST STOREFRONTS ===
         if action == "list-storefronts":
@@ -2813,7 +3203,7 @@ def system(
 
                 output.append("")
                 output.append(f"Current: {get_storefront()}")
-                output.append("Set via: system(action='set-pref', preference='storefront', string_value='xx')")
+                output.append("Set via: config(action='set-pref', preference='storefront', string_value='xx')")
                 return "\n".join(output)
             except Exception as e:
                 return f"Error listing storefronts: {e}"
@@ -2865,14 +3255,26 @@ def system(
                 output.append(f"Kept: {len(kept)} files (newer than {days_old} days)")
             return "\n".join(output)
 
+        # === AUDIT LOG ===
+        if action == "audit-log":
+            entries = audit_log.get_recent_entries(limit=limit)
+            return audit_log.format_entries_for_display(entries, limit=limit)
+
+        # === CLEAR AUDIT LOG ===
+        if action == "clear-audit-log":
+            entries = audit_log.get_recent_entries(limit=1000)
+            if audit_log.clear_audit_log():
+                return f"✓ Cleared audit log ({len(entries)} entries removed)"
+            return "Error: Failed to clear audit log"
+
         # === INFO (DEFAULT) ===
-        else:
+        if action == "info":
             output = ["=== System Info ===", ""]
 
             # User Preferences
             prefs = get_user_preferences()
-            output.append("Preferences (set via system(action='set-pref', ...)):")
-            output.append(f"  storefront: {prefs['storefront']} (list: system(action='list-storefronts'))")
+            output.append("Preferences (set via config(action='set-pref', ...)):")
+            output.append(f"  storefront: {prefs['storefront']} (list: config(action='list-storefronts'))")
             output.append(f"  fetch_explicit: {prefs['fetch_explicit']}")
             output.append(f"  reveal_on_library_miss: {prefs['reveal_on_library_miss']}")
             output.append(f"  clean_only: {prefs['clean_only']}")
@@ -2894,7 +3296,7 @@ def system(
             else:
                 output.append(f"Track Metadata Cache: {num_tracks} entries (not yet saved)")
             output.append(f"  Location: {track_cache.cache_file}")
-            output.append(f"  Clear: system(action='clear-tracks')")
+            output.append(f"  Clear: config(action='clear-tracks')")
             output.append("")
 
             # Export Files
@@ -2927,13 +3329,37 @@ def system(
 
                     if len(export_files) > 10:
                         output.append(f"  ... and {len(export_files) - 10} more")
-                    output.append(f"  Clear: system(action='clear-exports')")
+                    output.append(f"  Clear: config(action='clear-exports')")
                 else:
                     output.append("Export Files: None")
             else:
                 output.append("Export Files: Cache directory doesn't exist yet")
 
+            output.append("")
+
+            # Audit Log
+            log_path = audit_log.get_audit_log_path()
+            if log_path.exists():
+                log_size = log_path.stat().st_size
+                if log_size < 1024:
+                    log_size_str = f"{log_size}B"
+                elif log_size < 1024 * 1024:
+                    log_size_str = f"{log_size / 1024:.0f}KB"
+                else:
+                    log_size_str = f"{log_size / (1024 * 1024):.1f}MB"
+                entries = audit_log.get_recent_entries(limit=5)
+                output.append(f"Audit Log: {len(entries)}+ entries, {log_size_str}")
+            else:
+                output.append("Audit Log: Empty (no operations logged yet)")
+            output.append(f"  Location: {log_path}")
+            output.append(f"  View: config(action='audit-log')")
+            output.append(f"  Clear: config(action='clear-audit-log')")
+
             return "\n".join(output)
+
+        # === UNKNOWN ACTION ===
+        valid_actions = "info, set-pref, list-storefronts, audit-log, clear-tracks, clear-exports, clear-audit-log"
+        return f"Error: Unknown action '{action}'. Valid: {valid_actions}"
 
     except Exception as e:
         return f"Error: {str(e)}"
@@ -3115,7 +3541,7 @@ if APPLESCRIPT_AVAILABLE:
                    Uses user preference from config if not specified.
             add_to_library: Add catalog song to library, then auto-play
 
-        To set default: system(action="set-pref", preference="reveal_on_library_miss", value=True)
+        To set default: config(action="set-pref", preference="reveal_on_library_miss", value=True)
 
         Returns: Status message with [Source] prefix
         """
@@ -3172,9 +3598,6 @@ if APPLESCRIPT_AVAILABLE:
                     for attempt in range(PLAY_TRACK_MAX_ATTEMPTS):
                         if attempt > 0:
                             time.sleep(PLAY_TRACK_RETRY_DELAY)
-                        # Retry add at ~5s mark in case first silently failed
-                        if attempt == PLAY_TRACK_READD_AT_ATTEMPT:
-                            _add_songs_to_library([catalog_id])
                         success, result = asc.play_track(song_name, song_artist)
                         if success:
                             if reveal:
@@ -3385,7 +3808,7 @@ if APPLESCRIPT_AVAILABLE:
         results = []
         errors = []
 
-        # Validate input
+        # Validate input - exactly one mode must be provided
         provided_params = sum([bool(track_name), bool(track_ids), bool(tracks)])
         if provided_params == 0:
             return "Error: Provide track_name, track_ids, or tracks parameter"
@@ -3394,8 +3817,7 @@ if APPLESCRIPT_AVAILABLE:
 
         # === MODE 1: Remove by ID(s) ===
         if track_ids:
-            ids = [id.strip() for id in track_ids.split(",") if id.strip()]
-            for track_id in ids:
+            for track_id in _split_csv(track_ids):
                 success, result = asc.remove_track_from_playlist(
                     playlist_name,
                     track_id=track_id
@@ -3407,12 +3829,11 @@ if APPLESCRIPT_AVAILABLE:
 
         # === MODE 2: Remove by name(s) with shared artist ===
         elif track_name:
-            names = [name.strip() for name in track_name.split(",") if name.strip()]
-            for name in names:
+            for name in _split_csv(track_name):
                 success, result = asc.remove_track_from_playlist(
                     playlist_name,
                     track_name=name,
-                    artist=artist if artist else None
+                    artist=artist or None
                 )
                 if success:
                     results.append(result)
@@ -3421,50 +3842,39 @@ if APPLESCRIPT_AVAILABLE:
 
         # === MODE 3: Remove by JSON array (different artists) ===
         elif tracks:
-            try:
-                import json
-                track_list = json.loads(tracks)
-                if not isinstance(track_list, list):
-                    return "Error: tracks must be a JSON array"
+            track_list, error = _parse_tracks_json(tracks)
+            if error:
+                return error
 
-                for track_obj in track_list:
-                    if not isinstance(track_obj, dict):
-                        errors.append("Invalid track object (must be dict)")
-                        continue
-                    name = track_obj.get("name", "")
-                    artist_name = track_obj.get("artist", "")
-                    if not name:
-                        errors.append("Track missing 'name' field")
-                        continue
+            for track_obj in track_list:
+                name, track_artist, error = _validate_track_object(track_obj)
+                if error:
+                    errors.append(error)
+                    continue
 
-                    success, result = asc.remove_track_from_playlist(
-                        playlist_name,
-                        track_name=name,
-                        artist=artist_name if artist_name else None
-                    )
-                    if success:
-                        results.append(result)
-                    else:
-                        errors.append(f"{name}: {result}")
+                success, result = asc.remove_track_from_playlist(
+                    playlist_name,
+                    track_name=name,
+                    artist=track_artist or None
+                )
+                if success:
+                    results.append(result)
+                else:
+                    errors.append(f"{name}: {result}")
 
-            except json.JSONDecodeError as e:
-                return f"Error: Invalid JSON in tracks parameter: {str(e)}"
-
-        # Build response
-        output = []
+        # Log successful removes
         if results:
-            output.append(f"✓ Removed {len(results)} track(s):")
-            for r in results:
-                output.append(f"  {r}")
-        if errors:
-            output.append(f"\n✗ Failed to remove {len(errors)} track(s):")
-            for e in errors:
-                output.append(f"  {e}")
+            audit_log.log_action(
+                "remove_from_playlist",
+                {"playlist": playlist_name, "tracks": results},
+                undo_info={"playlist_name": playlist_name, "tracks": results}
+            )
 
-        if not output:
-            return "No tracks were removed"
-
-        return "\n".join(output)
+        return _build_track_results(
+            results, errors,
+            success_verb="removed",
+            error_verb="failed to remove"
+        )
 
     @mcp.tool()
     def remove_from_library(
@@ -3506,7 +3916,7 @@ if APPLESCRIPT_AVAILABLE:
         results = []
         errors = []
 
-        # Validate input
+        # Validate input - exactly one mode must be provided
         provided_params = sum([bool(track_name), bool(track_ids), bool(tracks)])
         if provided_params == 0:
             return "Error: Provide track_name, track_ids, or tracks parameter"
@@ -3515,8 +3925,7 @@ if APPLESCRIPT_AVAILABLE:
 
         # === MODE 1: Remove by ID(s) ===
         if track_ids:
-            ids = [id.strip() for id in track_ids.split(",") if id.strip()]
-            for track_id in ids:
+            for track_id in _split_csv(track_ids):
                 success, result = asc.remove_from_library(track_id=track_id)
                 if success:
                     results.append(result)
@@ -3525,11 +3934,10 @@ if APPLESCRIPT_AVAILABLE:
 
         # === MODE 2: Remove by name(s) with shared artist ===
         elif track_name:
-            names = [name.strip() for name in track_name.split(",") if name.strip()]
-            for name in names:
+            for name in _split_csv(track_name):
                 success, result = asc.remove_from_library(
                     track_name=name,
-                    artist=artist if artist else None
+                    artist=artist or None
                 )
                 if success:
                     results.append(result)
@@ -3538,49 +3946,38 @@ if APPLESCRIPT_AVAILABLE:
 
         # === MODE 3: Remove by JSON array (different artists) ===
         elif tracks:
-            try:
-                import json
-                track_list = json.loads(tracks)
-                if not isinstance(track_list, list):
-                    return "Error: tracks must be a JSON array"
+            track_list, error = _parse_tracks_json(tracks)
+            if error:
+                return error
 
-                for track_obj in track_list:
-                    if not isinstance(track_obj, dict):
-                        errors.append("Invalid track object (must be dict)")
-                        continue
-                    name = track_obj.get("name", "")
-                    artist_name = track_obj.get("artist", "")
-                    if not name:
-                        errors.append("Track missing 'name' field")
-                        continue
+            for track_obj in track_list:
+                name, track_artist, error = _validate_track_object(track_obj)
+                if error:
+                    errors.append(error)
+                    continue
 
-                    success, result = asc.remove_from_library(
-                        track_name=name,
-                        artist=artist_name if artist_name else None
-                    )
-                    if success:
-                        results.append(result)
-                    else:
-                        errors.append(f"{name}: {result}")
+                success, result = asc.remove_from_library(
+                    track_name=name,
+                    artist=track_artist or None
+                )
+                if success:
+                    results.append(result)
+                else:
+                    errors.append(f"{name}: {result}")
 
-            except json.JSONDecodeError as e:
-                return f"Error: Invalid JSON in tracks parameter: {str(e)}"
-
-        # Build response
-        output = []
+        # Log successful removes - this is destructive, important for audit
         if results:
-            output.append(f"✓ Removed {len(results)} track(s) from library:")
-            for r in results:
-                output.append(f"  {r}")
-        if errors:
-            output.append(f"\n✗ Failed to remove {len(errors)} track(s):")
-            for e in errors:
-                output.append(f"  {e}")
+            audit_log.log_action(
+                "remove_from_library",
+                {"tracks": results},
+                undo_info={"tracks": results, "note": "Re-add via search_catalog and add_to_library"}
+            )
 
-        if not output:
-            return "No tracks were removed"
-
-        return "\n".join(output)
+        return _build_track_results(
+            results, errors,
+            success_verb="removed from library",
+            error_verb="failed to remove"
+        )
 
     @mcp.tool()
     def delete_playlist(playlist_name: str) -> str:
@@ -3593,8 +3990,22 @@ if APPLESCRIPT_AVAILABLE:
 
         Returns: Confirmation message or error
         """
+        # Get track count before deletion for audit log
+        track_count = 0
+        track_names = []
+        tracks_success, tracks = asc.get_playlist_tracks(playlist_name)
+        if tracks_success and isinstance(tracks, list):
+            track_count = len(tracks)
+            track_names = [f"{t.get('name', '')} - {t.get('artist', '')}" for t in tracks[:20]]
+
         success, result = asc.delete_playlist(playlist_name)
         if success:
+            # Log deletion with undo info
+            audit_log.log_action(
+                "delete_playlist",
+                {"name": playlist_name, "track_count": track_count},
+                undo_info={"playlist_name": playlist_name, "tracks": track_names, "note": "Recreate playlist and re-add tracks"}
+            )
             return result
         return f"Error: {result}"
 

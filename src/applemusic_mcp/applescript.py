@@ -169,8 +169,12 @@ def get_current_track() -> tuple[bool, dict]:
     return True, track_info
 
 
-def get_volume() -> tuple[bool, int]:
-    """Get current volume (0-100)."""
+def get_volume() -> tuple[bool, int | str]:
+    """Get current volume (0-100).
+
+    Returns:
+        Tuple of (success, volume 0-100 or error message string)
+    """
     success, output = run_applescript('tell application "Music" to get sound volume')
     if success:
         try:
@@ -186,8 +190,12 @@ def set_volume(volume: int) -> tuple[bool, str]:
     return run_applescript(f'tell application "Music" to set sound volume to {volume}')
 
 
-def get_shuffle() -> tuple[bool, bool]:
-    """Get shuffle state."""
+def get_shuffle() -> tuple[bool, bool | str]:
+    """Get shuffle state.
+
+    Returns:
+        Tuple of (success, shuffle enabled bool or error message string)
+    """
     success, output = run_applescript('tell application "Music" to get shuffle enabled')
     if success:
         return True, output.lower() == 'true'
@@ -300,7 +308,12 @@ def get_playlist_tracks(playlist_name: str, limit: int = 500) -> tuple[bool, lis
             on error
                 set tYear to ""
             end try
-            set output to output & tName & "|||" & tArtist & "|||" & tAlbum & "|||" & tDuration & "|||" & tGenre & "|||" & tYear & "|||" & tId & "\\n"
+            try
+                set tExplicit to explicit of t
+            on error
+                set tExplicit to false
+            end try
+            set output to output & tName & "|||" & tArtist & "|||" & tAlbum & "|||" & tDuration & "|||" & tGenre & "|||" & tYear & "|||" & tId & "|||" & tExplicit & "\\n"
             set trackCount to trackCount + 1
         end repeat
         return output
@@ -326,6 +339,11 @@ def get_playlist_tracks(playlist_name: str, limit: int = 500) -> tuple[bool, lis
                 except (ValueError, TypeError):
                     duration = ""
 
+                # Parse explicit field (added in 8th position)
+                explicit = "Unknown"
+                if len(parts) >= 8:
+                    explicit = "Yes" if parts[7].lower() == "true" else "No"
+
                 tracks.append({
                     'name': parts[0],
                     'artist': parts[1],
@@ -333,7 +351,8 @@ def get_playlist_tracks(playlist_name: str, limit: int = 500) -> tuple[bool, lis
                     'duration': duration,
                     'genre': parts[4],
                     'year': parts[5],
-                    'id': parts[6]
+                    'id': parts[6],
+                    'explicit': explicit,
                 })
     return True, tracks
 
@@ -602,7 +621,12 @@ def search_playlist(playlist_name: str, query: str) -> tuple[bool, list[dict]]:
             set trackArtist to artist of t
             set trackAlbum to album of t
             set trackId to persistent ID of t
-            set output to output & trackName & "|||" & trackArtist & "|||" & trackAlbum & "|||" & trackId & "\\n"
+            try
+                set trackExplicit to explicit of t
+            on error
+                set trackExplicit to false
+            end try
+            set output to output & trackName & "|||" & trackArtist & "|||" & trackAlbum & "|||" & trackId & "|||" & trackExplicit & "\\n"
         end repeat
         return output
     end tell
@@ -622,11 +646,17 @@ def search_playlist(playlist_name: str, query: str) -> tuple[bool, list[dict]]:
             continue
         parts = line.split("|||")
         if len(parts) >= 4:
+            # Parse explicit field (added in 5th position)
+            explicit = "Unknown"
+            if len(parts) >= 5:
+                explicit = "Yes" if parts[4].lower() == "true" else "No"
+
             tracks.append({
                 "name": parts[0],
                 "artist": parts[1],
                 "album": parts[2],
                 "id": parts[3],
+                "explicit": explicit,
             })
 
     return True, tracks
@@ -831,7 +861,12 @@ def get_library_songs(limit: int = 100) -> tuple[bool, list[dict]]:
             on error
                 set tYear to ""
             end try
-            set output to output & tName & "|||" & tArtist & "|||" & tAlbum & "|||" & tDuration & "|||" & tGenre & "|||" & tYear & "|||" & tId & "\\n"
+            try
+                set tExplicit to explicit of t
+            on error
+                set tExplicit to false
+            end try
+            set output to output & tName & "|||" & tArtist & "|||" & tAlbum & "|||" & tDuration & "|||" & tGenre & "|||" & tYear & "|||" & tId & "|||" & tExplicit & "\\n"
             set resultCount to resultCount + 1
         end repeat
         return output
@@ -854,6 +889,11 @@ def get_library_songs(limit: int = 100) -> tuple[bool, list[dict]]:
                 except (ValueError, TypeError):
                     duration = ""
 
+                # Parse explicit field (added in 8th position)
+                explicit = "Unknown"
+                if len(parts) >= 8:
+                    explicit = "Yes" if parts[7].lower() == "true" else "No"
+
                 tracks.append({
                     'name': parts[0],
                     'artist': parts[1],
@@ -861,7 +901,8 @@ def get_library_songs(limit: int = 100) -> tuple[bool, list[dict]]:
                     'duration': duration,
                     'genre': parts[4],
                     'year': parts[5],
-                    'id': parts[6]
+                    'id': parts[6],
+                    'explicit': explicit,
                 })
     return True, tracks
 
@@ -910,7 +951,12 @@ def search_library(query: str, types: str = "all") -> tuple[bool, list[dict]]:
             on error
                 set tYear to ""
             end try
-            set output to output & tName & "|||" & tArtist & "|||" & tAlbum & "|||" & tDuration & "|||" & tGenre & "|||" & tYear & "|||" & tId & "\\n"
+            try
+                set tExplicit to explicit of t
+            on error
+                set tExplicit to false
+            end try
+            set output to output & tName & "|||" & tArtist & "|||" & tAlbum & "|||" & tDuration & "|||" & tGenre & "|||" & tYear & "|||" & tId & "|||" & tExplicit & "\\n"
             set resultCount to resultCount + 1
         end repeat
         return output
@@ -933,6 +979,11 @@ def search_library(query: str, types: str = "all") -> tuple[bool, list[dict]]:
                 except (ValueError, TypeError):
                     duration = ""
 
+                # Parse explicit field (added in 8th position)
+                explicit = "Unknown"
+                if len(parts) >= 8:
+                    explicit = "Yes" if parts[7].lower() == "true" else "No"
+
                 tracks.append({
                     'name': parts[0],
                     'artist': parts[1],
@@ -940,7 +991,8 @@ def search_library(query: str, types: str = "all") -> tuple[bool, list[dict]]:
                     'duration': duration,
                     'genre': parts[4],
                     'year': parts[5],
-                    'id': parts[6]
+                    'id': parts[6],
+                    'explicit': explicit,
                 })
     return True, tracks
 
@@ -1021,7 +1073,7 @@ def dislike_track(track_name: str, artist: Optional[str] = None) -> tuple[bool, 
     return success, output
 
 
-def get_rating(track_name: str, artist: Optional[str] = None) -> tuple[bool, int]:
+def get_rating(track_name: str, artist: Optional[str] = None) -> tuple[bool, int | str]:
     """Get track rating (0-100, where 20=1 star, 40=2 stars, etc).
 
     Args:
@@ -1029,7 +1081,7 @@ def get_rating(track_name: str, artist: Optional[str] = None) -> tuple[bool, int
         artist: Optional artist name to disambiguate (partial match supported)
 
     Returns:
-        Tuple of (success, rating 0-100 or error message)
+        Tuple of (success, rating 0-100 or error message string)
     """
     safe_track = _escape_for_applescript(track_name)
 
