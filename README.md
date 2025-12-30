@@ -1,8 +1,6 @@
 # mcp-applemusic
 
-> **Unofficial** community project. Not affiliated with or endorsed by Apple.
-
-MCP server for Apple Music - manage playlists, control playback, browse your library.
+[MCP](https://modelcontextprotocol.io/) server for Apple Music - lets Claude manage playlists, control playback, and browse your library.
 
 ## Features
 
@@ -25,32 +23,55 @@ MCP server for Apple Music - manage playlists, control playback, browse your lib
 | Remove tracks from playlists | ✓ |   |
 | Delete playlists | ✓ |   |
 
-**macOS** uses AppleScript for full control. **API** mode works on Windows/Linux.
-
-> **No credentials needed on macOS!** Many features work instantly via AppleScript - list playlists, browse library, create playlists, search, play tracks. API setup only needed for catalog search, recommendations, and adding songs from Apple Music.
+**macOS** uses AppleScript for full local control. **API** mode enables catalog features and works cross-platform.
 
 ---
 
-## Setup
+## Quick Start (macOS)
 
-**You'll need:** Python 3.10+, Apple Music subscription. API credentials optional on macOS.
+**Requirements:** Python 3.10+, Apple Music app with subscription.
 
-### 1. Get MusicKit Key
-
-1. [Apple Developer Portal → Keys](https://developer.apple.com/account/resources/authkeys/list) → Click **+**
-2. Name it anything, check **MusicKit**, click Continue → Register
-3. **Download the .p8 file** (you can only download once!)
-4. Note your **Key ID** (10 chars) and **Team ID** (from [Membership](https://developer.apple.com/account/#!/membership))
-
-### 2. Install & Configure
+**No Apple Developer account needed!** Most features work instantly via AppleScript.
 
 ```bash
 git clone https://github.com/epheterson/mcp-applemusic.git
 cd mcp-applemusic
 python3 -m venv venv && source venv/bin/activate
 pip install -e .
+```
 
-# Setup config
+Add to Claude Desktop (`~/Library/Application Support/Claude/claude_desktop_config.json`):
+```json
+{
+  "mcpServers": {
+    "Apple Music": {
+      "command": "/full/path/to/mcp-applemusic/venv/bin/python",
+      "args": ["-m", "applemusic_mcp"]
+    }
+  }
+}
+```
+
+**That's it!** Restart Claude and try: "List my Apple Music playlists" or "Play my favorites playlist"
+
+> **Windows/Linux users:** Skip to [API Setup](#api-setup-optional-on-macos-required-on-windowslinux) - AppleScript features require macOS, but API mode works cross-platform.
+
+---
+
+## API Setup (Optional on macOS, Required on Windows/Linux)
+
+Want catalog search, recommendations, or adding songs from Apple Music? Set up API access:
+
+### 1. Get MusicKit Key
+
+1. [Apple Developer Portal → Keys](https://developer.apple.com/account/resources/authkeys/list) → Click **+**
+2. Name it anything, check **MusicKit**, click Continue → Register
+3. **Download the .p8 file** (one-time download!)
+4. Note your **Key ID** (10 chars) and **Team ID** (from [Membership](https://developer.apple.com/account/#!/membership))
+
+### 2. Configure
+
+```bash
 mkdir -p ~/.config/applemusic-mcp
 cp ~/Downloads/AuthKey_XXXXXXXXXX.p8 ~/.config/applemusic-mcp/
 ```
@@ -60,23 +81,9 @@ Create `~/.config/applemusic-mcp/config.json`:
 {
   "team_id": "YOUR_TEAM_ID",
   "key_id": "YOUR_KEY_ID",
-  "private_key_path": "~/.config/applemusic-mcp/AuthKey_XXXXXXXXXX.p8",
-  "preferences": {
-    "fetch_explicit": false,
-    "reveal_on_library_miss": false,
-    "clean_only": false,
-    "auto_search": false
-  }
+  "private_key_path": "~/.config/applemusic-mcp/AuthKey_XXXXXXXXXX.p8"
 }
 ```
-
-**Optional preferences:**
-- `fetch_explicit`: Always fetch explicit content status via API (default: false)
-- `reveal_on_library_miss`: Auto-reveal catalog tracks in Music app (default: false)
-- `clean_only`: Filter explicit content in catalog searches (default: false)
-- `auto_search`: Automatically search catalog and add to library when tracks not found (default: false)
-
-See `config.example.json` for full example.
 
 ### 3. Generate Tokens
 
@@ -86,12 +93,11 @@ applemusic-mcp authorize        # Opens browser for Apple Music auth
 applemusic-mcp status           # Verify everything works
 ```
 
-### 4. Add to Claude
+### 4. Add to Claude (Windows/Linux)
 
-Add to your Claude config file:
-- **Claude Code:** `~/.claude.json`
-- **Claude Desktop (Mac):** `~/Library/Application Support/Claude/claude_desktop_config.json`
-- **Claude Desktop (Windows):** `%APPDATA%\Claude\claude_desktop_config.json`
+Add to your Claude Desktop config:
+- **Windows:** `%APPDATA%\Claude\claude_desktop_config.json`
+- **Linux:** `~/.config/Claude/claude_desktop_config.json`
 
 ```json
 {
@@ -104,20 +110,51 @@ Add to your Claude config file:
 }
 ```
 
+### Optional Preferences
+
+Add to config.json:
+```json
+{
+  "preferences": {
+    "auto_search": true,
+    "clean_only": false,
+    "fetch_explicit": false,
+    "reveal_on_library_miss": false
+  }
+}
+```
+
+- `auto_search`: Auto-find catalog tracks not in library, for `add_to_playlist` (default: false)
+- `clean_only`: Filter explicit content, for `search_catalog`, `search_library`, `browse_library` (default: false)
+- `fetch_explicit`: Fetch explicit status (cached), for `get_playlist_tracks`, `search_library`, `browse_library` (default: false)
+- `reveal_on_library_miss`: Open catalog tracks in Music app, for `play` (default: false)
+
 ---
 
-## Usage
+## Usage Examples
 
-Ask Claude things like:
+**Playlist management:**
 - "List my Apple Music playlists"
-- "Create a playlist called 'Road Trip'"
-- "Search for Beatles songs and add Hey Jude to Road Trip"
+- "Create a playlist called 'Road Trip' and add some upbeat songs"
+- "Add Hey Jude by The Beatles to my Road Trip playlist"
+- "Remove the last 3 tracks from my workout playlist"
+- "Export my library to CSV"
+
+**Discovery & playback (macOS):**
 - "What have I been listening to recently?"
-- "Play my workout playlist" (macOS)
+- "Play my workout playlist on shuffle"
+- "Skip to the next track"
+- "What's playing right now?"
+
+**With API enabled:**
+- "Search Apple Music for 90s alternative rock"
+- "Find songs similar to Bohemian Rhapsody and add them to my library"
+- "What are the top charts right now?"
+- "Get me personalized recommendations"
 
 ---
 
-## Tools (42 total)
+## Tools (37 total)
 
 ### Playlists
 | Tool | Description | Method | Platform |
@@ -152,7 +189,7 @@ Ask Claude things like:
 ### Catalog & Discovery
 | Tool | Description | Method | Platform |
 |------|-------------|--------|----------|
-| `search_catalog` | Search Apple Music (optional explicit filter) | API | All |
+| `search_catalog` | Search Apple Music (songs, albums, artists, playlists, music-videos) | API | All |
 | `get_song_details` | Full song details | API | All |
 | `get_artist_details` | Artist info and discography | API | All |
 | `get_artist_top_songs` | Artist's popular songs | API | All |
@@ -163,30 +200,29 @@ Ask Claude things like:
 | `get_song_station` | Radio station from a song | API | All |
 | `get_charts` | Top songs, albums, playlists | API | All |
 | `get_genres` | List all genres | API | All |
-| `get_storefronts` | List Apple Music regions | API | All |
 | `get_search_suggestions` | Autocomplete suggestions | API | All |
-| `get_music_videos` | Search music videos | API | All |
+
+`search_catalog` supports `types="music-videos"` for video search. Leave query empty for featured videos.
 
 ### Playback
 | Tool | Description | Method | Platform |
 |------|-------------|--------|----------|
-| `play_track` | Play track (options for non-library tracks) | API + AS | macOS |
-| `play_playlist` | Start playing a playlist | AppleScript | macOS |
-| `playback_control` | Play, pause, stop, next, previous | AppleScript | macOS |
-| `get_now_playing` | Current track info | AppleScript | macOS |
-| `get_player_state` | Get playing/paused/stopped state | AppleScript | macOS |
-| `seek_to_position` | Seek within current track | AppleScript | macOS |
+| `play` | Play track, playlist, or album (with shuffle option) | API + AS | macOS |
+| `playback_control` | Play, pause, stop, next, previous, seek | AppleScript | macOS |
+| `get_now_playing` | Current track info and player state | AppleScript | macOS |
 | `playback_settings` | Get/set volume, shuffle, repeat | AppleScript | macOS |
 
-`play_track` returns `[Library]`, `[Catalog]`, or `[Catalog→Library]` to show the source. Catalog tracks can be added first (`add_to_library=True`) or opened in Music (`reveal=True`) where you click play.
+`play` accepts ONE of: `track`, `playlist`, or `album`. Use `shuffle=True` for shuffled playback. Response shows source: `[Library]`, `[Catalog]`, or `[Catalog→Library]`. Catalog items can be added first (`add_to_library=True`) or opened in Music (`reveal=True`).
 
 ### Utilities
 | Tool | Description | Method | Platform |
 |------|-------------|--------|----------|
 | `check_auth_status` | Verify tokens and API connection | API | All |
-| `config` | View/update preferences, clear cache/exports | Local | All |
+| `config` | Preferences, storefronts, cache, audit log | Local + API | All |
 | `airplay` | List or switch AirPlay devices | AppleScript | macOS |
 | `reveal_in_music` | Show track in Music app | AppleScript | macOS |
+
+`config(action="list-storefronts")` shows available Apple Music regions.
 
 ### Output Format
 
@@ -232,7 +268,7 @@ Exported files are accessible via MCP resources (Claude Desktop can read these):
 | No playback control | Use Music app directly |
 
 ### Both Platforms
-- **Tokens expire:** Developer token lasts 180 days, run `applemusic-mcp generate-token` to renew
+- **Tokens expire:** Developer token lasts 180 days. You'll see warnings starting 30 days before expiration. Run `applemusic-mcp generate-token` to renew.
 
 ---
 
@@ -262,7 +298,7 @@ applemusic-mcp serve           # Run MCP server (auto-launched by Claude)
 
 ## License
 
-MIT
+MIT · *Unofficial community project, not affiliated with Apple.*
 
 ## Credits
 

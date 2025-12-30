@@ -837,6 +837,11 @@ def _add_songs_to_library(catalog_ids: list[str]) -> tuple[bool, str]:
     return _add_to_library_api(catalog_ids, "songs")
 
 
+def _add_album_to_library(album_id: str) -> tuple[bool, str]:
+    """Add album to library by catalog ID."""
+    return _add_to_library_api([album_id], "albums")
+
+
 def _auto_search_and_add_to_playlist(
     track_name: str,
     artist: str,
@@ -2091,6 +2096,8 @@ def search_library(
     format: str = "text",
     export: str = "none",
     full: bool = False,
+    fetch_explicit: Optional[bool] = None,
+    clean_only: Optional[bool] = None,
 ) -> str:
     """
     Search your personal Apple Music library.
@@ -2104,13 +2111,42 @@ def search_library(
         format: "text" (default), "json", "csv", or "none" (export only)
         export: "none" (default), "csv", or "json" to write file
         full: Include all metadata in exports (artwork, track numbers, etc.)
+        fetch_explicit: If True, fetch explicit status via API (uses cache for speed).
+                       Uses user preference from config if not specified.
+        clean_only: If True, filter out explicit content.
+                   Uses user preference from config if not specified.
 
     Returns: Library items with IDs (library IDs can be added to playlists)
     """
+    # Apply user preferences
+    prefs = get_user_preferences()
+    if fetch_explicit is None:
+        fetch_explicit = prefs["fetch_explicit"]
+    if clean_only is None:
+        clean_only = prefs["clean_only"]
+
     # Try AppleScript on macOS (faster for local searches)
     if APPLESCRIPT_AVAILABLE:
         success, results = asc.search_library(query, types)
         if success and results:
+            # Enrich with explicit status if requested
+            if fetch_explicit or clean_only:
+                cache = get_track_cache()
+                for track in results:
+                    track_id = track.get("id", "")
+                    if track_id:
+                        cached_explicit = cache.get_explicit(track_id)
+                        if cached_explicit:
+                            track["explicit"] = cached_explicit
+                        else:
+                            track["explicit"] = "Unknown"
+                    else:
+                        track["explicit"] = "Unknown"
+
+            # Filter explicit content if clean_only
+            if clean_only:
+                results = [t for t in results if t.get("explicit") != "Yes"]
+
             return format_output(results, format, export, full, f"search_{query[:20]}")
         # AppleScript found nothing or failed - fall through to API
 
@@ -2131,6 +2167,11 @@ def search_library(
             return "No songs found"
 
         song_data = [extract_track_data(s, full) for s in songs]
+
+        # Filter explicit content if clean_only
+        if clean_only:
+            song_data = [s for s in song_data if s.get("explicit") != "Yes"]
+
         return format_output(song_data, format, export, full, f"search_{query[:20]}")
 
     except requests.exceptions.RequestException as e:
@@ -2366,7 +2407,7 @@ def get_recently_played(
 
 @mcp.tool()
 def search_catalog(
-    query: str,
+    query: str = "",
     types: str = "songs",
     limit: int = 15,
     format: str = "text",
@@ -2378,8 +2419,8 @@ def search_catalog(
     Search the Apple Music catalog.
 
     Args:
-        query: Search term
-        types: Comma-separated types (songs, albums, artists, playlists)
+        query: Search term (leave empty with types="music-videos" for featured videos)
+        types: Comma-separated types (songs, albums, artists, playlists, music-videos)
         limit: Max results per type (default 15)
         format: "text" (default), "json", "csv", or "none" (export only)
         export: "none" (default), "csv", or "json" to write file (songs only)
@@ -2396,20 +2437,39 @@ def search_catalog(
         prefs = get_user_preferences()
         clean_only = prefs["clean_only"]
 
+    # Require query for non-music-videos types
+    if not query and types != "music-videos":
+        return "Error: query required (except for types='music-videos' which shows featured)"
+
     try:
         headers = get_headers()
-        response = requests.get(
-            f"{BASE_URL}/catalog/{get_storefront()}/search",
-            headers=headers,
-            params={"term": query, "types": types, "limit": min(limit, 25)},
-            timeout=REQUEST_TIMEOUT,
-        )
-        response.raise_for_status()
-        data = response.json()
-        results = data.get("results", {})
+
+        # Handle music-videos with empty query (get featured/charts)
+        if types == "music-videos" and not query:
+            response = requests.get(
+                f"{BASE_URL}/catalog/{get_storefront()}/charts",
+                headers=headers,
+                params={"types": "music-videos", "limit": min(limit, 25)},
+                timeout=REQUEST_TIMEOUT,
+            )
+            response.raise_for_status()
+            data = response.json()
+            charts = data.get("results", {}).get("music-videos", [])
+            videos = charts[0].get("data", []) if charts else []
+            results = {"music-videos": {"data": videos}}
+        else:
+            response = requests.get(
+                f"{BASE_URL}/catalog/{get_storefront()}/search",
+                headers=headers,
+                params={"term": query, "types": types, "limit": min(limit, 25)},
+                timeout=REQUEST_TIMEOUT,
+            )
+            response.raise_for_status()
+            data = response.json()
+            results = data.get("results", {})
 
         # Collect all data for JSON format
-        all_data = {"songs": [], "albums": [], "artists": [], "playlists": []}
+        all_data = {"songs": [], "albums": [], "artists": [], "playlists": [], "music-videos": []}
 
         if "songs" in results:
             all_data["songs"] = [extract_track_data(s, full) for s in results["songs"].get("data", [])]
@@ -2440,6 +2500,16 @@ def search_catalog(
                 all_data["playlists"].append({
                     "id": pl.get("id"), "name": attrs.get("name"),
                     "curator": attrs.get("curatorName", ""),
+                })
+
+        if "music-videos" in results:
+            for video in results["music-videos"].get("data", []):
+                attrs = video.get("attributes", {})
+                all_data["music-videos"].append({
+                    "id": video.get("id"),
+                    "name": attrs.get("name", ""),
+                    "artist": attrs.get("artistName", ""),
+                    "duration": format_duration(attrs.get("durationInMillis", 0)),
                 })
 
         # Handle export (songs only)
@@ -2473,6 +2543,11 @@ def search_catalog(
             output.append(f"\n=== {len(all_data['playlists'])} Playlists ===")
             for p in all_data["playlists"]:
                 output.append(f"  {p['name']} {p['id']}")
+
+        if all_data["music-videos"]:
+            output.append(f"\n=== {len(all_data['music-videos'])} Music Videos ===")
+            for v in all_data["music-videos"]:
+                output.append(f"  {v['name']} - {v['artist']} ({v['duration']}) {v['id']}")
 
         return ("\n".join(output) + export_msg) if output else "No results found"
 
@@ -2613,6 +2688,8 @@ def browse_library(
     format: str = "text",
     export: str = "none",
     full: bool = False,
+    fetch_explicit: Optional[bool] = None,
+    clean_only: Optional[bool] = None,
 ) -> str:
     """
     Browse your Apple Music library by type.
@@ -2623,10 +2700,21 @@ def browse_library(
         format: "text" (default), "json", "csv", or "none" (export only)
         export: "none" (default), "csv", or "json" to write file
         full: Include all metadata in exports
+        fetch_explicit: If True, fetch explicit status via API (uses cache for speed).
+                       Uses user preference from config if not specified. Songs only.
+        clean_only: If True, filter out explicit content.
+                   Uses user preference from config if not specified. Songs only.
 
     Returns: Item listing in requested format
     """
     item_type = item_type.lower().strip()
+
+    # Apply user preferences (only relevant for songs)
+    prefs = get_user_preferences()
+    if fetch_explicit is None:
+        fetch_explicit = prefs["fetch_explicit"]
+    if clean_only is None:
+        clean_only = prefs["clean_only"]
 
     # Try AppleScript first for songs (local, instant, no auth required)
     if APPLESCRIPT_AVAILABLE and item_type == "songs":
@@ -2644,7 +2732,23 @@ def browse_library(
                     "genre": s.get("genre", ""),
                     "year": s.get("year", ""),
                     "id": s.get("id", ""),
+                    "explicit": "Unknown",
                 })
+
+            # Enrich with explicit status if requested
+            if fetch_explicit or clean_only:
+                cache = get_track_cache()
+                for track in data:
+                    track_id = track.get("id", "")
+                    if track_id:
+                        cached_explicit = cache.get_explicit(track_id)
+                        if cached_explicit:
+                            track["explicit"] = cached_explicit
+
+            # Filter explicit content if clean_only
+            if clean_only:
+                data = [t for t in data if t.get("explicit") != "Yes"]
+
             return format_output(data, format, export, full, "songs")
         # AppleScript failed - fall through to API
 
@@ -2713,6 +2817,10 @@ def browse_library(
         else:  # videos
             data = [{"id": v.get("id", ""), "name": v.get("attributes", {}).get("name", ""),
                      "artist": v.get("attributes", {}).get("artistName", "")} for v in all_items]
+
+        # Filter explicit content if clean_only (songs only, API already has explicit status)
+        if item_type == "songs" and clean_only:
+            data = [t for t in data if t.get("explicit") != "Yes"]
 
         return format_output(data, format, export, full, f"library_{item_type}")
 
@@ -3439,62 +3547,6 @@ def get_charts(chart_type: str = "songs") -> str:
 
 
 @mcp.tool()
-def get_music_videos(query: str = "") -> str:
-    """
-    Search for music videos in the Apple Music catalog.
-
-    Args:
-        query: Search term (leave empty to get featured music videos)
-
-    Returns: Music videos with their IDs
-    """
-    try:
-        headers = get_headers()
-
-        if query:
-            response = requests.get(
-                f"{BASE_URL}/catalog/{get_storefront()}/search",
-                headers=headers,
-                params={"term": query, "types": "music-videos", "limit": 15},
-                timeout=REQUEST_TIMEOUT,
-            )
-        else:
-            response = requests.get(
-                f"{BASE_URL}/catalog/{get_storefront()}/charts",
-                headers=headers,
-                params={"types": "music-videos", "limit": 15},
-                timeout=REQUEST_TIMEOUT,
-            )
-
-        response.raise_for_status()
-        data = response.json()
-
-        output = []
-
-        if query:
-            videos = data.get("results", {}).get("music-videos", {}).get("data", [])
-        else:
-            # Get from charts
-            charts = data.get("results", {}).get("music-videos", [])
-            videos = charts[0].get("data", []) if charts else []
-
-        for video in videos:
-            attrs = video.get("attributes", {})
-            name = attrs.get("name", "Unknown")
-            artist = attrs.get("artistName", "Unknown")
-            duration = format_duration(attrs.get("durationInMillis", 0)) or "0:00"
-            video_id = video.get("id")
-            output.append(f"{name} - {artist} [{duration}] (ID: {video_id})")
-
-        return "\n".join(output) if output else "No music videos found"
-
-    except requests.exceptions.RequestException as e:
-        return f"API Error: {str(e)}"
-    except (FileNotFoundError, ValueError) as e:
-        return str(e)
-
-
-@mcp.tool()
 def get_genres() -> str:
     """
     Get all available music genres in the Apple Music catalog.
@@ -3558,40 +3610,6 @@ def get_search_suggestions(term: str) -> str:
                 output.append(f"  {display}")
 
         return "\n".join(output) if len(output) > 1 else "No suggestions found"
-
-    except requests.exceptions.RequestException as e:
-        return f"API Error: {str(e)}"
-    except (FileNotFoundError, ValueError) as e:
-        return str(e)
-
-
-@mcp.tool()
-def get_storefronts() -> str:
-    """
-    Get all available Apple Music storefronts (regions/countries).
-    Useful for understanding which markets are available.
-
-    Returns: List of storefronts with their codes and names
-    """
-    try:
-        headers = get_headers()
-        response = requests.get(
-            f"{BASE_URL}/storefronts",
-            headers=headers,
-            timeout=REQUEST_TIMEOUT,
-        )
-        response.raise_for_status()
-        data = response.json()
-
-        output = ["=== Apple Music Storefronts ==="]
-        for storefront in data.get("data", []):
-            sf_id = storefront.get("id", "")
-            attrs = storefront.get("attributes", {})
-            name = attrs.get("name", "Unknown")
-            language = attrs.get("defaultLanguageTag", "")
-            output.append(f"  {sf_id.upper()}: {name} ({language})")
-
-        return "\n".join(output) if len(output) > 1 else "No storefronts found"
 
     except requests.exceptions.RequestException as e:
         return f"API Error: {str(e)}"
@@ -4074,34 +4092,139 @@ def check_auth_status() -> str:
 if APPLESCRIPT_AVAILABLE:
 
     @mcp.tool()
-    def play_track(
+    def play(
         track: str = "",
+        playlist: str = "",
+        album: str = "",
         artist: str = "",
+        shuffle: bool = False,
         reveal: Optional[bool] = None,
         add_to_library: bool = False,
     ) -> str:
-        """Play a track (macOS only).
+        """Play a track, playlist, or album (macOS only).
 
-        Unified parameter accepts any format:
-        - Track name: track="Hey Jude"
-        - Catalog ID: track="1440783617" (10-digit)
-
-        Response shows source: [Library], [Catalog], or [Catalog→Library].
+        Provide ONE of: track, playlist, or album.
 
         Args:
             track: Track name or catalog ID (auto-detected)
-            artist: Artist name to disambiguate (also matches "feat. X")
-            reveal: Open catalog song in Music app when not in library (you click play).
+            playlist: Playlist name to play
+            album: Album name (starts playing first track; Music app continues with album)
+            artist: Artist name to disambiguate tracks/albums
+            shuffle: Shuffle playlist or album (default False)
+            reveal: Open in Music app when not in library (you click play).
                    Uses user preference from config if not specified.
-            add_to_library: Add catalog song to library, then auto-play
+            add_to_library: Add catalog item to library first, then auto-play
 
-        To set default: config(action="set-pref", preference="reveal_on_library_miss", value=True)
+        Response shows source: [Library], [Catalog], or [Catalog→Library].
 
-        Returns: Status message with [Source] prefix
+        Returns: Status message
         """
-        if not track:
-            return "Error: Provide track parameter"
+        # Count how many targets provided
+        targets = sum(1 for t in [track, playlist, album] if t)
+        if targets == 0:
+            return "Error: Provide track, playlist, or album parameter"
+        if targets > 1:
+            return "Error: Provide only ONE of track, playlist, or album"
 
+        # === PLAYLIST ===
+        if playlist:
+            success, result = asc.play_playlist(playlist, shuffle)
+            if success:
+                return result
+            return f"Error: {result}"
+
+        # === ALBUM ===
+        if album:
+            # Apply user preferences for reveal when library miss
+            if reveal is None:
+                prefs = get_user_preferences()
+                reveal = prefs["reveal_on_library_miss"]
+
+            # Search library for tracks from this album
+            search_ok, lib_results = asc.search_library(album, "albums")
+            if search_ok and lib_results:
+                # Filter by artist if provided
+                for lib_track in lib_results:
+                    lib_album = lib_track.get("album", "")
+                    lib_artist = lib_track.get("artist", "")
+                    if album.lower() not in lib_album.lower():
+                        continue
+                    if artist and artist.lower() not in lib_artist.lower():
+                        continue
+                    # Found match - play first track (Music continues with album)
+                    if shuffle:
+                        asc.set_shuffle(True)
+                    success, result = asc.play_track(lib_track.get("name", ""), lib_artist)
+                    if success:
+                        shuffle_note = " (shuffled)" if shuffle else ""
+                        return f"[Library] Playing: {lib_album} by {lib_artist}{shuffle_note}"
+                    break
+
+            # Not in library - search catalog
+            try:
+                headers = get_headers()
+                response = requests.get(
+                    f"{BASE_URL}/catalog/{get_storefront()}/search",
+                    headers=headers,
+                    params={"term": f"{album} {artist}".strip(), "types": "albums", "limit": 5},
+                    timeout=REQUEST_TIMEOUT,
+                )
+                if response.status_code == 200:
+                    data = response.json()
+                    albums_data = data.get("results", {}).get("albums", {}).get("data", [])
+                    for cat_album in albums_data:
+                        attrs = cat_album.get("attributes", {})
+                        album_name = attrs.get("name", "")
+                        album_artist = attrs.get("artistName", "")
+                        album_id = cat_album.get("id", "")
+                        if album.lower() not in album_name.lower():
+                            continue
+                        if artist and artist.lower() not in album_artist.lower():
+                            continue
+                        album_url = attrs.get("url", "")
+
+                        # Option 1: Add album to library and play
+                        if add_to_library and album_id:
+                            add_ok, add_msg = _add_album_to_library(album_id)
+                            if add_ok:
+                                time.sleep(PLAY_TRACK_INITIAL_DELAY)
+                                # Re-search library for the album
+                                for attempt in range(PLAY_TRACK_MAX_ATTEMPTS):
+                                    if attempt > 0:
+                                        time.sleep(PLAY_TRACK_RETRY_DELAY)
+                                    search_ok2, lib_results2 = asc.search_library(album_name, "albums")
+                                    if search_ok2 and lib_results2:
+                                        for lib_track2 in lib_results2:
+                                            if album_name.lower() in lib_track2.get("album", "").lower():
+                                                if shuffle:
+                                                    asc.set_shuffle(True)
+                                                success, result = asc.play_track(lib_track2.get("name", ""), lib_track2.get("artist", ""))
+                                                if success:
+                                                    shuffle_note = " (shuffled)" if shuffle else ""
+                                                    return f"[Catalog→Library] Playing: {album_name} by {album_artist}{shuffle_note}"
+                                                break
+                                return f"[Catalog→Library] Added but sync pending: {album_name} by {album_artist}"
+                            return f"[Catalog] Failed to add: {add_msg}"
+
+                        # Option 2: Open in Music app (user must click play)
+                        if reveal and album_url:
+                            success, msg = asc.open_catalog_song(album_url)
+                            if success:
+                                return f"[Catalog] Opened: {album_name} by {album_artist} (click play)"
+                            return f"[Catalog] {msg}"
+
+                        # Neither flag set - explain options
+                        return (
+                            f"[Catalog] Found: {album_name} by {album_artist}. "
+                            f"Use reveal=True to open in Music, or add_to_library=True to save & play."
+                        )
+            except requests.exceptions.RequestException as e:
+                return f"API Error searching catalog: {str(e)}"
+            except (FileNotFoundError, ValueError) as e:
+                return f"Error: {str(e)}"
+            return f"Album not found: {album}"
+
+        # === TRACK ===
         # Apply user preferences for reveal when library miss
         if reveal is None:
             prefs = get_user_preferences()
@@ -4247,30 +4370,24 @@ if APPLESCRIPT_AVAILABLE:
         return f"Track not found in library or catalog: {track_name}"
 
     @mcp.tool()
-    def play_playlist(playlist_name: str, shuffle: bool = False) -> str:
-        """Start playing a playlist (macOS only).
+    def playback_control(action: str, seconds: float = 0) -> str:
+        """Control playback: play, pause, stop, next, previous, seek (macOS only).
 
         Args:
-            playlist_name: Name of the playlist to play
-            shuffle: Whether to shuffle the playlist
-
-        Returns: Confirmation message or error
-        """
-        success, result = asc.play_playlist(playlist_name, shuffle)
-        if success:
-            return result
-        return f"Error: {result}"
-
-    @mcp.tool()
-    def playback_control(action: str) -> str:
-        """Control playback: play, pause, stop, next, previous (macOS only).
-
-        Args:
-            action: One of: play, pause, playpause, stop, next, previous
+            action: One of: play, pause, playpause, stop, next, previous, seek
+            seconds: For seek action, position in seconds from track start
 
         Returns: Confirmation message or error
         """
         action = action.lower().strip()
+
+        # Handle seek separately since it takes a parameter
+        if action == "seek":
+            success, result = asc.seek(seconds)
+            if success:
+                return f"Seeked to {int(seconds // 60)}:{int(seconds % 60):02d}"
+            return f"Error: {result}"
+
         action_map = {
             "play": asc.play,
             "pause": asc.pause,
@@ -4280,7 +4397,7 @@ if APPLESCRIPT_AVAILABLE:
             "previous": asc.previous_track,
         }
         if action not in action_map:
-            return f"Invalid action: {action}. Use: play, pause, playpause, stop, next, previous"
+            return f"Invalid action: {action}. Use: play, pause, playpause, stop, next, previous, seek"
 
         success, result = action_map[action]()
         if success:
@@ -4289,18 +4406,22 @@ if APPLESCRIPT_AVAILABLE:
 
     @mcp.tool()
     def get_now_playing() -> str:
-        """Get info about the currently playing track (macOS only).
+        """Get info about the currently playing track and player state (macOS only).
 
-        Returns: Track info (name, artist, album, position) or stopped message
+        Returns: Player state and track info (name, artist, album, position)
         """
         success, info = asc.get_current_track()
         if not success:
             return f"Error: {info}"
 
         if info.get("state") == "stopped":
-            return "Not currently playing"
+            return "State: stopped\nNot currently playing"
 
         parts = []
+        # Add player state first
+        state = info.get("state", "unknown")
+        parts.append(f"State: {state}")
+
         if "name" in info:
             parts.append(f"Track: {info['name']}")
         if "artist" in info:
@@ -4374,20 +4495,6 @@ if APPLESCRIPT_AVAILABLE:
             f"Shuffle: {'on' if stats['shuffle'] else 'off'}\n"
             f"Repeat: {stats['repeat']}"
         )
-
-    @mcp.tool()
-    def seek_to_position(seconds: float) -> str:
-        """Seek to a specific position in the current track (macOS only).
-
-        Args:
-            seconds: Position in seconds from the start of the track
-
-        Returns: Confirmation message
-        """
-        success, result = asc.seek(seconds)
-        if success:
-            return f"Seeked to {int(seconds // 60)}:{int(seconds % 60):02d}"
-        return f"Error: {result}"
 
     @mcp.tool()
     def remove_from_playlist(

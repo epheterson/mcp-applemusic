@@ -5,6 +5,45 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] - 2025-12-30
+
+### Breaking Changes
+
+**Tool consolidation** - Reduced from 40 to 37 tools:
+
+| Removed | Replacement |
+|---------|-------------|
+| `play_track` | `play(track="...")` |
+| `play_playlist` | `play(playlist="...")` |
+| `get_music_videos` | `search_catalog(types="music-videos")` |
+| `get_storefronts` | `config(action="list-storefronts")` |
+| `seek_to_position` | `playback_control(action="seek", seconds=...)` |
+
+### Added
+
+- **Unified `play` tool** - Play tracks, playlists, or albums with one tool:
+  ```python
+  play(track="Hey Jude")                    # play a track
+  play(playlist="Road Trip", shuffle=True)  # shuffle a playlist
+  play(album="Abbey Road", artist="Beatles") # play an album
+  ```
+
+- **Album playback** - New `album` parameter in `play` tool
+
+- **Music video search in catalog** - `search_catalog(types="music-videos")` or leave query empty for featured videos
+
+### Changed
+
+- **Enhanced `get_now_playing`** - Now includes player state (playing/paused/stopped)
+
+- **Expanded preference scope**:
+  - `clean_only` now works in `search_library` and `browse_library` (was only `search_catalog`)
+  - `fetch_explicit` now works in `search_library` and `browse_library` (was only `get_playlist_tracks`)
+
+### Fixed
+
+- **Documentation** - Removed ghost tool `get_player_state` that never existed in code
+
 ## [0.3.0] - 2025-12-29
 
 ### Breaking Changes
@@ -84,6 +123,14 @@ add_to_playlist(playlist="Mix", album="Abbey Road", artist="Beatles")
 # New: get album tracks by name
 get_album_tracks(album="Abbey Road", artist="Beatles")
 ```
+
+### Documentation
+
+- **Restructured README** - Quick Start (macOS) section now comes first with zero-config setup
+- **Clearer platform guidance** - Windows/Linux users directed to API Setup section
+- **Better usage examples** - Organized by category (playlist management, discovery, API features)
+- **MCP link added** - Links to modelcontextprotocol.io for newcomers
+- **Token expiration clarity** - Notes that warnings appear 30 days before expiration
 
 ## [0.2.10] - 2025-12-23
 
