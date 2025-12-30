@@ -5,6 +5,86 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] - 2025-12-29
+
+### Breaking Changes
+
+This release introduces a **unified parameter architecture** where entity parameters (track, album, artist) accept any format with automatic detection. Old parameter names are replaced:
+
+| Tool | Old Parameters | New Parameters |
+|------|----------------|----------------|
+| `add_to_playlist` | `ids`, `track_name`, `tracks` | `track`, `album` |
+| `add_to_library` | `ids`, `track_name`, `tracks` | `track`, `album` |
+| `remove_from_playlist` | `ids`, `track_name`, `tracks` | `track` |
+| `remove_from_library` | `ids`, `track_name`, `tracks` | `track` |
+| `rating` | `song_id`, `track_name` | `track` |
+| `play_track` | `track_name` | `track` |
+| `get_album_tracks` | `album_id` | `album` |
+| `get_artist_details` | `artist_name` | `artist` |
+| `get_artist_top_songs` | `artist_name` | `artist` |
+| `get_similar_artists` | `artist_name` | `artist` |
+
+### Added
+
+- **Universal input detection** - All entity parameters auto-detect format:
+  - JSON array: `track='[{"name":"Hey Jude","artist":"Beatles"}]'`
+  - Prefixed IDs: `track="i.ABC123"` (library), `playlist="p.XYZ789"`
+  - CSV names: `track="Hey Jude, Let It Be"`
+  - Catalog IDs: `track="1440783617"` (10+ digits)
+  - Persistent IDs: `track="ABC123DEF456"` (12+ hex chars)
+  - Names: `track="Hey Jude"` (triggers search)
+
+- **Album support for playlists** - Add entire albums to playlists:
+  ```python
+  add_to_playlist(playlist="Road Trip", album="Abbey Road", artist="Beatles")
+  add_to_playlist(playlist="Mix", album="1440783617")  # by catalog ID
+  ```
+
+- **Album by name lookup** - `get_album_tracks` now accepts album names:
+  ```python
+  get_album_tracks(album="Abbey Road", artist="Beatles")  # search by name
+  get_album_tracks(album="1440783617")  # catalog ID still works
+  get_album_tracks(album="l.ABC123")    # library ID still works
+  ```
+
+- **Artist by ID** - `get_artist_details`, `get_artist_top_songs`, `get_similar_artists` now accept catalog IDs:
+  ```python
+  get_artist_details(artist="136975")       # by catalog ID
+  get_artist_details(artist="The Beatles")  # by name still works
+  ```
+
+- **Extended cache** - Cache now stores albums and name index:
+  - Cache file renamed from `track_cache.json` to `cache.json`
+  - Stores album metadata (name, artist, track count, year)
+  - Name index for reverse lookups (name+artist → ID)
+  - Automatic migration from legacy format
+
+### Changed
+
+- **Simplified API surface** - Each tool now has 1-2 main parameters instead of 3-5 mutually exclusive ones
+- **Consistent naming** - All tools use `track`, `album`, `artist` parameter names consistently
+- **Detection order priority**: JSON → prefixed ID → CSV → catalog ID → persistent ID → name
+
+### Migration Guide
+
+```python
+# Before (0.2.x)
+add_to_playlist(playlist_name="Mix", track_name="Hey Jude", artist="Beatles")
+add_to_playlist(playlist_name="Mix", ids="1440783617")
+add_to_playlist(playlist_name="Mix", tracks='[{"name":"Hey Jude","artist":"Beatles"}]')
+
+# After (0.3.0) - all equivalent, auto-detected
+add_to_playlist(playlist="Mix", track="Hey Jude", artist="Beatles")
+add_to_playlist(playlist="Mix", track="1440783617")
+add_to_playlist(playlist="Mix", track='[{"name":"Hey Jude","artist":"Beatles"}]')
+
+# New: add albums to playlists
+add_to_playlist(playlist="Mix", album="Abbey Road", artist="Beatles")
+
+# New: get album tracks by name
+get_album_tracks(album="Abbey Road", artist="Beatles")
+```
+
 ## [0.2.10] - 2025-12-23
 
 ### Fixed

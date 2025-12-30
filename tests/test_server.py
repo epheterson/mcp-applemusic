@@ -188,14 +188,14 @@ class TestAddToPlaylist:
         )
 
         result = server.add_to_playlist(
-            playlist="p.test123", ids="i.song1, i.song2, i.song3"
+            playlist="p.test123", track="i.song1, i.song2, i.song3"
         )
 
         assert "Added" in result
         assert "3 track" in result
 
-    def test_handles_empty_track_ids(self, mock_config_dir, mock_developer_token, mock_user_token):
-        """Should return error for empty track IDs."""
+    def test_handles_empty_track(self, mock_config_dir, mock_developer_token, mock_user_token):
+        """Should return error for empty track."""
         # Setup tokens
         dev_token_file = mock_config_dir / "developer_token.json"
         with open(dev_token_file, "w") as f:
@@ -205,9 +205,9 @@ class TestAddToPlaylist:
         with open(user_token_file, "w") as f:
             json.dump({"music_user_token": mock_user_token}, f)
 
-        result = server.add_to_playlist(playlist="p.test123", ids="")
+        result = server.add_to_playlist(playlist="p.test123", track="")
 
-        assert "ids, track_name, or tracks" in result
+        assert "Provide track or album parameter" in result
 
 
 class TestSearchLibrary:
@@ -690,10 +690,10 @@ class TestAddSongsToLibraryHelper:
 class TestAddToLibraryTool:
     """Tests for add_to_library MCP tool."""
 
-    def test_returns_error_for_empty_ids(self):
+    def test_returns_error_for_empty_input(self):
         """Should return error when no input provided."""
         result = server.add_to_library()
-        assert "Error: Provide ids, track_name, or tracks" in result
+        assert "Error: Provide track or album parameter" in result
 
     @responses.activate
     def test_adds_songs_successfully(self, mock_config_dir, mock_developer_token, mock_user_token):
@@ -713,9 +713,9 @@ class TestAddToLibraryTool:
             status=202,
         )
 
-        result = server.add_to_library("123456789, 987654321")
-        assert "Successfully added" in result
-        assert "2 song" in result
+        result = server.add_to_library(track="1234567890, 9876543210")
+        assert "Added" in result
+        assert "2" in result
 
 
 class TestPlayTrackMatching:

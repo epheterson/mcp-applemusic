@@ -131,21 +131,23 @@ Ask Claude things like:
 | `delete_playlist` | Delete playlist | AppleScript | macOS |
 | `search_playlist` | Search playlist tracks (native AS search, fast) | API or AS | All |
 
-`add_to_playlist` accepts catalog IDs (auto-adds to library first) or library IDs. With `auto_search=True`, tracks not in your library are automatically found in the Apple Music catalog, added to your library, then added to the playlist—all in one call. Duplicate checking is on by default. By-name mode uses AppleScript and supports partial matching (e.g., "Give Up the Funk" finds "Give up the Funk (Tear the Roof Off the Sucker)").
+`add_to_playlist` uses a **unified `track` parameter** that auto-detects format: names (`track="Hey Jude"`), IDs (`track="1440783617"`), CSV (`track="Hey Jude, Let It Be"`), or JSON (`track='[{"name":"Hey Jude","artist":"Beatles"}]'`). You can also add entire albums with the `album` parameter. With `auto_search=True`, tracks not in your library are automatically found in the catalog, added to your library, then added to the playlist—all in one call.
 
-`remove_from_playlist` and `remove_from_library` support multiple formats: single track by name/ID, comma-separated lists (`track_name="Song1,Song2"`), multiple IDs (`ids="ID1,ID2"`), or JSON arrays for different artists.
+`remove_from_playlist` and `remove_from_library` use the same unified `track` parameter format.
 
 ### Library
 | Tool | Description | Method | Platform |
 |------|-------------|--------|----------|
 | `search_library` | Search your library by types (fast local on macOS) | AS + API | All |
 | `browse_library` | List songs/albums/artists/videos by type | API | All |
-| `get_album_tracks` | Get tracks from album | API | All |
+| `get_album_tracks` | Get tracks from album (by name or ID) | API | All |
 | `get_recently_played` | Recent listening history | API | All |
 | `get_recently_added` | Recently added content | API | All |
-| `add_to_library` | Add song from catalog | API | All |
-| `remove_from_library` | Remove song(s): single, array, or by ID | AppleScript | macOS |
-| `rating` | Love/dislike/get/set star ratings (partial matching) | API + AS | All (stars: macOS) |
+| `add_to_library` | Add tracks or albums from catalog | API | All |
+| `remove_from_library` | Remove track(s) from library | AppleScript | macOS |
+| `rating` | Love/dislike/get/set star ratings | API + AS | All (stars: macOS) |
+
+`add_to_library` supports both `track` and `album` parameters. `get_album_tracks` accepts album names (`album="Abbey Road"`) or IDs. Artist tools accept names or catalog IDs.
 
 ### Catalog & Discovery
 | Tool | Description | Method | Platform |

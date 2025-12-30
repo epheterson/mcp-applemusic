@@ -160,9 +160,10 @@ def test_array_removal():
         from applemusic_mcp.server import remove_from_playlist as server_remove_from_playlist
 
         # The server function returns a string result, not (bool, str) tuple
+        # v0.3.0: Uses unified 'track' parameter instead of 'track_name'
         result = server_remove_from_playlist(
             playlist=TEST_PLAYLIST,
-            track_name="Yesterday,Hey Jude",
+            track="Yesterday,Hey Jude",
             artist="The Beatles"
         )
         print(f"  Result: {result}")

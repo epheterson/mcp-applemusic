@@ -17,11 +17,11 @@ class TestTrackCacheBasics:
     """Test basic cache operations."""
 
     def test_cache_initialization(self, tmp_path):
-        """Should initialize with empty cache."""
+        """Should initialize with empty sections."""
         with patch('applemusic_mcp.track_cache.get_cache_dir', return_value=tmp_path):
             cache = TrackCache()
-            assert cache._cache == {}
-            assert cache.cache_file == tmp_path / "track_cache.json"
+            assert cache._cache == {"tracks": {}, "albums": {}, "name_index": {}}
+            assert cache.cache_file == tmp_path / "cache.json"
 
     def test_cache_file_created(self, tmp_path):
         """Should create cache file on save."""
@@ -122,8 +122,8 @@ class TestMultiIDIndexing:
                 # library_id and catalog_id not provided
             )
             assert cache.get_explicit("PERSIST123") == "No"
-            # Should have exactly one entry
-            assert len(cache._cache) == 1
+            # Should have exactly one track entry
+            assert len(cache._cache["tracks"]) == 1
 
 
 class TestISRCStorage:
@@ -138,7 +138,7 @@ class TestISRCStorage:
                 persistent_id="TRACK123",
                 isrc="USRC19300278"
             )
-            assert cache._cache["TRACK123"]["isrc"] == "USRC19300278"
+            assert cache._cache["tracks"]["TRACK123"]["isrc"] == "USRC19300278"
 
     def test_omits_isrc_when_not_provided(self, tmp_path):
         """Should not include ISRC key when not provided."""
@@ -148,7 +148,7 @@ class TestISRCStorage:
                 explicit="No",
                 persistent_id="TRACK123"
             )
-            assert "isrc" not in cache._cache["TRACK123"]
+            assert "isrc" not in cache._cache["tracks"]["TRACK123"]
 
     def test_stores_isrc_with_multiple_ids(self, tmp_path):
         """Should store ISRC accessible via all IDs."""
@@ -162,9 +162,9 @@ class TestISRCStorage:
                 isrc="USRC19300278"
             )
             # ISRC should be accessible via any ID
-            assert cache._cache["PERSIST123"]["isrc"] == "USRC19300278"
-            assert cache._cache["i.LIB123"]["isrc"] == "USRC19300278"
-            assert cache._cache["1440783617"]["isrc"] == "USRC19300278"
+            assert cache._cache["tracks"]["PERSIST123"]["isrc"] == "USRC19300278"
+            assert cache._cache["tracks"]["i.LIB123"]["isrc"] == "USRC19300278"
+            assert cache._cache["tracks"]["1440783617"]["isrc"] == "USRC19300278"
 
 
 class TestCachePersistence:
@@ -184,17 +184,19 @@ class TestCachePersistence:
             assert cache.cache_file.exists()
             with open(cache.cache_file, 'r') as f:
                 data = json.load(f)
-                assert "TRACK123" in data
-                assert data["TRACK123"]["explicit"] == "No"
-                assert data["TRACK123"]["isrc"] == "USRC19300278"
+                assert "TRACK123" in data["tracks"]
+                assert data["tracks"]["TRACK123"]["explicit"] == "No"
+                assert data["tracks"]["TRACK123"]["isrc"] == "USRC19300278"
 
     def test_loads_from_disk(self, tmp_path):
         """Should load existing cache from disk."""
         with patch('applemusic_mcp.track_cache.get_cache_dir', return_value=tmp_path):
-            # Create cache file manually
-            cache_file = tmp_path / "track_cache.json"
+            # Create cache file manually (new format)
+            cache_file = tmp_path / "cache.json"
             cache_data = {
-                "TRACK123": {"explicit": "Yes", "isrc": "USRC19300278"}
+                "tracks": {"TRACK123": {"explicit": "Yes", "isrc": "USRC19300278"}},
+                "albums": {},
+                "name_index": {}
             }
             with open(cache_file, 'w') as f:
                 json.dump(cache_data, f)
@@ -202,25 +204,25 @@ class TestCachePersistence:
             # Load cache
             cache = TrackCache()
             assert cache.get_explicit("TRACK123") == "Yes"
-            assert cache._cache["TRACK123"]["isrc"] == "USRC19300278"
+            assert cache._cache["tracks"]["TRACK123"]["isrc"] == "USRC19300278"
 
     def test_handles_missing_cache_file(self, tmp_path):
         """Should initialize empty cache when file doesn't exist."""
         with patch('applemusic_mcp.track_cache.get_cache_dir', return_value=tmp_path):
             cache = TrackCache()
-            assert cache._cache == {}
+            assert cache._cache == {"tracks": {}, "albums": {}, "name_index": {}}
 
     def test_handles_corrupted_cache_file(self, tmp_path):
         """Should initialize empty cache when file is corrupted."""
         with patch('applemusic_mcp.track_cache.get_cache_dir', return_value=tmp_path):
             # Create corrupted cache file
-            cache_file = tmp_path / "track_cache.json"
+            cache_file = tmp_path / "cache.json"
             with open(cache_file, 'w') as f:
                 f.write("{ this is not valid json")
 
             # Should handle gracefully
             cache = TrackCache()
-            assert cache._cache == {}
+            assert cache._cache == {"tracks": {}, "albums": {}, "name_index": {}}
 
     def test_persists_across_instances(self, tmp_path):
         """Should persist data across cache instances."""
@@ -247,9 +249,11 @@ class TestClearCache:
             cache.set_track_metadata(explicit="No", persistent_id="TRACK1")
             cache.set_track_metadata(explicit="Yes", persistent_id="TRACK2")
 
-            assert len(cache._cache) == 2
+            assert len(cache._cache["tracks"]) == 2
             cache.clear()
-            assert len(cache._cache) == 0
+            assert len(cache._cache["tracks"]) == 0
+            assert len(cache._cache["albums"]) == 0
+            assert len(cache._cache["name_index"]) == 0
 
     def test_clear_persists_to_disk(self, tmp_path):
         """Should save empty cache to disk."""
@@ -260,7 +264,7 @@ class TestClearCache:
 
             # Reload and verify empty
             cache2 = TrackCache()
-            assert cache2._cache == {}
+            assert cache2._cache == {"tracks": {}, "albums": {}, "name_index": {}}
 
 
 class TestGlobalCacheInstance:
@@ -292,7 +296,7 @@ class TestEdgeCases:
                 catalog_id="1440783617"
             )
             # Should only cache by catalog ID
-            assert len(cache._cache) == 1
+            assert len(cache._cache["tracks"]) == 1
             assert cache.get_explicit("1440783617") == "No"
 
     def test_handles_empty_string_ids(self, tmp_path):
@@ -306,7 +310,7 @@ class TestEdgeCases:
                 catalog_id="1440783617"
             )
             # Empty strings are falsy, should only cache catalog ID
-            assert len(cache._cache) == 1
+            assert len(cache._cache["tracks"]) == 1
             assert cache.get_explicit("1440783617") == "No"
 
     def test_does_not_overwrite_existing_entries(self, tmp_path):
@@ -327,7 +331,7 @@ class TestEdgeCases:
             )
             # Should keep original
             assert cache.get_explicit("TRACK123") == "No"
-            assert cache._cache["TRACK123"]["isrc"] == "USRC19300278"
+            assert cache._cache["tracks"]["TRACK123"]["isrc"] == "USRC19300278"
 
     def test_handles_save_errors_gracefully(self, tmp_path):
         """Should handle save errors without crashing."""
