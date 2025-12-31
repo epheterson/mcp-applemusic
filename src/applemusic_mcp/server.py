@@ -226,6 +226,8 @@ def format_output(
     export: str = "none",
     full: bool = False,
     file_prefix: str = "export",
+    total_count: int = 0,
+    offset: int = 0,
 ) -> str:
     """Format output with optional file export.
 
@@ -235,6 +237,8 @@ def format_output(
         export: "none" (default), "csv", or "json" to write file
         full: Include all metadata in exports (extras like artwork, track numbers)
         file_prefix: Prefix for export filename
+        total_count: Total items before pagination (0 = no pagination info)
+        offset: Starting offset for pagination display
 
     Returns:
         Formatted string (text or JSON) with optional file path info
@@ -273,8 +277,14 @@ def format_output(
         # Text response - use tiered formatting for tracks
         if items and "duration" in items[0]:
             # Track data - use tiered format
-            formatted_lines, tier = format_track_list(items)
-            result_parts.append(f"=== {len(items)} items ({tier} format) ===\n")
+            formatted_lines, _tier = format_track_list(items)
+            # Build header with pagination info if provided
+            if total_count > 0 and total_count > len(items):
+                start = offset + 1
+                end = offset + len(items)
+                result_parts.append(f"=== {start}-{end} of {total_count} tracks ===\n")
+            else:
+                result_parts.append(f"=== {len(items)} tracks ===\n")
             result_parts.append("\n".join(formatted_lines))
         else:
             # Non-track data (albums, artists) - simple format
@@ -398,6 +408,36 @@ def get_headers() -> dict:
 
 
 # ============ INTERNAL HELPERS ============
+
+
+def _apply_pagination(
+    items: list,
+    limit: int = 0,
+    offset: int = 0,
+) -> tuple[list, int, str | None]:
+    """Apply offset/limit pagination to a list.
+
+    Args:
+        items: List of items to paginate
+        limit: Max items to return (0 = all)
+        offset: Skip first N items
+
+    Returns:
+        Tuple of (paginated_items, total_count, error_message)
+        - On success: (items, total, None)
+        - On error: ([], total, error message)
+    """
+    total_count = len(items)
+
+    if offset >= total_count and total_count > 0:
+        return [], total_count, f"Offset {offset} exceeds {total_count} items"
+
+    if offset > 0:
+        items = items[offset:]
+    if limit > 0:
+        items = items[:limit]
+
+    return items, total_count, None
 
 
 def _split_csv(value: str) -> list[str]:
@@ -1074,6 +1114,7 @@ def get_playlist_tracks(
     playlist: str = "",
     filter: str = "",
     limit: int = 0,
+    offset: int = 0,
     format: str = "text",
     export: str = "none",
     full: bool = False,
@@ -1090,6 +1131,7 @@ def get_playlist_tracks(
         playlist: Playlist ID (p.XXX) or name - auto-detected
         filter: Filter tracks by name/artist (case-insensitive substring match)
         limit: Max tracks (default: all). Specify to limit results for large playlists.
+        offset: Skip first N tracks (for pagination, use with limit)
         format: "text" (default), "json", "csv", or "none" (export only)
         export: "none" (default), "csv", or "json" to write file
         full: Include all metadata in exports
@@ -1261,24 +1303,26 @@ def get_playlist_tracks(
                 if filter_lower in t["name"].lower() or filter_lower in t["artist"].lower()
             ]
 
-        # Apply limit
-        if limit > 0:
-            track_data = track_data[:limit]
+        # Apply pagination
+        track_data, total_count, error = _apply_pagination(track_data, limit, offset)
+        if error:
+            return error
 
         safe_name = "".join(c if c.isalnum() else "_" for c in playlist_name)
-        return format_output(track_data, format, export, full, f"playlist_{safe_name}")
+        return format_output(track_data, format, export, full, f"playlist_{safe_name}",
+                           total_count=total_count, offset=offset)
 
     # Use API with ID
     try:
         headers = get_headers()
         all_tracks = []
-        offset = 0
+        api_offset = 0
 
         while True:
             response = requests.get(
                 f"{BASE_URL}/me/library/playlists/{playlist_id}/tracks",
                 headers=headers,
-                params={"limit": 100, "offset": offset},
+                params={"limit": 100, "offset": api_offset},
                 timeout=REQUEST_TIMEOUT,
             )
             if response.status_code == 404:
@@ -1290,7 +1334,7 @@ def get_playlist_tracks(
             all_tracks.extend(tracks)
             if len(tracks) < 100:
                 break
-            offset += 100
+            api_offset += 100
 
         if not all_tracks:
             return "Playlist is empty"
@@ -1305,12 +1349,14 @@ def get_playlist_tracks(
                 if filter_lower in t["name"].lower() or filter_lower in t["artist"].lower()
             ]
 
-        # Apply limit
-        if limit > 0:
-            track_data = track_data[:limit]
+        # Apply pagination
+        track_data, total_count, error = _apply_pagination(track_data, limit, offset)
+        if error:
+            return error
 
         safe_id = playlist_id.replace('.', '_')
-        return format_output(track_data, format, export, full, f"playlist_{safe_id}")
+        return format_output(track_data, format, export, full, f"playlist_{safe_id}",
+                           total_count=total_count, offset=offset)
 
     except requests.exceptions.RequestException as e:
         return f"API Error: {str(e)}"
@@ -2561,6 +2607,8 @@ def search_catalog(
 def get_album_tracks(
     album: str = "",
     artist: str = "",
+    limit: int = 0,
+    offset: int = 0,
     format: str = "text",
     export: str = "none",
     full: bool = False,
@@ -2581,6 +2629,8 @@ def get_album_tracks(
     Args:
         album: Album identifier - name, library ID, or catalog ID (auto-detected)
         artist: Artist hint for name-based lookups
+        limit: Max tracks (default: all)
+        offset: Skip first N tracks (for pagination)
         format: "text" (default), "json", "csv", or "none" (export only)
         export: "none" (default), "csv", or "json" to write file
         full: Include all metadata in exports (composer, artwork, etc.)
@@ -2644,13 +2694,13 @@ def get_album_tracks(
 
         # Paginate to handle box sets / compilations with 100+ tracks
         all_tracks = []
-        offset = 0
+        api_offset = 0
 
         while True:
             response = requests.get(
                 base_url,
                 headers=headers,
-                params={"limit": 100, "offset": offset},
+                params={"limit": 100, "offset": api_offset},
                 timeout=REQUEST_TIMEOUT,
             )
             if response.status_code == 404:
@@ -2662,7 +2712,7 @@ def get_album_tracks(
             all_tracks.extend(tracks)
             if len(tracks) < 100:
                 break
-            offset += 100
+            api_offset += 100
 
         if not all_tracks:
             return "No tracks found"
@@ -2670,7 +2720,13 @@ def get_album_tracks(
         # Extract track data with extras for numbered display
         track_data = [extract_track_data(t, include_extras=True) for t in all_tracks]
 
-        return format_output(track_data, format, export, full, f"album_{album_id.replace('.', '_')}")
+        # Apply pagination
+        track_data, total_count, error = _apply_pagination(track_data, limit, offset)
+        if error:
+            return error
+
+        return format_output(track_data, format, export, full, f"album_{album_id.replace('.', '_')}",
+                           total_count=total_count, offset=offset)
 
     except requests.exceptions.RequestException as e:
         return f"API Error: {str(e)}"
@@ -2685,6 +2741,7 @@ def get_album_tracks(
 def browse_library(
     item_type: str = "songs",
     limit: int = 100,
+    offset: int = 0,
     format: str = "text",
     export: str = "none",
     full: bool = False,
@@ -2697,6 +2754,7 @@ def browse_library(
     Args:
         item_type: What to browse - songs, albums, artists, or videos
         limit: Max items (default 100). Omit or set higher to retrieve more.
+        offset: Skip first N items (for pagination)
         format: "text" (default), "json", "csv", or "none" (export only)
         export: "none" (default), "csv", or "json" to write file
         full: Include all metadata in exports
@@ -2749,7 +2807,13 @@ def browse_library(
             if clean_only:
                 data = [t for t in data if t.get("explicit") != "Yes"]
 
-            return format_output(data, format, export, full, "songs")
+            # Apply pagination
+            data, total_count, error = _apply_pagination(data, limit, offset)
+            if error:
+                return error
+
+            return format_output(data, format, export, full, "songs",
+                               total_count=total_count, offset=offset)
         # AppleScript failed - fall through to API
 
     # Fall back to API
@@ -2768,9 +2832,10 @@ def browse_library(
 
         endpoint = type_map[item_type]
         all_items = []
-        offset = 0
+        api_offset = 0
         fetch_all = limit == 0
-        max_to_fetch = limit if not fetch_all else float('inf')
+        # Need to fetch enough for both offset and limit
+        max_to_fetch = (offset + limit) if not fetch_all else float('inf')
 
         # Paginate
         while len(all_items) < max_to_fetch:
@@ -2779,7 +2844,7 @@ def browse_library(
             response = requests.get(
                 url,
                 headers=headers,
-                params={"limit": batch_limit, "offset": offset},
+                params={"limit": batch_limit, "offset": api_offset},
                 timeout=REQUEST_TIMEOUT,
             )
             if response.status_code == 404:
@@ -2791,7 +2856,7 @@ def browse_library(
             all_items.extend(items)
             if len(items) < 100:
                 break
-            offset += 100
+            api_offset += 100
 
         if not all_items:
             return f"No {item_type} in library"
@@ -2822,7 +2887,13 @@ def browse_library(
         if item_type == "songs" and clean_only:
             data = [t for t in data if t.get("explicit") != "Yes"]
 
-        return format_output(data, format, export, full, f"library_{item_type}")
+        # Apply pagination
+        data, total_count, error = _apply_pagination(data, limit, offset)
+        if error:
+            return error
+
+        return format_output(data, format, export, full, f"library_{item_type}",
+                           total_count=total_count, offset=offset)
 
     except requests.exceptions.RequestException as e:
         return f"API Error: {str(e)}"
