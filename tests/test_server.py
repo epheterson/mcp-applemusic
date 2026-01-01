@@ -774,8 +774,102 @@ class TestPlayTrackMatching:
         song_artist = "QUEEN"
         track_name = "bohemian rhapsody"
         artist = "queen"
-        
+
         matches_track = track_name.lower() in song_name.lower()
         matches_artist = artist.lower() in song_artist.lower()
         assert matches_track is True
         assert matches_artist is True
+
+
+class TestPaginationWithFetchExplicit:
+    """Tests for pagination when fetch_explicit is True.
+
+    Regression test for bug where internal API pagination loop
+    overwrote the offset parameter, causing wrong header output.
+    """
+
+    @responses.activate
+    def test_offset_not_overwritten_by_fetch_explicit(
+        self, mock_config_dir, mock_developer_token, mock_user_token, monkeypatch
+    ):
+        """Offset param should not be modified by fetch_explicit API calls.
+
+        Bug: When fetch_explicit=True on AppleScript path, the internal API
+        loop used 'offset = 0' then incremented it. This overwrote the function
+        parameter, causing wrong pagination header (e.g., "401-432 of 432").
+        """
+        # Enable AppleScript path
+        monkeypatch.setattr(server, "APPLESCRIPT_AVAILABLE", True)
+
+        # Setup tokens
+        dev_token_file = mock_config_dir / "developer_token.json"
+        with open(dev_token_file, "w") as f:
+            json.dump({"token": mock_developer_token, "expires": time.time() + 86400 * 60}, f)
+
+        user_token_file = mock_config_dir / "music_user_token.json"
+        with open(user_token_file, "w") as f:
+            json.dump({"music_user_token": mock_user_token}, f)
+
+        # Mock AppleScript to return 5 tracks
+        mock_tracks = [
+            {"name": f"Track {i}", "artist": "Artist", "album": "Album",
+             "duration": "3:00", "genre": "Pop", "year": "2024", "id": f"ID{i}"}
+            for i in range(5)
+        ]
+
+        with patch.object(server.asc, 'get_playlist_tracks', return_value=(True, mock_tracks)):
+            # Mock API responses for fetch_explicit enrichment
+            # First: find playlist by name
+            responses.add(
+                responses.GET,
+                "https://api.music.apple.com/v1/me/library/playlists",
+                json={
+                    "data": [
+                        {"id": "p.testplaylist", "attributes": {"name": "Test Playlist"}}
+                    ]
+                },
+                status=200,
+            )
+
+            # Second: get tracks from API (simulating 500+ tracks requiring pagination)
+            # This is where the bug was - the loop would set offset=0, then offset+=100
+            for batch in range(6):  # 6 batches = 600 tracks
+                responses.add(
+                    responses.GET,
+                    "https://api.music.apple.com/v1/me/library/playlists/p.testplaylist/tracks",
+                    json={
+                        "data": [
+                            {
+                                "id": f"i.lib{batch*100+j}",
+                                "attributes": {
+                                    "name": f"Track {j}" if batch == 0 and j < 5 else f"Other {batch*100+j}",
+                                    "artistName": "Artist",
+                                    "albumName": "Album",
+                                    "contentRating": "clean",
+                                }
+                            }
+                            for j in range(100)
+                        ]
+                    },
+                    status=200,
+                )
+            # Final empty response to end pagination
+            responses.add(
+                responses.GET,
+                "https://api.music.apple.com/v1/me/library/playlists/p.testplaylist/tracks",
+                json={"data": []},
+                status=200,
+            )
+
+            # Call with explicit offset=0 (no pagination requested)
+            result = server.get_playlist_tracks(
+                playlist="Test Playlist",
+                offset=0,
+                limit=0,  # No limit = all tracks
+                fetch_explicit=True,
+            )
+
+            # The header should show "5 tracks", NOT "501-505 of 5 tracks" or similar
+            # (which would happen if offset was overwritten to 500 by the API loop)
+            assert "=== 5 tracks ===" in result
+            assert "of 5 tracks" not in result  # Should NOT show pagination format

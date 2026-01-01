@@ -1226,13 +1226,13 @@ def get_playlist_tracks(
                         # If found, fetch all tracks from API with explicit info
                         if api_playlist_id:
                             all_api_tracks = []
-                            offset = 0
+                            api_offset = 0
 
                             while True:
                                 track_response = requests.get(
                                     f"{BASE_URL}/me/library/playlists/{api_playlist_id}/tracks",
                                     headers=headers,
-                                    params={"limit": 100, "offset": offset},
+                                    params={"limit": 100, "offset": api_offset},
                                     timeout=REQUEST_TIMEOUT,
                                 )
                                 if track_response.status_code != 200:
@@ -1245,7 +1245,7 @@ def get_playlist_tracks(
                                 all_api_tracks.extend(tracks)
                                 if len(tracks) < 100:
                                     break
-                                offset += 100
+                                api_offset += 100
 
                             # Build temporary map for matching (name+artist+album -> API data)
                             # This is NOT cached - just used for one-time matching
