@@ -67,6 +67,25 @@ def truncate(s: str, max_len: int) -> str:
     return s[:max_len] + "..." if len(s) > max_len else s
 
 
+def _normalize_for_match(s: str) -> str:
+    """Normalize string for fuzzy matching.
+
+    Lowercases, removes special chars, collapses whitespace.
+    Used for matching AppleScript track names to API track names.
+    """
+    # Lowercase and strip
+    s = s.lower().strip()
+    # Remove common variations
+    s = s.replace("'", "").replace("'", "").replace("`", "")
+    s = s.replace('"', "").replace('"', "").replace('"', "")
+    s = s.replace("&", "and")
+    # Keep only alphanumeric and spaces
+    s = re.sub(r"[^a-z0-9\s]", "", s)
+    # Collapse multiple spaces
+    s = re.sub(r"\s+", " ", s).strip()
+    return s
+
+
 def get_timestamp() -> str:
     """Get timestamp for unique filenames (YYYYMMDD_HHMMSS)."""
     return time.strftime("%Y%m%d_%H%M%S")
@@ -106,15 +125,22 @@ def extract_track_data(track: dict, include_extras: bool = False) -> dict:
     genres = attrs.get("genreNames", [])
     release_date = attrs.get("releaseDate", "") or ""
 
+    track_id = track.get("id", "")
+    name = attrs.get("name", "")
+    artist = attrs.get("artistName", "")
+    album = attrs.get("albumName", "")
+    explicit = "Yes" if attrs.get("contentRating") == "explicit" else "No"
+    isrc = attrs.get("isrc", "")
+
     data = {
-        "name": attrs.get("name", ""),
+        "name": name,
         "duration": format_duration(attrs.get("durationInMillis", 0)),
-        "artist": attrs.get("artistName", ""),
-        "album": attrs.get("albumName", ""),
+        "artist": artist,
+        "album": album,
         "year": release_date[:4] if release_date else "",
         "genre": genres[0] if genres else "",
-        "explicit": "Yes" if attrs.get("contentRating") == "explicit" else "No",
-        "id": track.get("id", ""),
+        "explicit": explicit,
+        "id": track_id,
     }
 
     if include_extras:
@@ -125,11 +151,27 @@ def extract_track_data(track: dict, include_extras: bool = False) -> dict:
             "has_lyrics": attrs.get("hasLyrics", False),
             "catalog_id": play_params.get("catalogId", ""),
             "composer": attrs.get("composerName", ""),
-            "isrc": attrs.get("isrc", ""),
+            "isrc": isrc,
             "is_explicit": attrs.get("contentRating") == "explicit",
             "preview_url": previews[0].get("url", "") if previews else "",
             "artwork_url": attrs.get("artwork", {}).get("url", "").replace("{w}x{h}", "500x500"),
         })
+
+    # Cache track metadata for later ID lookups (e.g., removal by catalog ID)
+    if track_id and name:
+        cache = get_track_cache()
+        # Determine if this is a catalog or library ID
+        catalog_id = track_id if track_id.isdigit() else play_params.get("catalogId", "")
+        library_id = track_id if track_id.startswith("i.") else None
+        cache.set_track_metadata(
+            explicit=explicit,
+            catalog_id=catalog_id or None,
+            library_id=library_id,
+            isrc=isrc or None,
+            name=name,
+            artist=artist,
+            album=album,
+        )
 
     return data
 
@@ -520,12 +562,70 @@ def _detect_id_type(id_str: str) -> str:
         return "unknown"
 
 
+def _find_api_playlist_by_name(name: str) -> str | None:
+    """Find API playlist ID by name.
+
+    Matching priority:
+    1. Exact match (case-insensitive)
+    2. Partial match (query contained in playlist name, case-insensitive)
+
+    Args:
+        name: Playlist name to search for
+
+    Returns:
+        API playlist ID (p.XXX) if found, None otherwise
+    """
+    try:
+        headers = get_headers()
+        api_offset = 0
+        name_lower = name.lower()
+        partial_match = None  # Store first partial match as fallback
+
+        while True:
+            response = requests.get(
+                f"{BASE_URL}/me/library/playlists",
+                headers=headers,
+                params={"limit": 100, "offset": api_offset},
+                timeout=REQUEST_TIMEOUT,
+            )
+            if response.status_code != 200:
+                break
+
+            playlists = response.json().get("data", [])
+            if not playlists:
+                break
+
+            for pl in playlists:
+                pl_name = pl.get("attributes", {}).get("name", "")
+                pl_name_lower = pl_name.lower()
+
+                # Exact match - return immediately
+                if name_lower == pl_name_lower:
+                    return pl.get("id")
+
+                # Partial match - store first one as fallback
+                if partial_match is None and name_lower in pl_name_lower:
+                    partial_match = pl.get("id")
+
+            if len(playlists) < 100:
+                break
+            api_offset += 100
+
+        # Return partial match if no exact match found
+        return partial_match
+
+    except Exception:
+        pass  # Fall back to AppleScript
+
+    return None
+
+
 def _resolve_playlist(playlist: str) -> tuple[str | None, str | None, str | None]:
     """Resolve a playlist parameter to either an ID or name.
 
     Auto-detects based on pattern:
     - Matches "p." + alphanumeric only → playlist ID (e.g., p.ABC123xyz)
-    - Otherwise → playlist name (for AppleScript lookup)
+    - Otherwise → playlist name, tries to find API ID first for better performance
 
     Args:
         playlist: Either a playlist ID (p.XXX) or name
@@ -533,7 +633,7 @@ def _resolve_playlist(playlist: str) -> tuple[str | None, str | None, str | None
     Returns:
         Tuple of (playlist_id, playlist_name, error)
         - If ID: (id, None, None)
-        - If name: (None, name, None)
+        - If name: (None, name, None) or (api_id, None, None) if API ID found
         - If empty: (None, None, error message)
     """
     playlist = playlist.strip()
@@ -544,8 +644,14 @@ def _resolve_playlist(playlist: str) -> tuple[str | None, str | None, str | None
     # This correctly treats "p.s. I love you" as a name, not an ID
     if playlist.startswith("p.") and len(playlist) > 2 and playlist[2:].isalnum():
         return playlist, None, None
-    else:
-        return None, playlist, None
+
+    # Given a name - try to find API ID first (faster than AppleScript for shared tracks)
+    api_id = _find_api_playlist_by_name(playlist)
+    if api_id:
+        return api_id, None, None
+
+    # Fall back to AppleScript name lookup
+    return None, playlist, None
 
 
 def _detect_input_type(value: str) -> InputType:
@@ -801,6 +907,19 @@ def _find_matching_catalog_song(
         # Check artist if provided
         if artist and artist.lower() not in song_artist.lower():
             continue
+
+        # Cache for later ID lookups
+        catalog_id = song.get("id", "")
+        if catalog_id and song_name:
+            cache = get_track_cache()
+            cache.set_track_metadata(
+                explicit="Yes" if attrs.get("contentRating") == "explicit" else "No",
+                catalog_id=catalog_id,
+                isrc=attrs.get("isrc") or None,
+                name=song_name,
+                artist=song_artist,
+                album=attrs.get("albumName", ""),
+            )
 
         return song, None
 
@@ -1123,29 +1242,21 @@ def get_playlist_tracks(
     """
     Get tracks in a playlist.
 
-    Playlist parameter auto-detects:
-    - Starts with "p." → playlist ID (API mode, cross-platform)
-    - Otherwise → playlist name (AppleScript, macOS only)
-
     Args:
-        playlist: Playlist ID (p.XXX) or name - auto-detected
-        filter: Filter tracks by name/artist (case-insensitive substring match)
-        limit: Max tracks (default: all). Specify to limit results for large playlists.
-        offset: Skip first N tracks (for pagination, use with limit)
-        format: "text" (default), "json", "csv", or "none" (export only)
-        export: "none" (default), "csv", or "json" to write file
+        playlist: Playlist ID (p.XXX) or name (auto-detected)
+        filter: Filter by name/artist (case-insensitive)
+        limit: Max tracks (default: all)
+        offset: Skip first N tracks (for pagination)
+        format: "text", "json", "csv", or "none"
+        export: "none", "csv", or "json" to write file
         full: Include all metadata in exports
-        fetch_explicit: If True, fetch explicit status via API (uses cache for speed).
-                       Uses user preference from config if not specified.
-
-    Note: When using playlist name (AppleScript), explicit status defaults to "Unknown".
-    Set fetch_explicit=True to get accurate explicit info via API. Uses intelligent
-    caching - first check is ~1-2 sec, subsequent checks are instant for known tracks.
-
-    To set default: config(action="set-pref", preference="fetch_explicit", value=True)
+        fetch_explicit: Fetch explicit status via API (default: user preference)
 
     Returns: Track listing in requested format
     """
+    start_time = time.time()
+    query_stats = {"cache_hits": 0, "cache_misses": 0, "api_calls": 0}
+
     # Resolve playlist parameter
     playlist_id, playlist_name, error = _resolve_playlist(playlist)
     if error:
@@ -1197,7 +1308,9 @@ def get_playlist_tracks(
                         cached_explicit = cache.get_explicit(track_id)
                         if cached_explicit:
                             track["explicit"] = cached_explicit
+                            query_stats["cache_hits"] += 1
                             continue
+                    query_stats["cache_misses"] += 1
                     unknown_tracks.append(track)
 
                 # If we have unknown tracks, fetch from API
@@ -1205,6 +1318,7 @@ def get_playlist_tracks(
                     headers = get_headers()
 
                     # Find the playlist in the API library by matching name
+                    query_stats["api_calls"] += 1
                     response = requests.get(
                         f"{BASE_URL}/me/library/playlists",
                         headers=headers,
@@ -1229,6 +1343,7 @@ def get_playlist_tracks(
                             api_offset = 0
 
                             while True:
+                                query_stats["api_calls"] += 1
                                 track_response = requests.get(
                                     f"{BASE_URL}/me/library/playlists/{api_playlist_id}/tracks",
                                     headers=headers,
@@ -1247,9 +1362,12 @@ def get_playlist_tracks(
                                     break
                                 api_offset += 100
 
-                            # Build temporary map for matching (name+artist+album -> API data)
-                            # This is NOT cached - just used for one-time matching
-                            api_track_map = {}
+                            # Build temporary maps for matching (normalized keys -> API data)
+                            # Multiple keys for fallback matching: name+artist+album, name+artist, name
+                            api_track_map_full = {}  # name+artist+album
+                            api_track_map_partial = {}  # name+artist (for fallback)
+                            api_track_map_name = {}  # name only (for last resort, only if unique)
+                            api_track_name_counts = {}  # count occurrences of each name
 
                             for api_track in all_api_tracks:
                                 attrs = api_track.get("attributes", {})
@@ -1257,19 +1375,30 @@ def get_playlist_tracks(
                                 library_id = api_track.get("id", "")
                                 catalog_id = play_params.get("catalogId", "")
                                 isrc = attrs.get("isrc", "")
-                                track_name = attrs.get("name", "").lower()
-                                track_artist = attrs.get("artistName", "").lower()
-                                track_album = attrs.get("albumName", "").lower()
+                                track_name = _normalize_for_match(attrs.get("name", ""))
+                                track_artist = _normalize_for_match(attrs.get("artistName", ""))
+                                track_album = _normalize_for_match(attrs.get("albumName", ""))
                                 explicit = "Yes" if attrs.get("contentRating") == "explicit" else "No"
 
-                                # Temporary match key (not cached)
-                                match_key = f"{track_name}|||{track_artist}|||{track_album}"
-                                api_track_map[match_key] = {
+                                api_data = {
                                     "library_id": library_id,
                                     "catalog_id": catalog_id,
                                     "isrc": isrc,
                                     "explicit": explicit,
                                 }
+
+                                # Full match key (name+artist+album)
+                                full_key = f"{track_name}|||{track_artist}|||{track_album}"
+                                api_track_map_full[full_key] = api_data
+
+                                # Partial match key (name+artist) for fallback
+                                partial_key = f"{track_name}|||{track_artist}"
+                                if partial_key not in api_track_map_partial:
+                                    api_track_map_partial[partial_key] = api_data
+
+                                # Name-only map (only use if name is unique)
+                                api_track_name_counts[track_name] = api_track_name_counts.get(track_name, 0) + 1
+                                api_track_map_name[track_name] = api_data
 
                             # Match AppleScript tracks to API tracks and cache
                             for track in track_data:
@@ -1277,8 +1406,22 @@ def get_playlist_tracks(
                                     continue
 
                                 persistent_id = track.get("id", "")
-                                match_key = f"{track['name'].lower()}|||{track['artist'].lower()}|||{track['album'].lower()}"
-                                api_data = api_track_map.get(match_key)
+                                norm_name = _normalize_for_match(track["name"])
+                                norm_artist = _normalize_for_match(track["artist"])
+                                norm_album = _normalize_for_match(track["album"])
+
+                                # Try full match first
+                                full_key = f"{norm_name}|||{norm_artist}|||{norm_album}"
+                                api_data = api_track_map_full.get(full_key)
+
+                                # Fallback to partial match (name+artist)
+                                if not api_data:
+                                    partial_key = f"{norm_name}|||{norm_artist}"
+                                    api_data = api_track_map_partial.get(partial_key)
+
+                                # Last resort: name only (if unique in playlist)
+                                if not api_data and api_track_name_counts.get(norm_name, 0) == 1:
+                                    api_data = api_track_map_name.get(norm_name)
 
                                 if api_data:
                                     track["explicit"] = api_data["explicit"]
@@ -1290,7 +1433,17 @@ def get_playlist_tracks(
                                         library_id=api_data["library_id"],
                                         catalog_id=api_data["catalog_id"],
                                         isrc=api_data["isrc"] or None,
+                                        name=track["name"],
+                                        artist=track["artist"],
+                                        album=track.get("album", ""),
                                     )
+                                else:
+                                    # Cache unmatched track as Unknown to avoid re-fetching
+                                    if persistent_id:
+                                        cache.set_track_metadata(
+                                            explicit="Unknown",
+                                            persistent_id=persistent_id,
+                                        )
 
             except Exception:
                 pass  # API not available - explicit stays "Unknown"
@@ -1309,16 +1462,87 @@ def get_playlist_tracks(
             return error
 
         safe_name = "".join(c if c.isalnum() else "_" for c in playlist_name)
-        return format_output(track_data, format, export, full, f"playlist_{safe_name}",
+        result = format_output(track_data, format, export, full, f"playlist_{safe_name}",
                            total_count=total_count, offset=offset)
+
+        # Add timing and stats
+        elapsed = time.time() - start_time
+        stats_line = f"\n\n⏱️ {elapsed:.2f}s | Cache: {query_stats['cache_hits']} hits, {query_stats['cache_misses']} misses | API calls: {query_stats['api_calls']}"
+
+        # Log to audit
+        if fetch_explicit:
+            audit_log.log_action(
+                "playlist_query",
+                {
+                    "playlist": playlist_name,
+                    "track_count": total_count,
+                    "duration_sec": round(elapsed, 2),
+                    "cache_hits": query_stats["cache_hits"],
+                    "cache_misses": query_stats["cache_misses"],
+                    "api_calls": query_stats["api_calls"],
+                }
+            )
+
+        return result + stats_line
 
     # Use API with ID
     try:
         headers = get_headers()
         all_tracks = []
-        api_offset = 0
 
+        # Optimization: if no filter and limit specified, only fetch what we need
+        # Use playlist_track_count for total if available
+        can_optimize = not filter and limit > 0
+        if can_optimize:
+            # Fetch only offset+limit tracks
+            needed = offset + limit
+            api_offset = 0
+            while len(all_tracks) < needed:
+                batch_limit = min(100, needed - len(all_tracks))
+                query_stats["api_calls"] += 1
+                response = requests.get(
+                    f"{BASE_URL}/me/library/playlists/{playlist_id}/tracks",
+                    headers=headers,
+                    params={"limit": batch_limit, "offset": api_offset},
+                    timeout=REQUEST_TIMEOUT,
+                )
+                if response.status_code == 404:
+                    break
+                response.raise_for_status()
+                tracks = response.json().get("data", [])
+                if not tracks:
+                    break
+                all_tracks.extend(tracks)
+                if len(tracks) < batch_limit:
+                    break
+                api_offset += batch_limit
+
+            if not all_tracks:
+                return "Playlist is empty"
+
+            track_data = [extract_track_data(t, full) for t in all_tracks]
+
+            # Apply pagination locally (skip offset, take limit)
+            if offset > 0:
+                track_data = track_data[offset:]
+            track_data = track_data[:limit]
+
+            # In optimized path, we don't know total count - use fetched count
+            total_count = len(all_tracks)
+
+            safe_id = playlist_id.replace('.', '_')
+            result = format_output(track_data, format, export, full, f"playlist_{safe_id}",
+                               total_count=total_count, offset=offset)
+
+            # Add stats line
+            elapsed = time.time() - start_time
+            stats_line = f"\n\n⏱️ {elapsed:.2f}s | API calls: {query_stats['api_calls']}"
+            return result + stats_line
+
+        # Full fetch path (filter specified or no limit)
+        api_offset = 0
         while True:
+            query_stats["api_calls"] += 1
             response = requests.get(
                 f"{BASE_URL}/me/library/playlists/{playlist_id}/tracks",
                 headers=headers,
@@ -1355,8 +1579,13 @@ def get_playlist_tracks(
             return error
 
         safe_id = playlist_id.replace('.', '_')
-        return format_output(track_data, format, export, full, f"playlist_{safe_id}",
+        result = format_output(track_data, format, export, full, f"playlist_{safe_id}",
                            total_count=total_count, offset=offset)
+
+        # Add stats line
+        elapsed = time.time() - start_time
+        stats_line = f"\n\n⏱️ {elapsed:.2f}s | API calls: {query_stats['api_calls']}"
+        return result + stats_line
 
     except requests.exceptions.RequestException as e:
         return f"API Error: {str(e)}"
@@ -1372,13 +1601,9 @@ def search_playlist(
     """
     Search for tracks in a playlist by name, artist, or album.
 
-    Playlist parameter auto-detects:
-    - Starts with "p." → playlist ID (API mode, manual filtering)
-    - Otherwise → playlist name (AppleScript, native fast search)
-
     Args:
         query: Search term (matches name, artist, album, etc.)
-        playlist: Playlist ID (p.XXX) or name - auto-detected
+        playlist: Playlist ID (p.XXX) or name
 
     Returns: List of matching tracks or "No matches"
     """
@@ -1559,47 +1784,20 @@ def add_to_playlist(
     auto_search: Optional[bool] = None,
 ) -> str:
     """
-    Add songs or entire albums to a playlist with smart handling.
+    Add songs or entire albums to a playlist.
 
-    Automatically:
-    - Adds catalog songs to library first if needed
-    - Checks for duplicates (skips by default)
-    - Auto-searches catalog and adds to library if track not found (opt-in)
-    - Optionally verifies the add succeeded
-    - Works with ANY playlist on macOS via AppleScript
-
-    Playlist parameter auto-detects:
-    - Starts with "p." → playlist ID (API mode, cross-platform)
-    - Otherwise → playlist name (AppleScript, macOS only)
-
-    Track parameter auto-detects format:
-    - "1440783617" → catalog ID (adds to library first)
-    - "i.XYZ789" → library ID
-    - "Hey Jude" → name (searches library/catalog)
-    - "Hey Jude, Let It Be" → CSV of names
-    - '[{"name":"Hey Jude","artist":"Beatles"}]' → JSON array
-
-    Album parameter adds all tracks from an album:
-    - "1440783617" → catalog ID (fetches all tracks)
-    - "Abbey Road" → name (searches catalog)
-    - '[{"name":"Abbey Road","artist":"Beatles"}]' → JSON array
-
-    Examples:
-        add_to_playlist(playlist="Road Trip", track="1440783617")
-        add_to_playlist(playlist="Road Trip", track="Hey Jude", artist="Beatles")
-        add_to_playlist(playlist="Mix", album="Abbey Road", artist="Beatles")
-        add_to_playlist(playlist="Mix", album='[{"name":"Abbey Road","artist":"Beatles"}]')
+    Handles catalog songs (adds to library first), checks duplicates, verifies success.
 
     Args:
-        playlist: Playlist ID (p.XXX) or name - auto-detected
-        track: Track(s) - ID, name, CSV, or JSON array (auto-detected)
-        album: Album(s) - adds all tracks from album(s)
-        artist: Artist name (optional, helps with matching)
-        allow_duplicates: If False (default), skip tracks already in playlist
-        verify: If True, verify track was added (slower but confirms success)
-        auto_search: Auto-search catalog and add to library if not found (uses preference if not specified)
+        playlist: Playlist ID (p.XXX) or name
+        track: Catalog ID, library ID (i.XXX), name, CSV, or JSON array (auto-detected)
+        album: Album catalog ID, name, or JSON array - adds all tracks
+        artist: Artist name (improves matching accuracy)
+        allow_duplicates: Skip tracks already in playlist (default: False)
+        verify: Confirm track was added (default: True)
+        auto_search: Search catalog if not in library (default: user preference)
 
-    Returns: Detailed result of what happened
+    Returns: Result with success/failure details
     """
     steps = []  # Track what we did for verbose output
 
@@ -2004,12 +2202,8 @@ def copy_playlist(
     Copy a playlist to a new API-editable playlist.
     Use this to make an editable copy of a read-only playlist.
 
-    Source parameter auto-detects:
-    - Starts with "p." → playlist ID (API mode, cross-platform)
-    - Otherwise → playlist name (AppleScript, macOS only)
-
     Args:
-        source: Source playlist ID (p.XXX) or name - auto-detected
+        source: Source playlist ID (p.XXX) or name
         new_name: Name for the new playlist
 
     Returns: New playlist ID or error
@@ -2233,33 +2427,14 @@ def add_to_library(
     artist: str = "",
 ) -> str:
     """
-    Add content from the Apple Music catalog to your personal library.
-    After adding, use search_library to find the library IDs for playlist operations.
-
-    Track parameter auto-detects format:
-    - "1440783617" → catalog ID
-    - "Hey Jude" → name (searches catalog)
-    - "Hey Jude, Let It Be" → CSV of names
-    - '[{"name":"Hey Jude","artist":"Beatles"}]' → JSON array
-
-    Album parameter works the same way:
-    - "1440783617" → catalog ID (adds whole album)
-    - "Abbey Road" → name (searches catalog)
-    - '[{"name":"Abbey Road","artist":"Beatles"}]' → JSON array
-
-    Examples:
-        add_to_library(track="1440783617")
-        add_to_library(track="Hey Jude", artist="Beatles")
-        add_to_library(track="Hey Jude, Let It Be", artist="Beatles")
-        add_to_library(album="Abbey Road", artist="Beatles")
-        add_to_library(album='[{"name":"Abbey Road","artist":"Beatles"}]')
+    Add content from the Apple Music catalog to your library.
 
     Args:
-        track: Track(s) to add - ID, name, CSV, or JSON array
-        album: Album(s) to add - ID, name, CSV, or JSON array
-        artist: Artist name (optional, helps with matching)
+        track: Catalog ID, name, CSV, or JSON array (auto-detected)
+        album: Album catalog ID, name, or JSON array
+        artist: Artist name (improves matching accuracy)
 
-    Returns: Confirmation or error message
+    Returns: Confirmation with what was added
     """
     added = []
     errors = []
@@ -2616,24 +2791,14 @@ def get_album_tracks(
     """
     Get all tracks from an album.
 
-    Unified parameter accepts any format:
-    - Album name: album="Abbey Road"
-    - Library ID: album="l.ABC123"
-    - Catalog ID: album="1440783617" (10-digit)
-
-    Examples:
-        get_album_tracks(album="Abbey Road", artist="Beatles")
-        get_album_tracks(album="l.ABC123")
-        get_album_tracks(album="1440783617")
-
     Args:
-        album: Album identifier - name, library ID, or catalog ID (auto-detected)
-        artist: Artist hint for name-based lookups
+        album: Catalog ID, library ID (l.XXX), or name (auto-detected)
+        artist: Artist name (improves matching for name lookups)
         limit: Max tracks (default: all)
         offset: Skip first N tracks (for pagination)
-        format: "text" (default), "json", "csv", or "none" (export only)
-        export: "none" (default), "csv", or "json" to write file
-        full: Include all metadata in exports (composer, artwork, etc.)
+        format: "text", "json", "csv", or "none"
+        export: "none", "csv", or "json" to write file
+        full: Include all metadata in exports
 
     Returns: Track listing in requested format
     """
@@ -3091,12 +3256,8 @@ def get_artist_top_songs(artist: str) -> str:
     """
     Get an artist's top/most popular songs.
 
-    Accepts either artist name or catalog ID:
-    - Artist name: artist="The Beatles"
-    - Catalog ID: artist="136975" (numeric)
-
     Args:
-        artist: Artist name or catalog ID (auto-detected)
+        artist: Artist name or catalog ID
 
     Returns: Artist's top songs with catalog IDs
     """
@@ -3168,12 +3329,8 @@ def get_similar_artists(artist: str) -> str:
     """
     Get artists similar to a given artist.
 
-    Accepts either artist name or catalog ID:
-    - Artist name: artist="The Beatles"
-    - Catalog ID: artist="136975" (numeric)
-
     Args:
-        artist: Artist name or catalog ID (auto-detected)
+        artist: Artist name or catalog ID
 
     Returns: List of similar artists
     """
@@ -3291,24 +3448,15 @@ def rating(
     """
     Rate tracks: love, dislike, get stars, or set stars.
 
-    Unified parameter accepts:
-    - Track name: track="Hey Jude"
-    - Catalog ID: track="1440783617" (10-digit)
-
-    Examples:
-        rating(action="love", track="Hey Jude", artist="Beatles")
-        rating(action="set", track="Hey Jude", stars=5)
-        rating(action="get", track="1440783617")
-
     Args:
         action: "love", "dislike", "get", or "set"
-        track: Track name or catalog ID (auto-detected)
-        artist: Optional artist to disambiguate name lookups
+        track: Catalog ID or name (auto-detected)
+        artist: Artist name (improves matching for name lookups)
         stars: 0-5 stars (for "set" action only)
 
-    Returns: Rating info or confirmation
+    Note: get/set require macOS. love/dislike work cross-platform.
 
-    Note: get/set actions require macOS (AppleScript).
+    Returns: Rating info or confirmation
     """
     action = action.lower().strip()
 
@@ -3488,12 +3636,8 @@ def get_artist_details(artist: str) -> str:
     """
     Get detailed information about an artist.
 
-    Accepts either artist name or catalog ID:
-    - Artist name: artist="The Beatles"
-    - Catalog ID: artist="136975" (numeric)
-
     Args:
-        artist: Artist name or catalog ID (auto-detected)
+        artist: Artist name or catalog ID
 
     Returns: Artist details including genres and albums
     """
@@ -3747,15 +3891,6 @@ def config(
     """
     Configuration, preferences, cache management, and audit log.
 
-    Actions:
-        - info (default): Show preferences, cache stats, and export files
-        - set-pref: Update a preference (requires preference and value/string_value params)
-        - list-storefronts: Show available Apple Music storefronts (regions)
-        - audit-log: Show recent audit log entries (library/playlist changes)
-        - clear-tracks: Clear track metadata cache
-        - clear-exports: Delete CSV/JSON export files (optionally by age)
-        - clear-audit-log: Clear the audit log
-
     Args:
         action: One of: info, set-pref, list-storefronts, audit-log, clear-tracks, clear-exports, clear-audit-log
         days_old: When clearing exports, only delete files older than this (0 = all)
@@ -3763,17 +3898,6 @@ def config(
         value: For set-pref (bool prefs): true or false
         string_value: For set-pref (string prefs like storefront): e.g., "us", "gb", "de"
         limit: For audit-log: max entries to show (default 20)
-
-    Examples:
-        config()  # Show everything
-        config(action="set-pref", preference="fetch_explicit", value=True)
-        config(action="set-pref", preference="auto_search", value=True)  # Enable auto-search
-        config(action="set-pref", preference="storefront", string_value="gb")  # Set UK storefront
-        config(action="list-storefronts")  # List all available regions
-        config(action="audit-log")  # Show recent library/playlist changes
-        config(action="audit-log", limit=50)  # Show more entries
-        config(action="clear-tracks")  # Clear track metadata cache
-        config(action="clear-exports", days_old=7)  # Clear old exports
 
     Returns: Config info, preference update, or cache deletion summary
     """
@@ -4575,25 +4699,13 @@ if APPLESCRIPT_AVAILABLE:
     ) -> str:
         """Remove track(s) from a playlist (macOS only).
 
-        Unified parameter accepts any format:
-        - Single name: track="Hey Jude"
-        - CSV names: track="Hey Jude, Let It Be"
-        - Persistent ID: track="ABC123DEF456" (12+ hex chars)
-        - CSV IDs: track="ABC123,DEF456"
-        - JSON objects: track='[{"name":"Hey Jude","artist":"Beatles"}]'
-
-        Examples:
-            remove_from_playlist(playlist="Road Trip", track="Hey Jude", artist="Beatles")
-            remove_from_playlist(playlist="Road Trip", track="Hey Jude, Let It Be")
-            remove_from_playlist(playlist="Mix", track='[{"name":"Hey Jude","artist":"Beatles"}]')
-
         Args:
-            playlist: Playlist name (AppleScript-only, IDs not supported for removal)
-            track: Track identifier(s) - name, ID, CSV, or JSON array (auto-detected)
-            artist: Artist hint for name-based lookups
+            playlist: Playlist name (playlist IDs not supported)
+            track: Track(s) - name, ID, CSV, or JSON array
+            artist: Artist name (helps with matching)
 
-        Note: Catalog IDs (10-digit) cannot be used for removal - use track name or persistent ID.
-        This only removes tracks from the playlist, not from your library.
+        Note: Removes from playlist only, not from library. Catalog/library IDs
+        work if the track was previously cached (e.g., from search results).
 
         Returns: Confirmation message or error
         """
@@ -4630,12 +4742,38 @@ if APPLESCRIPT_AVAILABLE:
                     errors.append(f"ID {r.value}: {result}")
 
             elif r.input_type == InputType.CATALOG_ID:
-                # Catalog IDs can't be used for removal - need name or persistent ID
-                errors.append(f"Catalog ID {r.value}: Use track name or persistent ID for removal")
+                # Try cache lookup to get track name
+                cache = get_track_cache()
+                info = cache.get_track_info(r.value)
+                if info and info.get("name"):
+                    success, result = asc.remove_track_from_playlist(
+                        playlist_name,
+                        track_name=info["name"],
+                        artist=info.get("artist") or None
+                    )
+                    if success:
+                        results.append(result)
+                    else:
+                        errors.append(f"{info['name']}: {result}")
+                else:
+                    errors.append(f"Catalog ID {r.value}: Not in cache - use track name instead")
 
             elif r.input_type == InputType.LIBRARY_ID:
-                # Library IDs can't be used for AppleScript removal
-                errors.append(f"Library ID {r.value}: Use track name or persistent ID for removal")
+                # Try cache lookup to get track name
+                cache = get_track_cache()
+                info = cache.get_track_info(r.value)
+                if info and info.get("name"):
+                    success, result = asc.remove_track_from_playlist(
+                        playlist_name,
+                        track_name=info["name"],
+                        artist=info.get("artist") or None
+                    )
+                    if success:
+                        results.append(result)
+                    else:
+                        errors.append(f"{info['name']}: {result}")
+                else:
+                    errors.append(f"Library ID {r.value}: Not in cache - use track name instead")
 
             elif r.input_type in (InputType.NAME, InputType.JSON_OBJECT):
                 # Remove by name
@@ -4670,24 +4808,11 @@ if APPLESCRIPT_AVAILABLE:
     ) -> str:
         """Remove track(s) from your library entirely (macOS only).
 
-        Unified parameter accepts any format:
-        - Single name: track="Hey Jude"
-        - CSV names: track="Hey Jude, Let It Be"
-        - Persistent ID: track="ABC123DEF456" (12+ hex chars)
-        - CSV IDs: track="ABC123,DEF456"
-        - JSON objects: track='[{"name":"Hey Jude","artist":"Beatles"}]'
-
-        Examples:
-            remove_from_library(track="Hey Jude", artist="Beatles")
-            remove_from_library(track="Hey Jude, Let It Be")
-            remove_from_library(track='[{"name":"Hey Jude","artist":"Beatles"}]')
-
         Args:
-            track: Track identifier(s) - name, ID, CSV, or JSON array (auto-detected)
-            artist: Artist hint for name-based lookups
+            track: Track(s) - name, ID, CSV, or JSON array
+            artist: Artist name (helps with matching)
 
-        Warning: This DELETES tracks from your library permanently. Use with caution.
-        Note: Catalog IDs (10-digit) cannot be used for removal - use track name or persistent ID.
+        Warning: PERMANENTLY deletes tracks. Catalog/library IDs work if cached.
 
         Returns: Confirmation message or error
         """
@@ -4714,12 +4839,36 @@ if APPLESCRIPT_AVAILABLE:
                     errors.append(f"ID {r.value}: {result}")
 
             elif r.input_type == InputType.CATALOG_ID:
-                # Catalog IDs can't be used for removal
-                errors.append(f"Catalog ID {r.value}: Use track name or persistent ID for removal")
+                # Try cache lookup to get track name
+                cache = get_track_cache()
+                info = cache.get_track_info(r.value)
+                if info and info.get("name"):
+                    success, result = asc.remove_from_library(
+                        track_name=info["name"],
+                        artist=info.get("artist") or None
+                    )
+                    if success:
+                        results.append(result)
+                    else:
+                        errors.append(f"{info['name']}: {result}")
+                else:
+                    errors.append(f"Catalog ID {r.value}: Not in cache - use track name instead")
 
             elif r.input_type == InputType.LIBRARY_ID:
-                # Library IDs can't be used for AppleScript removal
-                errors.append(f"Library ID {r.value}: Use track name or persistent ID for removal")
+                # Try cache lookup to get track name
+                cache = get_track_cache()
+                info = cache.get_track_info(r.value)
+                if info and info.get("name"):
+                    success, result = asc.remove_from_library(
+                        track_name=info["name"],
+                        artist=info.get("artist") or None
+                    )
+                    if success:
+                        results.append(result)
+                    else:
+                        errors.append(f"{info['name']}: {result}")
+                else:
+                    errors.append(f"Library ID {r.value}: Not in cache - use track name instead")
 
             elif r.input_type in (InputType.NAME, InputType.JSON_OBJECT):
                 # Remove by name

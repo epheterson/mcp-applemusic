@@ -174,6 +174,16 @@ def format_entries_for_display(entries: list[dict], limit: int = 20) -> str:
             value = details.get("value", "")
             lines.append(f"[{ts_display}] RATING: {rating_type} '{track}' {value}")
 
+        elif action == "playlist_query":
+            playlist = details.get("playlist", "unknown")
+            track_count = details.get("track_count", 0)
+            duration = details.get("duration_sec", 0)
+            cache_hits = details.get("cache_hits", 0)
+            cache_misses = details.get("cache_misses", 0)
+            api_calls = details.get("api_calls", 0)
+            lines.append(f"[{ts_display}] PLAYLIST QUERY: '{playlist}' ({track_count} tracks)")
+            lines.append(f"    ⏱️ {duration}s | Cache: {cache_hits} hits, {cache_misses} misses | API: {api_calls} calls")
+
         else:
             lines.append(f"[{ts_display}] {action.upper()}: {json.dumps(details)}")
 

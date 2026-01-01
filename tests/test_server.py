@@ -784,21 +784,20 @@ class TestPlayTrackMatching:
 class TestPaginationWithFetchExplicit:
     """Tests for pagination when fetch_explicit is True.
 
-    Regression test for bug where internal API pagination loop
-    overwrote the offset parameter, causing wrong header output.
+    When fetch_explicit=True and playlist name is provided, we use the
+    cache-first approach: AppleScript for fast native access, then check
+    cache for explicit status, only hitting API on cache miss.
     """
 
     @responses.activate
-    def test_offset_not_overwritten_by_fetch_explicit(
+    def test_uses_applescript_with_cache_when_fetch_explicit_true(
         self, mock_config_dir, mock_developer_token, mock_user_token, monkeypatch
     ):
-        """Offset param should not be modified by fetch_explicit API calls.
+        """With fetch_explicit=True and playlist name, should use AppleScript + cache.
 
-        Bug: When fetch_explicit=True on AppleScript path, the internal API
-        loop used 'offset = 0' then incremented it. This overwrote the function
-        parameter, causing wrong pagination header (e.g., "401-432 of 432").
+        AppleScript provides fast native access, cache stores explicit status.
+        API is only called on cache miss.
         """
-        # Enable AppleScript path
         monkeypatch.setattr(server, "APPLESCRIPT_AVAILABLE", True)
 
         # Setup tokens
@@ -810,66 +809,305 @@ class TestPaginationWithFetchExplicit:
         with open(user_token_file, "w") as f:
             json.dump({"music_user_token": mock_user_token}, f)
 
-        # Mock AppleScript to return 5 tracks
-        mock_tracks = [
-            {"name": f"Track {i}", "artist": "Artist", "album": "Album",
-             "duration": "3:00", "genre": "Pop", "year": "2024", "id": f"ID{i}"}
-            for i in range(5)
-        ]
+        # Mock AppleScript - SHOULD be called
+        mock_applescript_called = False
+        def mock_asc_get_tracks(*args, **kwargs):
+            nonlocal mock_applescript_called
+            mock_applescript_called = True
+            return (True, [
+                {"name": f"Track {i}", "artist": "Artist", "album": "Album", "id": f"PID{i}"}
+                for i in range(5)
+            ])
 
-        with patch.object(server.asc, 'get_playlist_tracks', return_value=(True, mock_tracks)):
-            # Mock API responses for fetch_explicit enrichment
-            # First: find playlist by name
-            responses.add(
-                responses.GET,
-                "https://api.music.apple.com/v1/me/library/playlists",
-                json={
-                    "data": [
-                        {"id": "p.testplaylist", "attributes": {"name": "Test Playlist"}}
-                    ]
-                },
-                status=200,
-            )
+        # Mock cache - return cached explicit status for all tracks
+        mock_cache = MagicMock()
+        mock_cache.get_explicit.return_value = "Clean"  # All tracks have cached explicit status
 
-            # Second: get tracks from API (simulating 500+ tracks requiring pagination)
-            # This is where the bug was - the loop would set offset=0, then offset+=100
-            for batch in range(6):  # 6 batches = 600 tracks
-                responses.add(
-                    responses.GET,
-                    "https://api.music.apple.com/v1/me/library/playlists/p.testplaylist/tracks",
-                    json={
-                        "data": [
-                            {
-                                "id": f"i.lib{batch*100+j}",
-                                "attributes": {
-                                    "name": f"Track {j}" if batch == 0 and j < 5 else f"Other {batch*100+j}",
-                                    "artistName": "Artist",
-                                    "albumName": "Album",
-                                    "contentRating": "clean",
-                                }
-                            }
-                            for j in range(100)
-                        ]
-                    },
-                    status=200,
+        with patch.object(server.asc, 'get_playlist_tracks', side_effect=mock_asc_get_tracks):
+            with patch.object(server, 'get_track_cache', return_value=mock_cache):
+                # Call with playlist name and fetch_explicit=True
+                result = server.get_playlist_tracks(
+                    playlist="Test Playlist",
+                    fetch_explicit=True,
                 )
-            # Final empty response to end pagination
-            responses.add(
-                responses.GET,
-                "https://api.music.apple.com/v1/me/library/playlists/p.testplaylist/tracks",
-                json={"data": []},
-                status=200,
-            )
 
-            # Call with explicit offset=0 (no pagination requested)
-            result = server.get_playlist_tracks(
-                playlist="Test Playlist",
-                offset=0,
-                limit=0,  # No limit = all tracks
-                fetch_explicit=True,
-            )
+                # Should use AppleScript
+                assert mock_applescript_called, "AppleScript should be called for fast native access"
 
-            # The header should show "5 tracks", NOT "501-505 of 5 tracks" or similar
-            # (which would happen if offset was overwritten to 500 by the API loop)
-            assert "=== 5 tracks ===" in result
-            assert "of 5 tracks" not in result  # Should NOT show pagination format
+                # Cache should be checked for each track (via get_explicit)
+                assert mock_cache.get_explicit.call_count == 5
+
+                # Should show all 5 tracks
+                assert "=== 5 tracks ===" in result
+                assert "Track 0" in result
+                assert "Track 4" in result
+                # Note: text format may not display explicit status, but cache was used
+
+    @responses.activate
+    def test_optimized_pagination_minimal_api_calls(
+        self, mock_config_dir, mock_developer_token, mock_user_token, monkeypatch
+    ):
+        """With limit specified, should only fetch needed tracks, not all.
+
+        Performance test: limit=5 on a 500 track playlist should make 1 API call,
+        not 5 calls to fetch all 500 tracks.
+        """
+        monkeypatch.setattr(server, "APPLESCRIPT_AVAILABLE", False)
+
+        # Setup tokens
+        dev_token_file = mock_config_dir / "developer_token.json"
+        with open(dev_token_file, "w") as f:
+            json.dump({"token": mock_developer_token, "expires": time.time() + 86400 * 60}, f)
+
+        user_token_file = mock_config_dir / "music_user_token.json"
+        with open(user_token_file, "w") as f:
+            json.dump({"music_user_token": mock_user_token}, f)
+
+        # Mock API: return 5 tracks (simulating a partial response)
+        api_call_count = 0
+        def request_callback(request):
+            nonlocal api_call_count
+            api_call_count += 1
+            return (200, {}, json.dumps({
+                "data": [
+                    {
+                        "id": f"i.lib{i}",
+                        "attributes": {
+                            "name": f"Track {i}",
+                            "artistName": "Artist",
+                            "albumName": "Album",
+                            "contentRating": "clean",
+                        }
+                    }
+                    for i in range(5)
+                ]
+            }))
+
+        responses.add_callback(
+            responses.GET,
+            "https://api.music.apple.com/v1/me/library/playlists/p.test123/tracks",
+            callback=request_callback,
+            content_type="application/json",
+        )
+
+        # Call with playlist ID and limit=5
+        result = server.get_playlist_tracks(
+            playlist="p.test123",
+            limit=5,
+        )
+
+        # Should only make 1 API call, not multiple
+        assert api_call_count == 1, f"Expected 1 API call, got {api_call_count}"
+        assert "Track 0" in result
+        assert "Track 4" in result
+
+
+class TestFindApiPlaylistByName:
+    """Tests for _find_api_playlist_by_name function."""
+
+    @responses.activate
+    def test_finds_exact_match(self, mock_config_dir, mock_developer_token, mock_user_token):
+        """Should find playlist by exact name match."""
+        # Setup tokens
+        dev_token_file = mock_config_dir / "developer_token.json"
+        with open(dev_token_file, "w") as f:
+            json.dump({"token": mock_developer_token, "expires": time.time() + 86400 * 60}, f)
+
+        user_token_file = mock_config_dir / "music_user_token.json"
+        with open(user_token_file, "w") as f:
+            json.dump({"music_user_token": mock_user_token}, f)
+
+        # Mock API response
+        responses.add(
+            responses.GET,
+            "https://api.music.apple.com/v1/me/library/playlists",
+            json={
+                "data": [
+                    {"id": "p.abc123", "attributes": {"name": "My Playlist"}},
+                    {"id": "p.def456", "attributes": {"name": "Another Playlist"}},
+                ]
+            },
+            status=200,
+        )
+
+        result = server._find_api_playlist_by_name("My Playlist")
+        assert result == "p.abc123"
+
+    @responses.activate
+    def test_finds_partial_match(self, mock_config_dir, mock_developer_token, mock_user_token):
+        """Should find playlist by partial name match."""
+        dev_token_file = mock_config_dir / "developer_token.json"
+        with open(dev_token_file, "w") as f:
+            json.dump({"token": mock_developer_token, "expires": time.time() + 86400 * 60}, f)
+
+        user_token_file = mock_config_dir / "music_user_token.json"
+        with open(user_token_file, "w") as f:
+            json.dump({"music_user_token": mock_user_token}, f)
+
+        responses.add(
+            responses.GET,
+            "https://api.music.apple.com/v1/me/library/playlists",
+            json={
+                "data": [
+                    {"id": "p.emoji123", "attributes": {"name": "🎸 Rock Playlist"}},
+                ]
+            },
+            status=200,
+        )
+
+        # Partial match without emoji
+        result = server._find_api_playlist_by_name("Rock Playlist")
+        assert result == "p.emoji123"
+
+    @responses.activate
+    def test_prefers_exact_match_over_partial(self, mock_config_dir, mock_developer_token, mock_user_token):
+        """Should prefer exact match over partial match."""
+        dev_token_file = mock_config_dir / "developer_token.json"
+        with open(dev_token_file, "w") as f:
+            json.dump({"token": mock_developer_token, "expires": time.time() + 86400 * 60}, f)
+
+        user_token_file = mock_config_dir / "music_user_token.json"
+        with open(user_token_file, "w") as f:
+            json.dump({"music_user_token": mock_user_token}, f)
+
+        # Partial match comes first in the list, but exact match should win
+        responses.add(
+            responses.GET,
+            "https://api.music.apple.com/v1/me/library/playlists",
+            json={
+                "data": [
+                    {"id": "p.partial", "attributes": {"name": "Rock Playlist Extended"}},
+                    {"id": "p.exact", "attributes": {"name": "Rock Playlist"}},
+                ]
+            },
+            status=200,
+        )
+
+        result = server._find_api_playlist_by_name("Rock Playlist")
+        assert result == "p.exact"
+
+    @responses.activate
+    def test_returns_none_when_not_found(self, mock_config_dir, mock_developer_token, mock_user_token):
+        """Should return None when playlist not found."""
+        dev_token_file = mock_config_dir / "developer_token.json"
+        with open(dev_token_file, "w") as f:
+            json.dump({"token": mock_developer_token, "expires": time.time() + 86400 * 60}, f)
+
+        user_token_file = mock_config_dir / "music_user_token.json"
+        with open(user_token_file, "w") as f:
+            json.dump({"music_user_token": mock_user_token}, f)
+
+        responses.add(
+            responses.GET,
+            "https://api.music.apple.com/v1/me/library/playlists",
+            json={"data": []},
+            status=200,
+        )
+
+        result = server._find_api_playlist_by_name("Nonexistent Playlist")
+        assert result is None
+
+    @responses.activate
+    def test_returns_none_on_api_error(self, mock_config_dir, mock_developer_token, mock_user_token):
+        """Should return None on API error (graceful fallback)."""
+        dev_token_file = mock_config_dir / "developer_token.json"
+        with open(dev_token_file, "w") as f:
+            json.dump({"token": mock_developer_token, "expires": time.time() + 86400 * 60}, f)
+
+        user_token_file = mock_config_dir / "music_user_token.json"
+        with open(user_token_file, "w") as f:
+            json.dump({"music_user_token": mock_user_token}, f)
+
+        responses.add(
+            responses.GET,
+            "https://api.music.apple.com/v1/me/library/playlists",
+            status=401,  # Unauthorized
+        )
+
+        result = server._find_api_playlist_by_name("Any Playlist")
+        assert result is None
+
+
+class TestResolvePlaylistApiLookup:
+    """Tests for _resolve_playlist API lookup behavior."""
+
+    def test_returns_id_directly_for_p_prefix(self):
+        """Should return playlist ID directly when p. prefix provided."""
+        playlist_id, playlist_name, error = server._resolve_playlist("p.abc123xyz")
+        assert playlist_id == "p.abc123xyz"
+        assert playlist_name is None
+        assert error is None
+
+    def test_returns_error_for_empty_string(self):
+        """Should return error for empty playlist string."""
+        playlist_id, playlist_name, error = server._resolve_playlist("")
+        assert playlist_id is None
+        assert playlist_name is None
+        assert error is not None
+        assert "required" in error.lower()
+
+    @responses.activate
+    def test_looks_up_api_id_for_name(self, mock_config_dir, mock_developer_token, mock_user_token):
+        """Should look up API playlist ID when given a name."""
+        dev_token_file = mock_config_dir / "developer_token.json"
+        with open(dev_token_file, "w") as f:
+            json.dump({"token": mock_developer_token, "expires": time.time() + 86400 * 60}, f)
+
+        user_token_file = mock_config_dir / "music_user_token.json"
+        with open(user_token_file, "w") as f:
+            json.dump({"music_user_token": mock_user_token}, f)
+
+        responses.add(
+            responses.GET,
+            "https://api.music.apple.com/v1/me/library/playlists",
+            json={
+                "data": [
+                    {"id": "p.found123", "attributes": {"name": "My Music"}},
+                ]
+            },
+            status=200,
+        )
+
+        playlist_id, playlist_name, error = server._resolve_playlist("My Music")
+
+        # Should return API ID, not name
+        assert playlist_id == "p.found123"
+        assert playlist_name is None
+        assert error is None
+
+    @responses.activate
+    def test_falls_back_to_name_when_not_in_api(self, mock_config_dir, mock_developer_token, mock_user_token):
+        """Should fall back to playlist name when not found in API."""
+        dev_token_file = mock_config_dir / "developer_token.json"
+        with open(dev_token_file, "w") as f:
+            json.dump({"token": mock_developer_token, "expires": time.time() + 86400 * 60}, f)
+
+        user_token_file = mock_config_dir / "music_user_token.json"
+        with open(user_token_file, "w") as f:
+            json.dump({"music_user_token": mock_user_token}, f)
+
+        responses.add(
+            responses.GET,
+            "https://api.music.apple.com/v1/me/library/playlists",
+            json={"data": []},  # Empty - playlist not in API
+            status=200,
+        )
+
+        playlist_id, playlist_name, error = server._resolve_playlist("Local Only Playlist")
+
+        # Should fall back to name for AppleScript
+        assert playlist_id is None
+        assert playlist_name == "Local Only Playlist"
+        assert error is None
+
+    def test_handles_ps_i_love_you_as_name(self):
+        """Should treat 'p.s. I love you' as a name, not an ID."""
+        # This tests the edge case where a playlist name starts with "p."
+        # but isn't an ID (has spaces/punctuation after p.)
+        with patch.object(server, '_find_api_playlist_by_name', return_value=None):
+            playlist_id, playlist_name, error = server._resolve_playlist("p.s. I love you")
+
+        # Should be treated as a name, not an ID
+        assert playlist_id is None
+        assert playlist_name == "p.s. I love you"
+        assert error is None

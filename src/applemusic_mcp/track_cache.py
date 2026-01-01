@@ -119,6 +119,26 @@ class TrackCache:
             return tracks[track_id].get("explicit")
         return None
 
+    def get_track_info(self, track_id: str) -> Optional[dict]:
+        """Get cached track info (name, artist, album) by any ID type.
+
+        Args:
+            track_id: Persistent ID, Library ID, or Catalog ID
+
+        Returns:
+            Dict with name/artist/album if cached, None otherwise
+        """
+        tracks = self._cache.get("tracks", {})
+        if track_id in tracks:
+            entry = tracks[track_id]
+            if "name" in entry:
+                return {
+                    "name": entry.get("name"),
+                    "artist": entry.get("artist", ""),
+                    "album": entry.get("album", ""),
+                }
+        return None
+
     def set_track_metadata(
         self,
         explicit: str,
@@ -128,6 +148,7 @@ class TrackCache:
         isrc: Optional[str] = None,
         name: Optional[str] = None,
         artist: Optional[str] = None,
+        album: Optional[str] = None,
     ) -> None:
         """Cache track metadata by all known IDs.
 
@@ -141,6 +162,7 @@ class TrackCache:
             isrc: International Standard Recording Code (optional)
             name: Track name for name index (optional)
             artist: Artist name for name index (optional)
+            album: Album name for disambiguation (optional)
         """
         tracks = self._cache.setdefault("tracks", {})
 
@@ -148,6 +170,12 @@ class TrackCache:
         metadata = {"explicit": explicit}
         if isrc:
             metadata["isrc"] = isrc
+        if name:
+            metadata["name"] = name
+        if artist:
+            metadata["artist"] = artist
+        if album:
+            metadata["album"] = album
 
         # Cache by all provided IDs
         ids_to_cache = [

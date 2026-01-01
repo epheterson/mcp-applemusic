@@ -1,0 +1,20 @@
+{
+  "permissions": {
+    "allow": [
+      "WebFetch(domain:github.com)",
+      "Bash(pip3 show:*)",
+      "Bash(cat:*)",
+      "Bash(./venv/bin/pytest tests/test_server.py::TestPaginationWithFetchExplicit -v)",
+      "WebSearch",
+      "Bash(./venv/bin/pytest tests/test_server.py -v)",
+      "Bash(python3:*)",
+      "Bash(osascript:*)",
+      "Bash(./venv/bin/python3:*)",
+      "Bash(./venv/bin/pytest tests/test_server.py -v --tb=short)",
+      "Bash(pytest:*)",
+      "Bash(source venv/bin/activate)",
+      "Bash(python -m pytest:*)",
+      "Bash(./venv/bin/pytest tests/test_server.py -q)"
+    ]
+  }
+}

@@ -5,6 +5,31 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.1] - 2026-01-01
+
+### Added
+
+- **Pagination with `offset` parameter** - Skip first N items in `get_playlist_tracks`, `get_album_tracks`, `browse_library`:
+  ```python
+  get_playlist_tracks(playlist="Mix", limit=50, offset=100)  # Get tracks 101-150
+  ```
+- **`_find_api_playlist_by_name()`** - New helper to look up `p.XXX` playlist IDs from names via API (case-insensitive, exact match prioritized)
+- **`_apply_pagination()` helper** - DRY pagination logic for all listing tools
+- **Catalog/library ID support for removal** - `remove_from_playlist` and `remove_from_library` now accept any ID type via cache lookup
+
+### Changed
+
+- **20x faster playlist queries for shared tracks** - Playlists with Apple Music subscription content now resolve via API instead of slow AppleScript per-track iteration (~29s → ~1.6s for 432-track playlist)
+- **API-first playlist name resolution** - `_resolve_playlist()` now looks up API playlist ID by name before falling back to AppleScript
+- **Performance stats in output** - `get_playlist_tracks` API path now shows timing and API call count
+- **Improved pagination display** - Shows "X-Y of Z tracks" when paginating, simple count otherwise
+- **Cache stores track metadata** - Name, artist, album now cached alongside explicit status for ID-to-name lookups
+- **Slimmed tool docstrings** - Removed verbose format detection examples, kept essential info
+
+### Fixed
+
+- **Offset shadowing bug** - When `fetch_explicit=True` on AppleScript path, internal API pagination loop overwrote the function's offset parameter, causing wrong headers like "401-432 of 432" when no pagination was requested
+
 ## [0.4.0] - 2025-12-30
 
 ### Breaking Changes
