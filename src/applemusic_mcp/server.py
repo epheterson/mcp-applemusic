@@ -953,6 +953,106 @@ def _search_catalog_songs(query: str, limit: int = 5) -> list[dict]:
     return []
 
 
+def _search_library_songs(query: str, limit: int = 5) -> list[dict]:
+    """Search library for songs and return raw song data.
+
+    Args:
+        query: Search term
+        limit: Max results (default 5)
+
+    Returns:
+        List of song dicts with 'id', 'attributes' (name, artistName, etc.)
+        Empty list on error.
+    """
+    try:
+        headers = get_headers()
+        response = requests.get(
+            f"{BASE_URL}/me/library/search",
+            headers=headers,
+            params={"term": query, "types": "library-songs", "limit": min(limit, 25)},
+            timeout=REQUEST_TIMEOUT,
+        )
+        if response.status_code == 200:
+            data = response.json()
+            return data.get("results", {}).get("library-songs", {}).get("data", [])
+    except Exception:
+        pass
+    return []
+
+
+def _find_track_id(
+    name: str, artist: str = ""
+) -> tuple[str | None, str | None, str]:
+    """Find a track by name, searching library first then catalog.
+
+    This is the canonical way to find a track - always prefers library
+    (track is already added) over catalog (would need to add first).
+
+    Args:
+        name: Track name to search for (partial match)
+        artist: Artist name (optional, improves matching)
+
+    Returns:
+        Tuple of (library_id, catalog_id, display_name)
+        - If in library: (library_id, None, "Name - Artist")
+        - If in catalog only: (None, catalog_id, "Name - Artist")
+        - If not found: (None, None, "")
+    """
+    search_term = f"{name} {artist}".strip() if artist else name
+    name_lower = name.lower()
+    artist_lower = artist.lower() if artist else ""
+
+    # 1. Search library first
+    library_songs = _search_library_songs(search_term, limit=5)
+    for song in library_songs:
+        attrs = song.get("attributes", {})
+        song_name = attrs.get("name", "")
+        song_artist = attrs.get("artistName", "")
+
+        # Partial match on name
+        if name_lower not in song_name.lower():
+            continue
+        # Partial match on artist if provided
+        if artist_lower and artist_lower not in song_artist.lower():
+            continue
+
+        library_id = song.get("id", "")
+        display = f"{song_name} - {song_artist}"
+        return library_id, None, display
+
+    # 2. Fall back to catalog
+    catalog_songs = _search_catalog_songs(search_term, limit=5)
+    for song in catalog_songs:
+        attrs = song.get("attributes", {})
+        song_name = attrs.get("name", "")
+        song_artist = attrs.get("artistName", "")
+
+        # Partial match on name
+        if name_lower not in song_name.lower():
+            continue
+        # Partial match on artist if provided
+        if artist_lower and artist_lower not in song_artist.lower():
+            continue
+
+        catalog_id = song.get("id", "")
+        display = f"{song_name} - {song_artist}"
+
+        # Cache for later lookups
+        cache = get_track_cache()
+        cache.set_track_metadata(
+            explicit="Yes" if attrs.get("contentRating") == "explicit" else "No",
+            catalog_id=catalog_id,
+            isrc=attrs.get("isrc") or None,
+            name=song_name,
+            artist=song_artist,
+            album=attrs.get("albumName", ""),
+        )
+
+        return None, catalog_id, display
+
+    return None, None, ""
+
+
 def _add_to_library_api(
     catalog_ids: list[str], content_type: str = "songs"
 ) -> tuple[bool, str]:
@@ -1801,10 +1901,8 @@ def add_to_playlist(
     """
     steps = []  # Track what we did for verbose output
 
-    # Resolve playlist parameter
-    playlist_id, playlist_name, error = _resolve_playlist(playlist)
-    if error:
-        return error
+    if not playlist.strip():
+        return "Error: playlist parameter required"
 
     if not track and not album:
         return "Error: Provide track or album parameter"
@@ -1823,6 +1921,23 @@ def add_to_playlist(
                 ids_list.append(r.value)
             elif r.input_type in (InputType.NAME, InputType.JSON_OBJECT):
                 names_list.append({"name": r.value, "artist": r.artist})
+
+    # Resolve playlist - but prefer AppleScript mode on macOS when we have track names
+    # (AppleScript searches library directly, API mode would need extra lookups)
+    playlist = playlist.strip()
+    if playlist.startswith("p.") and len(playlist) > 2 and playlist[2:].isalnum():
+        # Explicit playlist ID - use API mode
+        playlist_id = playlist
+        playlist_name = None
+    elif APPLESCRIPT_AVAILABLE and names_list:
+        # macOS with track names - prefer AppleScript (searches library directly)
+        playlist_id = None
+        playlist_name = playlist
+    else:
+        # Fall back to standard resolution (may convert to API ID)
+        playlist_id, playlist_name, error = _resolve_playlist(playlist)
+        if error:
+            return error
 
     # Resolve album input - get all tracks from album(s)
     if album:
@@ -2044,15 +2159,19 @@ def add_to_playlist(
     try:
         headers = get_headers()
         if not ids_list:
-            # In API mode with names, we need to search and get IDs first
+            # In API mode with names, search library first, then catalog
             for track_obj in names_list:
                 name = track_obj["name"]
                 track_artist = track_obj["artist"]
-                song, error = _find_matching_catalog_song(name, track_artist)
-                if song:
-                    ids_list.append(song.get("id"))
+                library_id, catalog_id, display = _find_track_id(name, track_artist)
+                if library_id:
+                    ids_list.append(library_id)
+                    steps.append(f"Found in library: {display}")
+                elif catalog_id:
+                    ids_list.append(catalog_id)
+                    steps.append(f"Found in catalog: {display}")
                 else:
-                    steps.append(f"Could not find '{name}' in catalog: {error}")
+                    steps.append(f"Could not find '{name}' in library or catalog")
 
         if not ids_list:
             return "Error: No tracks to add\n" + "\n".join(steps)
