@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.2] - 2026-01-02
+
+### Fixed
+
+- **add_to_playlist regression** - v0.4.1's API-first playlist resolution broke library track lookup. "Four Tops" couldn't find "The Four Tops" because AppleScript mode (which does partial matching on library) was skipped in favor of API mode (which only searched catalog).
+
+### Changed
+
+- **add_to_playlist prefers AppleScript on macOS** - When user provides track names, now uses AppleScript mode (searches library directly with partial matching) instead of forcing API mode. API mode only used for explicit playlist IDs or track IDs.
+
+### Added
+
+- **`_find_track_id()` helper** - Canonical way to find a track: searches library first, then catalog. Used as fallback when API mode is needed.
+- **`_search_library_songs()` helper** - Matches `_search_catalog_songs()` for consistency.
+
 ## [0.4.1] - 2026-01-01
 
 ### Added
