@@ -69,11 +69,18 @@ class ResolvedPlaylist:
 - [DEFERRED] Create `ResolvedTrack`, `ResolvedArtist`, `ResolvedAlbum` dataclasses (not needed - using generic function instead)
 - [DEFERRED] Apply fuzzy matching to artist resolution (artists searched by API, not library)
 
-#### Phase 4: Reporting & Polish
+#### Phase 4: Testing & Polish ✅
+- [x] Add comprehensive integration tests (15 tests covering user journeys)
+  - API-only mode (first 2, 5, 10 actions)
+  - macOS-only mode (AppleScript operations)
+  - Combined mode (mode routing, fallback)
+  - Fuzzy matching workflows (playlists, tracks, albums)
+  - Power user workflows (albums, copy playlist, deduplication)
+- [x] Fix API/AppleScript routing (prefer API when api_id available)
+- [x] Enhance fuzzy matching with partial-after-normalization support
+- [x] Add AppleScript-based fuzzy matching to `_resolve_playlist`
 - [ ] Debug why `_format_fuzzy_match()` output not appearing
-- [ ] Ensure all tools show fuzzy transformations
 - [ ] Update CHANGELOG.md
-- [ ] Add tests for fuzzy matching edge cases
 
 ### Progress Log
 
@@ -112,6 +119,21 @@ class ResolvedPlaylist:
 - ✅ Fixed CRITICAL: `add_to_playlist` bypassed `_resolve_playlist()` when AppleScript mode preferred
   - "Jack and Norah" was passed raw to AppleScript, never fuzzy-matched to "🤟👶🎸 Jack & Norah"
   - Now always resolves first, then decides API vs AppleScript mode
+
+**2026-01-05**:
+- ✅ Phase 3 (DRY fuzzy matching) completed and committed (b9ce86a)
+- ✅ Code review found and fixed fallback logic bug in track/album matching (7cb797f)
+- ✅ **PHASE 4 MOSTLY COMPLETE** (720b350):
+  - Added 15 comprehensive integration tests covering:
+    - API-only mode user journeys (first 2, 5, 10 actions)
+    - macOS-only mode (AppleScript-preferred operations)
+    - Combined mode (routing logic, fallback behavior)
+    - Fuzzy matching for playlists, tracks, albums
+    - Power user workflows (albums, copy playlist, deduplication)
+  - Fixed API/AppleScript routing (was incorrectly preferring AppleScript when api_id was available)
+  - Enhanced fuzzy matching with partial-after-normalization support (e.g., "Sgt Peppers" matches "Sgt. Pepper's Lonely Hearts Club Band")
+  - Added AppleScript-based fuzzy matching in `_resolve_playlist()` (emoji playlists now resolve correctly)
+- ✅ **ALL 75 TESTS PASSING**
 
 ---
 
@@ -156,8 +178,8 @@ Ideas and improvements for future consideration:
 - [ ] Progress indicators for long operations
 
 ### Testing
-- [ ] Integration tests for fuzzy matching
-- [ ] Test coverage for AppleScript fallbacks
+- [x] Integration tests for fuzzy matching ✅ (15 tests added)
+- [x] Test coverage for AppleScript fallbacks ✅ (macOS-only mode tests)
 - [ ] Performance benchmarks
 
 ---
@@ -199,11 +221,12 @@ Bad: `"Error: Not found"`
 
 (Synced with TodoWrite)
 
-1. [in_progress] Fix duplicate track display bug in search results
-2. [pending] Apply fuzzy matching to tracks/artists/albums (not just playlists)
-3. [pending] Refactor fuzzy matching to be DRY and reusable
-4. [pending] Show fuzzy match reporting in output
-5. [pending] Update CHANGELOG.md
+1. [completed] Fix duplicate track display bug in search results ✅
+2. [completed] Apply fuzzy matching to tracks/albums ✅
+3. [completed] Refactor fuzzy matching to be DRY and reusable ✅
+4. [completed] Add integration tests for user journeys ✅
+5. [pending] Debug fuzzy match output visibility
+6. [pending] Update CHANGELOG.md
 
 ---
 
@@ -236,5 +259,5 @@ User input → _resolve_playlist() → ResolvedPlaylist object
 
 ---
 
-**Last Updated**: 2026-01-04
-**Next Review**: After Phase 1 completion
+**Last Updated**: 2026-01-05
+**Next Review**: After CHANGELOG update

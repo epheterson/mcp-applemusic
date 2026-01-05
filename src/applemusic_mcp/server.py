@@ -123,6 +123,11 @@ def _format_fuzzy_match(fuzzy: FuzzyMatchResult | None) -> str:
         if fuzzy.transformations:
             trans_str = ", ".join(fuzzy.transformations)
             parts.append(f"   Transformations: {trans_str}")
+    elif fuzzy.match_type == "fuzzy_partial":
+        parts.append(f"   Match type: Fuzzy partial match")
+        if fuzzy.transformations:
+            trans_str = ", ".join(fuzzy.transformations)
+            parts.append(f"   Transformations: {trans_str}")
 
     return "\n".join(parts)
 

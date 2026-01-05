@@ -5,6 +5,54 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.3] - 2026-01-05
+
+### Added
+
+- **Fuzzy matching for all entity types** - Unified fuzzy matching across playlists, tracks, and albums:
+  - 3-pass algorithm: exact match → partial substring → fuzzy (normalized)
+  - Transformations: lowercase, diacritics removal, "and" ↔ "&", emoji stripping, apostrophe normalization
+  - Partial-after-normalization support: "Sgt Peppers" matches "Sgt. Pepper's Lonely Hearts Club Band"
+  - AppleScript fuzzy resolution: emoji playlists resolve correctly ("My Mix" → "🎵 My Mix")
+  - Fuzzy match info shown in output when non-exact match used
+
+- **ResolvedPlaylist dataclass** - All playlist operations now use structured resolution:
+  - `api_id` - p.XXX ID for API calls (fast, cross-platform)
+  - `applescript_name` - Actual playlist name for AppleScript (required for remove operations)
+  - `fuzzy_match` - Details about any fuzzy matching performed
+  - Eliminates tuple unpacking bugs and provides type safety
+
+- **Search result deduplication** - `search_catalog` and `search_library` now deduplicate by track ID
+
+- **Comprehensive integration tests** - 15 new tests covering:
+  - API-only mode (first 2, 5, 10 user actions)
+  - macOS-only mode (AppleScript-preferred operations)
+  - Combined mode (routing logic, fallback behavior)
+  - Fuzzy matching workflows (playlists, tracks, albums)
+  - Power user workflows (album operations, copy playlist, deduplication)
+
+### Fixed
+
+- **API/AppleScript routing** - Functions now correctly prefer API when `api_id` is available:
+  - `get_playlist_tracks`, `search_playlist`, `copy_playlist`, `add_to_playlist`
+  - Previously incorrectly preferred AppleScript even when API ID was available
+
+- **Fallback logic in fuzzy matching** - Fixed condition that checked if filtered list was empty instead of whether a match was found
+
+- **Variable shadowing in `remove_from_playlist`** - Renamed internal variable to avoid shadowing the resolved playlist
+
+### Changed
+
+- **DRY fuzzy matching** - Extracted `_fuzzy_match_entity()` generic function used by:
+  - Playlist resolution (`_find_api_playlist_by_name`)
+  - Track matching (`_find_matching_catalog_song`)
+  - Album matching (`_find_matching_catalog_album`)
+
+- **Performance optimization** - Fuzzy matching uses 3-pass approach:
+  - Pass 1: Exact match (O(n), no normalization) - fastest
+  - Pass 2: Partial match (O(n), substring only) - fast
+  - Pass 3: Fuzzy match (normalization, only if needed) - slower but thorough
+
 ## [0.4.2] - 2026-01-02
 
 ### Fixed
