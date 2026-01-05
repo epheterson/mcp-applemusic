@@ -3126,7 +3126,7 @@ def search_catalog(
 
         # Handle export (songs only)
         export_msg = ""
-        if export and all_data["songs"]:
+        if export not in ("", "none") and all_data["songs"]:
             export_msg = "\n" + format_output(all_data["songs"], "text", export, full, f"catalog_{query[:20]}").split("\n")[-1]
 
         # JSON format - return all data
