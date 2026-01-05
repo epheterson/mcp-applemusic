@@ -9,6 +9,7 @@ import io
 import json
 import re
 import time
+import unicodedata
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
@@ -62,9 +63,68 @@ class ResolvedInput:
     error: str | None = None       # Error message if resolution failed
 
 
+@dataclass
+class FuzzyMatchResult:
+    """Result of a fuzzy match operation."""
+    matched_name: str              # The actual name that was matched
+    query: str                     # The original query
+    normalized_query: str          # The normalized query used for matching
+    normalized_match: str          # The normalized matched name
+    transformations: list[str]     # List of transformations applied
+    match_type: str                # "exact", "fuzzy", or "partial"
+
+
+@dataclass
+class ResolvedPlaylist:
+    """Result of resolving a playlist parameter.
+
+    Contains all available identifiers for a playlist. Different functions
+    need different identifiers:
+    - API operations prefer api_id for performance
+    - AppleScript operations require applescript_name
+    - Some operations need persistent_id
+
+    Resolution should populate as many as possible so callers can choose.
+    """
+    api_id: str | None = None              # API playlist ID (p.XXX) for REST calls
+    applescript_name: str | None = None    # Playlist name for AppleScript operations
+    persistent_id: str | None = None       # Hex ID from AppleScript (e.g., 583528883966122E)
+    raw_input: str = ""                    # Original input from user
+    error: str | None = None               # Error message if resolution failed
+    fuzzy_match: FuzzyMatchResult | None = None  # Fuzzy match details if applicable
+
+
 def truncate(s: str, max_len: int) -> str:
     """Truncate string with ellipsis if longer than max_len."""
     return s[:max_len] + "..." if len(s) > max_len else s
+
+
+def _format_fuzzy_match(fuzzy: FuzzyMatchResult | None) -> str:
+    """Format fuzzy match information for display.
+
+    Args:
+        fuzzy: Fuzzy match result or None
+
+    Returns:
+        Formatted string describing the fuzzy match, or empty string if None
+    """
+    if not fuzzy:
+        return ""
+
+    parts = [f"\n🔍 Fuzzy match: '{fuzzy.query}' → '{fuzzy.matched_name}'"]
+
+    if fuzzy.match_type == "exact":
+        return ""  # Don't show anything for exact matches
+
+    if fuzzy.match_type == "partial":
+        parts.append(f"   Match type: Partial substring match")
+    elif fuzzy.match_type == "fuzzy":
+        parts.append(f"   Match type: Fuzzy match")
+        if fuzzy.transformations:
+            trans_str = ", ".join(fuzzy.transformations)
+            parts.append(f"   Transformations: {trans_str}")
+
+    return "\n".join(parts)
 
 
 def _normalize_for_match(s: str) -> str:
@@ -84,6 +144,102 @@ def _normalize_for_match(s: str) -> str:
     # Collapse multiple spaces
     s = re.sub(r"\s+", " ", s).strip()
     return s
+
+
+def _normalize_with_tracking(name: str) -> tuple[list[str], list[str]]:
+    """Normalize a name for fuzzy matching and track transformations applied.
+
+    Applies various normalization rules and returns normalized variations
+    plus a list of which transformations were applied.
+
+    Args:
+        name: The name to normalize
+
+    Returns:
+        Tuple of (normalized_variations, transformations_applied)
+    """
+    original = name
+    transformations = []
+
+    # Step 1: Lowercase and strip
+    name = name.lower().strip()
+
+    # Step 2: Remove diacritics (café → cafe)
+    if any(unicodedata.category(c).startswith('M') for c in unicodedata.normalize('NFD', name)):
+        name = ''.join(c for c in unicodedata.normalize('NFD', name)
+                      if not unicodedata.category(c).startswith('M'))
+        transformations.append("removed diacritics")
+
+    # Step 3: Strip leading articles (The Beatles → Beatles)
+    for article in [r'\bthe\s+', r'\ban\s+', r'\ba\s+']:
+        if re.match(article, name):
+            name = re.sub(f'^{article}', '', name)
+            transformations.append(f"removed article '{article.replace(r'\\b', '').replace(r'\\s+', '').strip()}'")
+            break
+
+    # Step 4: Normalize "and" / "&"
+    if ' and ' in name:
+        variations = [name, name.replace(' and ', ' & ')]
+        transformations.append("'and' ↔ '&'")
+    elif ' & ' in name:
+        variations = [name, name.replace(' & ', ' and ')]
+        transformations.append("'and' ↔ '&'")
+    else:
+        variations = [name]
+
+    # Step 5: Normalize music-specific abbreviations
+    abbrev_map = {
+        r'\bfeat\.?\s': 'ft ',
+        r'\bfeaturing\s': 'ft ',
+        r'\bft\.?\s': 'ft ',
+        r'\bw/\s': 'with ',
+    }
+    for pattern, replacement in abbrev_map.items():
+        if re.search(pattern, name):
+            name = re.sub(pattern, replacement, name)
+            transformations.append(f"normalized '{pattern}' to '{replacement.strip()}'")
+
+    # Step 6: Normalize apostrophes and quotes
+    if any(char in name for char in ["'", "'", "`", '"', '"', '"']):
+        name = name.replace("'", "").replace("'", "").replace("`", "")
+        name = name.replace('"', "").replace('"', "").replace('"', "")
+        transformations.append("removed quotes/apostrophes")
+
+    # Step 7: Normalize hyphens to spaces
+    if '-' in name:
+        name = name.replace('-', ' ')
+        transformations.append("hyphens → spaces")
+
+    # Step 8: Remove emojis and special characters (keep only alphanumeric and spaces)
+    cleaned = re.sub(r"[^a-z0-9\s]", "", name)
+    if cleaned != name:
+        transformations.append("removed special characters/emojis")
+        name = cleaned
+
+    # Step 9: Collapse multiple spaces
+    if re.search(r'\s{2,}', name):
+        name = re.sub(r"\s+", " ", name).strip()
+        transformations.append("normalized whitespace")
+
+    # Also generate variations for "and" / "&" substitution
+    all_variations = []
+    for variant in variations:
+        # Apply all transformations to each variant
+        v = variant
+        v = ''.join(c for c in unicodedata.normalize('NFD', v)
+                   if not unicodedata.category(c).startswith('M'))
+        for article in [r'\bthe\s+', r'\ban\s+', r'\ba\s+']:
+            v = re.sub(f'^{article}', '', v)
+        for pattern, replacement in abbrev_map.items():
+            v = re.sub(pattern, replacement, v)
+        v = v.replace("'", "").replace("'", "").replace("`", "")
+        v = v.replace('"', "").replace('"', "").replace('"', "")
+        v = v.replace('-', ' ')
+        v = re.sub(r"[^a-z0-9\s]", "", v)
+        v = re.sub(r"\s+", " ", v).strip()
+        all_variations.append(v)
+
+    return all_variations, transformations
 
 
 def get_timestamp() -> str:
@@ -562,25 +718,29 @@ def _detect_id_type(id_str: str) -> str:
         return "unknown"
 
 
-def _find_api_playlist_by_name(name: str) -> str | None:
-    """Find API playlist ID by name.
+def _find_api_playlist_by_name(name: str) -> tuple[str | None, FuzzyMatchResult | None]:
+    """Find API playlist ID by name with fuzzy matching.
 
     Matching priority:
     1. Exact match (case-insensitive)
-    2. Partial match (query contained in playlist name, case-insensitive)
+    2. Fuzzy match (normalized with transformations)
+    3. Partial match (query contained in playlist name, case-insensitive)
 
     Args:
         name: Playlist name to search for
 
     Returns:
-        API playlist ID (p.XXX) if found, None otherwise
+        Tuple of (playlist_id, fuzzy_match_result)
+        - playlist_id: API playlist ID (p.XXX) if found, None otherwise
+        - fuzzy_match_result: Details about the match if fuzzy/partial, None if exact
     """
     try:
         headers = get_headers()
         api_offset = 0
         name_lower = name.lower()
-        partial_match = None  # Store first partial match as fallback
 
+        # Collect all playlists first (for multi-pass matching)
+        all_playlists = []
         while True:
             response = requests.get(
                 f"{BASE_URL}/me/library/playlists",
@@ -595,33 +755,76 @@ def _find_api_playlist_by_name(name: str) -> str | None:
             if not playlists:
                 break
 
-            for pl in playlists:
-                pl_name = pl.get("attributes", {}).get("name", "")
-                pl_name_lower = pl_name.lower()
-
-                # Exact match - return immediately
-                if name_lower == pl_name_lower:
-                    return pl.get("id")
-
-                # Partial match - store first one as fallback
-                if partial_match is None and name_lower in pl_name_lower:
-                    partial_match = pl.get("id")
+            all_playlists.extend(playlists)
 
             if len(playlists) < 100:
                 break
             api_offset += 100
 
-        # Return partial match if no exact match found
-        return partial_match
+        # PASS 1: Exact match (fastest - no normalization)
+        for pl in all_playlists:
+            pl_name = pl.get("attributes", {}).get("name", "")
+            if name_lower == pl_name.lower():
+                return pl.get("id"), None
+
+        # PASS 2: Partial match (fast - just substring check)
+        partial_match = None
+        partial_match_name = None
+        for pl in all_playlists:
+            pl_name = pl.get("attributes", {}).get("name", "")
+            pl_name_lower = pl_name.lower()
+            if name_lower in pl_name_lower:
+                partial_match = pl.get("id")
+                partial_match_name = pl_name
+                break  # Take first partial match
+
+        # PASS 3: Fuzzy match (slowest - only if no exact/partial)
+        # Only normalize if we didn't find exact or partial
+        if partial_match is None:
+            normalized_variations, transformations = _normalize_with_tracking(name)
+
+            for pl in all_playlists:
+                pl_name = pl.get("attributes", {}).get("name", "")
+                pl_normalized_variations, _ = _normalize_with_tracking(pl_name)
+
+                for query_variant in normalized_variations:
+                    for pl_variant in pl_normalized_variations:
+                        if query_variant == pl_variant:
+                            fuzzy_result = FuzzyMatchResult(
+                                matched_name=pl_name,
+                                query=name,
+                                normalized_query=query_variant,
+                                normalized_match=pl_variant,
+                                transformations=transformations,
+                                match_type="fuzzy"
+                            )
+                            return pl.get("id"), fuzzy_result  # Return immediately on first fuzzy match
+
+        # Return partial match if found (after checking fuzzy didn't find anything better)
+        if partial_match:
+            fuzzy_result = FuzzyMatchResult(
+                matched_name=partial_match_name,
+                query=name,
+                normalized_query=name_lower,
+                normalized_match=partial_match_name.lower(),
+                transformations=["partial substring match"],
+                match_type="partial"
+            )
+            return partial_match, fuzzy_result
 
     except Exception:
         pass  # Fall back to AppleScript
 
-    return None
+    return None, None
 
 
-def _resolve_playlist(playlist: str) -> tuple[str | None, str | None, str | None]:
-    """Resolve a playlist parameter to either an ID or name.
+def _resolve_playlist(playlist: str) -> ResolvedPlaylist:
+    """Resolve a playlist parameter to all available identifiers.
+
+    Populates as many identifiers as possible (API ID, name, persistent ID) so
+    callers can use what they need. Different operations require different IDs:
+    - API operations prefer api_id for performance
+    - AppleScript operations require applescript_name
 
     Auto-detects based on pattern:
     - Matches "p." + alphanumeric only → playlist ID (e.g., p.ABC123xyz)
@@ -631,27 +834,48 @@ def _resolve_playlist(playlist: str) -> tuple[str | None, str | None, str | None
         playlist: Either a playlist ID (p.XXX) or name
 
     Returns:
-        Tuple of (playlist_id, playlist_name, error)
-        - If ID: (id, None, None)
-        - If name: (None, name, None) or (api_id, None, None) if API ID found
-        - If empty: (None, None, error message)
+        ResolvedPlaylist with populated fields
     """
     playlist = playlist.strip()
+
     if not playlist:
-        return None, None, "Error: playlist parameter required"
+        return ResolvedPlaylist(
+            raw_input=playlist,
+            error="Error: playlist parameter required"
+        )
 
     # Real playlist IDs are "p." followed by alphanumeric chars only (no spaces/punctuation)
     # This correctly treats "p.s. I love you" as a name, not an ID
     if playlist.startswith("p.") and len(playlist) > 2 and playlist[2:].isalnum():
-        return playlist, None, None
+        # User provided explicit ID
+        # TODO: Could look up the name from API for completeness
+        return ResolvedPlaylist(
+            raw_input=playlist,
+            api_id=playlist,
+            applescript_name=None  # Not available without lookup
+        )
 
-    # Given a name - try to find API ID first (faster than AppleScript for shared tracks)
-    api_id = _find_api_playlist_by_name(playlist)
+    # User provided a name - try to find API ID first (faster than AppleScript)
+    api_id, fuzzy_match = _find_api_playlist_by_name(playlist)
+
     if api_id:
-        return api_id, None, None
+        # Found via API - we have both ID and name
+        # The matched name comes from fuzzy_match if it was fuzzy, otherwise it's exact
+        matched_name = fuzzy_match.matched_name if fuzzy_match else playlist
+        return ResolvedPlaylist(
+            raw_input=playlist,
+            api_id=api_id,
+            applescript_name=matched_name,  # Use the actual matched name
+            fuzzy_match=fuzzy_match
+        )
 
-    # Fall back to AppleScript name lookup
-    return None, playlist, None
+    # Not found via API - fall back to AppleScript name lookup
+    # AppleScript will do its own fuzzy matching
+    return ResolvedPlaylist(
+        raw_input=playlist,
+        api_id=None,
+        applescript_name=playlist  # Use as-is for AppleScript
+    )
 
 
 def _detect_input_type(value: str) -> InputType:
@@ -1358,23 +1582,23 @@ def get_playlist_tracks(
     query_stats = {"cache_hits": 0, "cache_misses": 0, "api_calls": 0}
 
     # Resolve playlist parameter
-    playlist_id, playlist_name, error = _resolve_playlist(playlist)
-    if error:
-        return error
+    resolved: ResolvedPlaylist = _resolve_playlist(playlist)
+    if resolved.error:
+        return resolved.error
 
     # Apply user preferences
     if fetch_explicit is None:
         prefs = get_user_preferences()
         fetch_explicit = prefs["fetch_explicit"]
 
-    use_api = bool(playlist_id)
-    use_applescript = bool(playlist_name)
+    use_api = bool(resolved.api_id)
+    use_applescript = bool(resolved.applescript_name)
 
     # Use AppleScript with name
     if use_applescript:
         if not APPLESCRIPT_AVAILABLE:
             return "Error: AppleScript (playlist_name) requires macOS"
-        success, result = asc.get_playlist_tracks(playlist_name)
+        success, result = asc.get_playlist_tracks(resolved.applescript_name)
         if not success:
             return f"Error: {result}"
         if not result:
@@ -1433,7 +1657,7 @@ def get_playlist_tracks(
                         # Find matching playlist by name
                         for pl in playlists:
                             pl_name = pl.get("attributes", {}).get("name", "")
-                            if pl_name.lower() == playlist_name.lower() or playlist_name.lower() in pl_name.lower():
+                            if pl_name.lower() == resolved.applescript_name.lower() or resolved.applescript_name.lower() in pl_name.lower():
                                 api_playlist_id = pl.get("id")
                                 break
 
@@ -1561,7 +1785,7 @@ def get_playlist_tracks(
         if error:
             return error
 
-        safe_name = "".join(c if c.isalnum() else "_" for c in playlist_name)
+        safe_name = "".join(c if c.isalnum() else "_" for c in resolved.applescript_name)
         result = format_output(track_data, format, export, full, f"playlist_{safe_name}",
                            total_count=total_count, offset=offset)
 
@@ -1574,7 +1798,7 @@ def get_playlist_tracks(
             audit_log.log_action(
                 "playlist_query",
                 {
-                    "playlist": playlist_name,
+                    "playlist": resolved.applescript_name,
                     "track_count": total_count,
                     "duration_sec": round(elapsed, 2),
                     "cache_hits": query_stats["cache_hits"],
@@ -1583,7 +1807,8 @@ def get_playlist_tracks(
                 }
             )
 
-        return result + stats_line
+        fuzzy_info = _format_fuzzy_match(resolved.fuzzy_match)
+        return result + fuzzy_info + stats_line
 
     # Use API with ID
     try:
@@ -1601,7 +1826,7 @@ def get_playlist_tracks(
                 batch_limit = min(100, needed - len(all_tracks))
                 query_stats["api_calls"] += 1
                 response = requests.get(
-                    f"{BASE_URL}/me/library/playlists/{playlist_id}/tracks",
+                    f"{BASE_URL}/me/library/playlists/{resolved.api_id}/tracks",
                     headers=headers,
                     params={"limit": batch_limit, "offset": api_offset},
                     timeout=REQUEST_TIMEOUT,
@@ -1630,7 +1855,7 @@ def get_playlist_tracks(
             # In optimized path, we don't know total count - use fetched count
             total_count = len(all_tracks)
 
-            safe_id = playlist_id.replace('.', '_')
+            safe_id = resolved.api_id.replace('.', '_')
             result = format_output(track_data, format, export, full, f"playlist_{safe_id}",
                                total_count=total_count, offset=offset)
 
@@ -1644,7 +1869,7 @@ def get_playlist_tracks(
         while True:
             query_stats["api_calls"] += 1
             response = requests.get(
-                f"{BASE_URL}/me/library/playlists/{playlist_id}/tracks",
+                f"{BASE_URL}/me/library/playlists/{resolved.api_id}/tracks",
                 headers=headers,
                 params={"limit": 100, "offset": api_offset},
                 timeout=REQUEST_TIMEOUT,
@@ -1678,14 +1903,15 @@ def get_playlist_tracks(
         if error:
             return error
 
-        safe_id = playlist_id.replace('.', '_')
+        safe_id = resolved.api_id.replace('.', '_')
         result = format_output(track_data, format, export, full, f"playlist_{safe_id}",
                            total_count=total_count, offset=offset)
 
         # Add stats line
         elapsed = time.time() - start_time
         stats_line = f"\n\n⏱️ {elapsed:.2f}s | API calls: {query_stats['api_calls']}"
-        return result + stats_line
+        fuzzy_info = _format_fuzzy_match(resolved.fuzzy_match)
+        return result + fuzzy_info + stats_line
 
     except requests.exceptions.RequestException as e:
         return f"API Error: {str(e)}"
@@ -1708,12 +1934,12 @@ def search_playlist(
     Returns: List of matching tracks or "No matches"
     """
     # Resolve playlist parameter
-    playlist_id, playlist_name, error = _resolve_playlist(playlist)
-    if error:
-        return error
+    resolved: ResolvedPlaylist = _resolve_playlist(playlist)
+    if resolved.error:
+        return resolved.error
 
-    use_api = bool(playlist_id)
-    use_applescript = bool(playlist_name)
+    use_api = bool(resolved.api_id)
+    use_applescript = bool(resolved.applescript_name)
 
     matches = []
 
@@ -1721,7 +1947,7 @@ def search_playlist(
         if not APPLESCRIPT_AVAILABLE:
             return "Error: playlist_name requires macOS"
         # Use native AppleScript search (fast, same as Music app search field)
-        success, result = asc.search_playlist(playlist_name, query)
+        success, result = asc.search_playlist(resolved.applescript_name, query)
         if not success:
             return f"Error: {result}"
         for t in result:
@@ -1730,7 +1956,7 @@ def search_playlist(
     else:
         # API path: manually filter tracks (cross-platform)
         query_lower = query.lower()
-        success, tracks = _get_playlist_track_names(playlist_id)
+        success, tracks = _get_playlist_track_names(resolved.api_id)
         if not success:
             return f"Error: {tracks}"
         for t in tracks:
@@ -1743,20 +1969,22 @@ def search_playlist(
                 query_lower in album.lower()):
                 matches.append({"name": name, "artist": artist, "id": track_id})
 
+    fuzzy_info = _format_fuzzy_match(resolved.fuzzy_match)
+
     if not matches:
-        return f"No matches for '{query}'"
+        return f"No matches for '{query}'{fuzzy_info}"
 
     def format_match(m: dict) -> str:
         return f"{m['name']} by {m['artist']} {m['id']}"
 
     if len(matches) == 1:
-        return f"Found: {format_match(matches[0])}"
+        return f"Found: {format_match(matches[0])}{fuzzy_info}"
 
     output = f"Found {len(matches)} matches:\n"
     output += "\n".join(f"  - {format_match(m)}" for m in matches[:10])
     if len(matches) > 10:
         output += f"\n  ...and {len(matches) - 10} more"
-    return output
+    return output + fuzzy_info
 
 
 def _is_catalog_id(track_id: str) -> bool:
@@ -1924,20 +2152,27 @@ def add_to_playlist(
 
     # Resolve playlist - but prefer AppleScript mode on macOS when we have track names
     # (AppleScript searches library directly, API mode would need extra lookups)
-    playlist = playlist.strip()
-    if playlist.startswith("p.") and len(playlist) > 2 and playlist[2:].isalnum():
-        # Explicit playlist ID - use API mode
-        playlist_id = playlist
-        playlist_name = None
+    playlist_str = playlist.strip()
+    resolved: ResolvedPlaylist
+    if playlist_str.startswith("p.") and len(playlist_str) > 2 and playlist_str[2:].isalnum():
+        # Explicit playlist ID - use API mode only
+        resolved = ResolvedPlaylist(
+            raw_input=playlist_str,
+            api_id=playlist_str,
+            applescript_name=None  # Not available for ID-only input
+        )
     elif APPLESCRIPT_AVAILABLE and names_list:
-        # macOS with track names - prefer AppleScript (searches library directly)
-        playlist_id = None
-        playlist_name = playlist
+        # macOS with track names - prefer AppleScript mode (searches library directly)
+        resolved = ResolvedPlaylist(
+            raw_input=playlist_str,
+            api_id=None,  # Will use AppleScript, no API call
+            applescript_name=playlist_str
+        )
     else:
-        # Fall back to standard resolution (may convert to API ID)
-        playlist_id, playlist_name, error = _resolve_playlist(playlist)
-        if error:
-            return error
+        # Fall back to standard resolution (may convert to API ID with fuzzy matching)
+        resolved = _resolve_playlist(playlist_str)
+        if resolved.error:
+            return resolved.error
 
     # Resolve album input - get all tracks from album(s)
     if album:
@@ -2017,7 +2252,7 @@ def add_to_playlist(
                 steps.append(f"Album '{r.value}': {e}")
 
     # === AppleScript mode (playlist by name) ===
-    if playlist_name:
+    if resolved.applescript_name:
         if not APPLESCRIPT_AVAILABLE:
             return "Error: Playlist name requires macOS (use playlist ID like 'p.XXX' for cross-platform)"
 
@@ -2037,7 +2272,7 @@ def add_to_playlist(
             # Check for duplicates
             if not allow_duplicates:
                 success, exists = asc.track_exists_in_playlist(
-                    playlist_name, name, track_artist or None
+                    resolved.applescript_name, name, track_artist or None
                 )
                 if success and exists:
                     steps.append(f"Skipped duplicate: {name}")
@@ -2045,14 +2280,14 @@ def add_to_playlist(
 
             # Add track
             success, result = asc.add_track_to_playlist(
-                playlist_name, name, track_artist or None
+                resolved.applescript_name, name, track_artist or None
             )
             if success:
                 added.append(f"{name} - {track_artist}" if track_artist else name)
             elif "Track not found" in result and auto_search:
                 # Auto-search fallback: search catalog, add to library, add to playlist
                 search_success, search_result, _ = _auto_search_and_add_to_playlist(
-                    name, track_artist or "", playlist_name
+                    name, track_artist or "", resolved.applescript_name
                 )
                 if search_success:
                     added.append(search_result)
@@ -2112,7 +2347,7 @@ def add_to_playlist(
                 # Check duplicates for IDs
                 if not allow_duplicates:
                     success, exists = asc.track_exists_in_playlist(
-                        playlist_name, name, artist_name or None
+                        resolved.applescript_name, name, artist_name or None
                     )
                     if success and exists:
                         steps.append(f"Skipped duplicate: {name}")
@@ -2120,7 +2355,7 @@ def add_to_playlist(
 
                 # Add via AppleScript
                 success, result = asc.add_track_to_playlist(
-                    playlist_name, name, artist_name if artist_name else None
+                    resolved.applescript_name, name, artist_name if artist_name else None
                 )
                 if success:
                     added.append(f"{name} - {artist_name}" if artist_name else name)
@@ -2131,29 +2366,30 @@ def add_to_playlist(
         if added:
             audit_log.log_action(
                 "add_to_playlist",
-                {"playlist": playlist_name, "tracks": added, "method": "applescript"},
-                undo_info={"playlist_name": playlist_name, "tracks": added}
+                {"playlist": resolved.applescript_name, "tracks": added, "method": "applescript"},
+                undo_info={"playlist_name": resolved.applescript_name, "tracks": added}
             )
 
         # Build result
+        fuzzy_info = _format_fuzzy_match(resolved.fuzzy_match)
         if added and not errors:
-            return f"Added {len(added)} track(s) to '{playlist_name}':\n" + "\n".join(f"  + {t}" for t in added)
+            return f"Added {len(added)} track(s) to '{resolved.applescript_name}':\n" + "\n".join(f"  + {t}" for t in added) + fuzzy_info
         elif added and errors:
             msg = f"Added {len(added)} track(s), {len(errors)} failed:\n"
             msg += "\n".join(f"  + {t}" for t in added)
             msg += "\nErrors:\n" + "\n".join(f"  - {e}" for e in errors)
             if steps:
                 msg += "\n\n" + "\n".join(steps)
-            return msg
+            return msg + fuzzy_info
         elif errors:
             msg = "Errors:\n" + "\n".join(f"  - {e}" for e in errors)
             if auto_search is False or (auto_search is None and not get_user_preferences().get("auto_search")):
                 msg += "\n\n💡 Tip: Enable auto_search to automatically find and add tracks from catalog"
-            return msg
+            return msg + fuzzy_info
         else:
             if steps:
-                return "\n".join(steps)
-            return "No tracks added"
+                return "\n".join(steps) + fuzzy_info
+            return "No tracks added" + fuzzy_info
 
     # === API mode (playlist by ID) ===
     try:
@@ -2245,7 +2481,7 @@ def add_to_playlist(
 
         # Check for duplicates
         if not allow_duplicates:
-            success, existing = _get_playlist_track_names(playlist_id)
+            success, existing = _get_playlist_track_names(resolved.api_id)
             if success and existing:
                 filtered_ids = []
                 for lib_id in library_ids:
@@ -2277,7 +2513,7 @@ def add_to_playlist(
         body = {"data": track_data}
 
         response = requests.post(
-            f"{BASE_URL}/me/library/playlists/{playlist_id}/tracks",
+            f"{BASE_URL}/me/library/playlists/{resolved.api_id}/tracks",
             headers=headers,
             json=body,
             timeout=REQUEST_TIMEOUT,
@@ -2293,7 +2529,7 @@ def add_to_playlist(
             response.raise_for_status()
 
         # Verify
-        success, updated = _get_playlist_track_names(playlist_id)
+        success, updated = _get_playlist_track_names(resolved.api_id)
         if success:
             steps.append(f"Verified: playlist now has {len(updated)} tracks")
 
@@ -2301,8 +2537,8 @@ def add_to_playlist(
         added_tracks = [track_info.get(tid, tid) for tid in library_ids]
         audit_log.log_action(
             "add_to_playlist",
-            {"playlist": playlist_id, "tracks": added_tracks, "method": "api"},
-            undo_info={"playlist_id": playlist_id, "library_ids": library_ids}
+            {"playlist": resolved.api_id, "tracks": added_tracks, "method": "api"},
+            undo_info={"playlist_id": resolved.api_id, "library_ids": library_ids}
         )
         return "\n".join(steps)
 
@@ -2332,12 +2568,12 @@ def copy_playlist(
         return "Error: new_name is required"
 
     # Resolve source playlist parameter
-    source_playlist_id, source_playlist_name, error = _resolve_playlist(source)
-    if error:
-        return error
+    resolved = _resolve_playlist(source)
+    if resolved.error:
+        return resolved.error
 
-    has_id = bool(source_playlist_id)
-    has_name = bool(source_playlist_name)
+    has_id = bool(resolved.api_id)
+    has_name = bool(resolved.applescript_name)
 
     try:
         headers = get_headers()
@@ -2348,11 +2584,11 @@ def copy_playlist(
                 return "Error: Playlist name requires macOS (use playlist ID like 'p.XXX' for cross-platform)"
 
             # Get tracks from source playlist via AppleScript
-            success, source_tracks = asc.get_playlist_tracks(source_playlist_name)
+            success, source_tracks = asc.get_playlist_tracks(resolved.applescript_name)
             if not success:
                 return f"Error: {source_tracks}"
             if not source_tracks:
-                return f"Error: Playlist '{source_playlist_name}' is empty"
+                return f"Error: Playlist '{resolved.applescript_name}' is empty"
 
             # Create new playlist via AppleScript
             success, new_playlist_id = asc.create_playlist(new_name, "")
@@ -2378,16 +2614,18 @@ def copy_playlist(
                     failed_list += f", ... (+{len(failed) - 5} more)"
                 audit_log.log_action(
                     "copy_playlist",
-                    {"source": source_playlist_name, "destination": new_name, "track_count": added, "failed_count": len(failed), "method": "applescript"},
+                    {"source": resolved.applescript_name, "destination": new_name, "track_count": added, "failed_count": len(failed), "method": "applescript"},
                     undo_info={"playlist_name": new_name, "playlist_id": new_playlist_id}
                 )
-                return f"Created '{new_name}' (ID: {new_playlist_id}) with {added}/{len(source_tracks)} tracks. Failed: {failed_list}"
+                fuzzy_info = _format_fuzzy_match(resolved.fuzzy_match)
+                return f"Created '{new_name}' (ID: {new_playlist_id}) with {added}/{len(source_tracks)} tracks. Failed: {failed_list}{fuzzy_info}"
             audit_log.log_action(
                 "copy_playlist",
-                {"source": source_playlist_name, "destination": new_name, "track_count": added, "method": "applescript"},
+                {"source": resolved.applescript_name, "destination": new_name, "track_count": added, "method": "applescript"},
                 undo_info={"playlist_name": new_name, "playlist_id": new_playlist_id}
             )
-            return f"Created '{new_name}' (ID: {new_playlist_id}) with {added} tracks (macOS)"
+            fuzzy_info = _format_fuzzy_match(resolved.fuzzy_match)
+            return f"Created '{new_name}' (ID: {new_playlist_id}) with {added} tracks (macOS){fuzzy_info}"
 
         # === API mode (by ID) ===
         # Get source playlist tracks
@@ -2395,7 +2633,7 @@ def copy_playlist(
         offset = 0
         while True:
             response = requests.get(
-                f"{BASE_URL}/me/library/playlists/{source_playlist_id}/tracks",
+                f"{BASE_URL}/me/library/playlists/{resolved.api_id}/tracks",
                 headers=headers,
                 params={"limit": 100, "offset": offset},
                 timeout=REQUEST_TIMEOUT,
@@ -2433,10 +2671,11 @@ def copy_playlist(
 
         audit_log.log_action(
             "copy_playlist",
-            {"source": source_playlist_id, "destination": new_name, "track_count": len(all_tracks), "method": "api"},
+            {"source": resolved.api_id, "destination": new_name, "track_count": len(all_tracks), "method": "api"},
             undo_info={"playlist_name": new_name, "playlist_id": new_id}
         )
-        return f"Created '{new_name}' (ID: {new_id}) with {len(all_tracks)} tracks"
+        fuzzy_info = _format_fuzzy_match(resolved.fuzzy_match)
+        return f"Created '{new_name}' (ID: {new_id}) with {len(all_tracks)} tracks{fuzzy_info}"
 
     except requests.exceptions.RequestException as e:
         return f"API Error: {str(e)}"
@@ -4829,11 +5068,13 @@ if APPLESCRIPT_AVAILABLE:
         Returns: Confirmation message or error
         """
         # Resolve playlist (name-based only for removal)
-        playlist_id, playlist_name, error = _resolve_playlist(playlist)
-        if error:
-            return error
-        if playlist_id:
-            return "Error: Playlist removal requires playlist name (AppleScript), not ID"
+        resolved = _resolve_playlist(playlist)
+        if resolved.error:
+            return resolved.error
+
+        # This function requires AppleScript name (macOS only)
+        if not resolved.applescript_name:
+            return "Error: Playlist not found or requires explicit playlist name (not just ID)"
 
         if not track:
             return "Error: Provide track parameter"
@@ -4842,9 +5083,9 @@ if APPLESCRIPT_AVAILABLE:
         errors = []
 
         # Resolve track input
-        resolved = _resolve_track(track, artist)
+        track_resolved = _resolve_track(track, artist)
 
-        for r in resolved:
+        for r in track_resolved:
             if r.error:
                 errors.append(r.error)
                 continue
@@ -4852,7 +5093,7 @@ if APPLESCRIPT_AVAILABLE:
             if r.input_type == InputType.PERSISTENT_ID:
                 # Remove by persistent ID
                 success, result = asc.remove_track_from_playlist(
-                    playlist_name,
+                    resolved.applescript_name,
                     track_id=r.value
                 )
                 if success:
@@ -4866,7 +5107,7 @@ if APPLESCRIPT_AVAILABLE:
                 info = cache.get_track_info(r.value)
                 if info and info.get("name"):
                     success, result = asc.remove_track_from_playlist(
-                        playlist_name,
+                        resolved.applescript_name,
                         track_name=info["name"],
                         artist=info.get("artist") or None
                     )
@@ -4883,7 +5124,7 @@ if APPLESCRIPT_AVAILABLE:
                 info = cache.get_track_info(r.value)
                 if info and info.get("name"):
                     success, result = asc.remove_track_from_playlist(
-                        playlist_name,
+                        resolved.applescript_name,
                         track_name=info["name"],
                         artist=info.get("artist") or None
                     )
@@ -4897,7 +5138,7 @@ if APPLESCRIPT_AVAILABLE:
             elif r.input_type in (InputType.NAME, InputType.JSON_OBJECT):
                 # Remove by name
                 success, result = asc.remove_track_from_playlist(
-                    playlist_name,
+                    resolved.applescript_name,
                     track_name=r.value,
                     artist=r.artist or None
                 )
@@ -4910,15 +5151,17 @@ if APPLESCRIPT_AVAILABLE:
         if results:
             audit_log.log_action(
                 "remove_from_playlist",
-                {"playlist": playlist_name, "tracks": results},
-                undo_info={"playlist_name": playlist_name, "tracks": results}
+                {"playlist": resolved.applescript_name, "tracks": results},
+                undo_info={"playlist_name": resolved.applescript_name, "tracks": results}
             )
 
-        return _build_track_results(
+        result = _build_track_results(
             results, errors,
             success_verb="removed",
             error_verb="failed to remove"
         )
+        fuzzy_info = _format_fuzzy_match(resolved.fuzzy_match)
+        return result + fuzzy_info
 
     @mcp.tool()
     def remove_from_library(

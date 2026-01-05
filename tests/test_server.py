@@ -930,8 +930,9 @@ class TestFindApiPlaylistByName:
             status=200,
         )
 
-        result = server._find_api_playlist_by_name("My Playlist")
-        assert result == "p.abc123"
+        playlist_id, fuzzy_match = server._find_api_playlist_by_name("My Playlist")
+        assert playlist_id == "p.abc123"
+        assert fuzzy_match is None  # Should be exact match
 
     @responses.activate
     def test_finds_partial_match(self, mock_config_dir, mock_developer_token, mock_user_token):
@@ -956,8 +957,8 @@ class TestFindApiPlaylistByName:
         )
 
         # Partial match without emoji
-        result = server._find_api_playlist_by_name("Rock Playlist")
-        assert result == "p.emoji123"
+        playlist_id, fuzzy_match = server._find_api_playlist_by_name("Rock Playlist")
+        assert playlist_id == "p.emoji123"
 
     @responses.activate
     def test_prefers_exact_match_over_partial(self, mock_config_dir, mock_developer_token, mock_user_token):
@@ -983,8 +984,9 @@ class TestFindApiPlaylistByName:
             status=200,
         )
 
-        result = server._find_api_playlist_by_name("Rock Playlist")
-        assert result == "p.exact"
+        playlist_id, fuzzy_match = server._find_api_playlist_by_name("Rock Playlist")
+        assert playlist_id == "p.exact"
+        assert fuzzy_match is None  # Should be exact match
 
     @responses.activate
     def test_returns_none_when_not_found(self, mock_config_dir, mock_developer_token, mock_user_token):
@@ -1004,8 +1006,9 @@ class TestFindApiPlaylistByName:
             status=200,
         )
 
-        result = server._find_api_playlist_by_name("Nonexistent Playlist")
-        assert result is None
+        playlist_id, fuzzy_match = server._find_api_playlist_by_name("Nonexistent Playlist")
+        assert playlist_id is None
+        assert fuzzy_match is None
 
     @responses.activate
     def test_returns_none_on_api_error(self, mock_config_dir, mock_developer_token, mock_user_token):
@@ -1024,8 +1027,9 @@ class TestFindApiPlaylistByName:
             status=401,  # Unauthorized
         )
 
-        result = server._find_api_playlist_by_name("Any Playlist")
-        assert result is None
+        playlist_id, fuzzy_match = server._find_api_playlist_by_name("Any Playlist")
+        assert playlist_id is None
+        assert fuzzy_match is None
 
 
 class TestResolvePlaylistApiLookup:
@@ -1033,18 +1037,19 @@ class TestResolvePlaylistApiLookup:
 
     def test_returns_id_directly_for_p_prefix(self):
         """Should return playlist ID directly when p. prefix provided."""
-        playlist_id, playlist_name, error = server._resolve_playlist("p.abc123xyz")
-        assert playlist_id == "p.abc123xyz"
-        assert playlist_name is None
-        assert error is None
+        resolved = server._resolve_playlist("p.abc123xyz")
+        assert resolved.api_id == "p.abc123xyz"
+        assert resolved.applescript_name is None
+        assert resolved.error is None
+        assert resolved.raw_input == "p.abc123xyz"
 
     def test_returns_error_for_empty_string(self):
         """Should return error for empty playlist string."""
-        playlist_id, playlist_name, error = server._resolve_playlist("")
-        assert playlist_id is None
-        assert playlist_name is None
-        assert error is not None
-        assert "required" in error.lower()
+        resolved = server._resolve_playlist("")
+        assert resolved.api_id is None
+        assert resolved.applescript_name is None
+        assert resolved.error is not None
+        assert "required" in resolved.error.lower()
 
     @responses.activate
     def test_looks_up_api_id_for_name(self, mock_config_dir, mock_developer_token, mock_user_token):
@@ -1068,12 +1073,13 @@ class TestResolvePlaylistApiLookup:
             status=200,
         )
 
-        playlist_id, playlist_name, error = server._resolve_playlist("My Music")
+        resolved = server._resolve_playlist("My Music")
 
-        # Should return API ID, not name
-        assert playlist_id == "p.found123"
-        assert playlist_name is None
-        assert error is None
+        # Should return BOTH API ID and AppleScript name when match found
+        assert resolved.api_id == "p.found123"
+        assert resolved.applescript_name == "My Music"  # Matched name populated too!
+        assert resolved.error is None
+        assert resolved.raw_input == "My Music"
 
     @responses.activate
     def test_falls_back_to_name_when_not_in_api(self, mock_config_dir, mock_developer_token, mock_user_token):
@@ -1093,21 +1099,208 @@ class TestResolvePlaylistApiLookup:
             status=200,
         )
 
-        playlist_id, playlist_name, error = server._resolve_playlist("Local Only Playlist")
+        resolved = server._resolve_playlist("Local Only Playlist")
 
         # Should fall back to name for AppleScript
-        assert playlist_id is None
-        assert playlist_name == "Local Only Playlist"
-        assert error is None
+        assert resolved.api_id is None
+        assert resolved.applescript_name == "Local Only Playlist"
+        assert resolved.error is None
 
     def test_handles_ps_i_love_you_as_name(self):
         """Should treat 'p.s. I love you' as a name, not an ID."""
         # This tests the edge case where a playlist name starts with "p."
         # but isn't an ID (has spaces/punctuation after p.)
-        with patch.object(server, '_find_api_playlist_by_name', return_value=None):
-            playlist_id, playlist_name, error = server._resolve_playlist("p.s. I love you")
+        with patch.object(server, '_find_api_playlist_by_name', return_value=(None, None)):
+            resolved = server._resolve_playlist("p.s. I love you")
 
         # Should be treated as a name, not an ID
-        assert playlist_id is None
-        assert playlist_name == "p.s. I love you"
-        assert error is None
+        assert resolved.api_id is None
+        assert resolved.applescript_name == "p.s. I love you"
+        assert resolved.error is None
+
+
+class TestFuzzyMatchingPlaylistResolution:
+    """Tests for fuzzy matching playlist names - REGRESSION TESTS."""
+
+    @responses.activate
+    def test_fuzzy_matches_and_vs_ampersand(self, mock_config_dir, mock_developer_token, mock_user_token):
+        """Should fuzzy match 'Jack and Norah' to 'Jack & Norah'."""
+        # Setup tokens
+        dev_token_file = mock_config_dir / "developer_token.json"
+        with open(dev_token_file, "w") as f:
+            json.dump({"token": mock_developer_token, "expires": time.time() + 86400 * 60}, f)
+
+        user_token_file = mock_config_dir / "music_user_token.json"
+        with open(user_token_file, "w") as f:
+            json.dump({"music_user_token": mock_user_token}, f)
+
+        # Mock API response with playlist named "Jack & Norah"
+        responses.add(
+            responses.GET,
+            "https://api.music.apple.com/v1/me/library/playlists",
+            json={
+                "data": [
+                    {"id": "p.jack123", "attributes": {"name": "Jack & Norah"}},
+                ]
+            },
+            status=200,
+        )
+
+        # User types "Jack and Norah" (with "and" instead of "&")
+        resolved = server._resolve_playlist("Jack and Norah")
+
+        # Should fuzzy match and return BOTH identifiers
+        assert resolved.api_id == "p.jack123"
+        assert resolved.applescript_name == "Jack & Norah"  # CRITICAL: Must have actual name
+        assert resolved.error is None
+        assert resolved.raw_input == "Jack and Norah"
+        assert resolved.fuzzy_match is not None
+        assert "and" in str(resolved.fuzzy_match.transformations).lower() or "&" in str(resolved.fuzzy_match.transformations)
+
+    @responses.activate
+    def test_fuzzy_matches_with_emojis(self, mock_config_dir, mock_developer_token, mock_user_token):
+        """Should fuzzy match playlist names with emojis removed."""
+        dev_token_file = mock_config_dir / "developer_token.json"
+        with open(dev_token_file, "w") as f:
+            json.dump({"token": mock_developer_token, "expires": time.time() + 86400 * 60}, f)
+
+        user_token_file = mock_config_dir / "music_user_token.json"
+        with open(user_token_file, "w") as f:
+            json.dump({"music_user_token": mock_user_token}, f)
+
+        # Mock API response with emoji playlist
+        responses.add(
+            responses.GET,
+            "https://api.music.apple.com/v1/me/library/playlists",
+            json={
+                "data": [
+                    {"id": "p.emoji123", "attributes": {"name": "🤟👶🎸 Jack & Norah"}},
+                ]
+            },
+            status=200,
+        )
+
+        # User types without emojis
+        resolved = server._resolve_playlist("Jack & Norah")
+
+        # Should fuzzy match (emojis ignored)
+        assert resolved.api_id == "p.emoji123"
+        assert resolved.applescript_name == "🤟👶🎸 Jack & Norah"  # Keep actual emoji name
+        assert resolved.error is None
+        assert resolved.fuzzy_match is not None
+
+    @responses.activate
+    def test_exact_match_preferred_over_fuzzy(self, mock_config_dir, mock_developer_token, mock_user_token):
+        """Should prefer exact match over fuzzy match."""
+        dev_token_file = mock_config_dir / "developer_token.json"
+        with open(dev_token_file, "w") as f:
+            json.dump({"token": mock_developer_token, "expires": time.time() + 86400 * 60}, f)
+
+        user_token_file = mock_config_dir / "music_user_token.json"
+        with open(user_token_file, "w") as f:
+            json.dump({"music_user_token": mock_user_token}, f)
+
+        # Mock API response with both exact and fuzzy matches
+        responses.add(
+            responses.GET,
+            "https://api.music.apple.com/v1/me/library/playlists",
+            json={
+                "data": [
+                    {"id": "p.fuzzy", "attributes": {"name": "The Rock Music"}},  # Fuzzy (article removed)
+                    {"id": "p.exact", "attributes": {"name": "Rock Music"}},  # Exact match
+                ]
+            },
+            status=200,
+        )
+
+        resolved = server._resolve_playlist("Rock Music")
+
+        # Should choose exact match
+        assert resolved.api_id == "p.exact"
+        assert resolved.applescript_name == "Rock Music"
+        assert resolved.fuzzy_match is None or resolved.fuzzy_match.match_type == "exact"
+
+    @responses.activate
+    def test_resolved_object_has_both_ids_after_fuzzy_match(self, mock_config_dir, mock_developer_token, mock_user_token):
+        """REGRESSION TEST: Resolved object MUST have both api_id and applescript_name after fuzzy match.
+
+        This is the critical fix for the bug where remove_from_playlist("Jack and Norah", ...)
+        would fail because fuzzy matching converted to API ID but function needs AppleScript name.
+        """
+        dev_token_file = mock_config_dir / "developer_token.json"
+        with open(dev_token_file, "w") as f:
+            json.dump({"token": mock_developer_token, "expires": time.time() + 86400 * 60}, f)
+
+        user_token_file = mock_config_dir / "music_user_token.json"
+        with open(user_token_file, "w") as f:
+            json.dump({"music_user_token": mock_user_token}, f)
+
+        responses.add(
+            responses.GET,
+            "https://api.music.apple.com/v1/me/library/playlists",
+            json={
+                "data": [
+                    {"id": "p.test123", "attributes": {"name": "Test & Playlist"}},
+                ]
+            },
+            status=200,
+        )
+
+        resolved = server._resolve_playlist("Test and Playlist")
+
+        # CRITICAL: Both must be populated
+        assert resolved.api_id is not None, "api_id must be populated after fuzzy match"
+        assert resolved.applescript_name is not None, "applescript_name must be populated after fuzzy match"
+        assert resolved.api_id == "p.test123"
+        assert resolved.applescript_name == "Test & Playlist"
+
+
+class TestPlaylistResolutionPerformance:
+    """Performance tests for playlist resolution."""
+
+    @responses.activate
+    def test_fuzzy_matching_performance_with_many_playlists(self, mock_config_dir, mock_developer_token, mock_user_token):
+        """Should complete fuzzy matching in reasonable time even with many playlists.
+
+        This tests the optimization where fuzzy matching only happens if exact/partial fails.
+        With 50 playlists and target at position 25, should complete quickly.
+        """
+        import time as time_module
+
+        dev_token_file = mock_config_dir / "developer_token.json"
+        with open(dev_token_file, "w") as f:
+            json.dump({"token": mock_developer_token, "expires": time.time() + 86400 * 60}, f)
+
+        user_token_file = mock_config_dir / "music_user_token.json"
+        with open(user_token_file, "w") as f:
+            json.dump({"music_user_token": mock_user_token}, f)
+
+        # Mock API with 50 playlists (realistic library size)
+        playlists = [
+            {"id": f"p.test{i}", "attributes": {"name": f"Playlist {i}"}}
+            for i in range(25)
+        ]
+        # Add fuzzy match target in the middle
+        playlists.append({"id": "p.target", "attributes": {"name": "Rock & Roll"}})
+        # Add more playlists after
+        playlists.extend([
+            {"id": f"p.test{i}", "attributes": {"name": f"Playlist {i}"}}
+            for i in range(25, 50)
+        ])
+
+        responses.add(
+            responses.GET,
+            "https://api.music.apple.com/v1/me/library/playlists",
+            json={"data": playlists},
+            status=200,
+        )
+
+        start = time_module.time()
+        resolved = server._resolve_playlist("Rock and Roll")  # Fuzzy: "and" → "&"
+        elapsed = time_module.time() - start
+
+        # Should complete in under 500ms (fuzzy matching is now fallback-only)
+        assert elapsed < 0.5, f"Fuzzy matching took {elapsed:.2f}s, should be < 0.5s"
+        assert resolved.api_id == "p.target"
+        assert resolved.applescript_name == "Rock & Roll"
+        assert resolved.fuzzy_match is not None, "Should be a fuzzy match"
