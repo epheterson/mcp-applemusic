@@ -99,6 +99,30 @@ def truncate(s: str, max_len: int) -> str:
     return s[:max_len] + "..." if len(s) > max_len else s
 
 
+def _deduplicate_by_id(items: list[dict], id_key: str = "id", keep_no_id: bool = False) -> list[dict]:
+    """Remove duplicate items based on ID field.
+
+    Args:
+        items: List of dicts to deduplicate
+        id_key: Key to use for ID lookup (default "id")
+        keep_no_id: If True, keep items without an ID (default False)
+
+    Returns:
+        List with duplicates removed, preserving order
+    """
+    seen_ids: set[str] = set()
+    unique = []
+    for item in items:
+        item_id = item.get(id_key, "")
+        if item_id:
+            if item_id not in seen_ids:
+                seen_ids.add(item_id)
+                unique.append(item)
+        elif keep_no_id:
+            unique.append(item)
+    return unique
+
+
 def _format_fuzzy_match(fuzzy: FuzzyMatchResult | None) -> str:
     """Format fuzzy match information for display.
 
@@ -163,7 +187,6 @@ def _normalize_with_tracking(name: str) -> tuple[list[str], list[str]]:
     Returns:
         Tuple of (normalized_variations, transformations_applied)
     """
-    original = name
     transformations = []
 
     # Step 1: Lowercase and strip
@@ -2205,6 +2228,7 @@ def _get_playlist_track_names(playlist_id: str) -> tuple[bool, list[dict] | str]
 
         return True, [
             {
+                "id": t.get("id", ""),
                 "name": t.get("attributes", {}).get("name", ""),
                 "artist": t.get("attributes", {}).get("artistName", ""),
             }
@@ -2926,16 +2950,7 @@ def search_library(
                         track["explicit"] = "Unknown"
 
             # Deduplicate by track ID (AppleScript can return duplicates)
-            seen_ids: set[str] = set()
-            unique_results = []
-            for t in results:
-                track_id = t.get("id", "")
-                if track_id and track_id not in seen_ids:
-                    seen_ids.add(track_id)
-                    unique_results.append(t)
-                elif not track_id:
-                    unique_results.append(t)  # Keep tracks without ID
-            results = unique_results
+            results = _deduplicate_by_id(results, keep_no_id=True)
 
             # Filter explicit content if clean_only
             if clean_only:
@@ -2963,13 +2978,7 @@ def search_library(
         song_data = [extract_track_data(s, full) for s in songs]
 
         # Deduplicate by track ID (API can return duplicates)
-        seen_ids: set[str] = set()
-        unique_songs = []
-        for s in song_data:
-            if s.get("id") and s["id"] not in seen_ids:
-                seen_ids.add(s["id"])
-                unique_songs.append(s)
-        song_data = unique_songs
+        song_data = _deduplicate_by_id(song_data)
 
         # Filter explicit content if clean_only
         if clean_only:
@@ -3231,13 +3240,7 @@ def search_catalog(
         if "songs" in results:
             all_data["songs"] = [extract_track_data(s, full) for s in results["songs"].get("data", [])]
             # Deduplicate by track ID (API can return duplicates)
-            seen_ids: set[str] = set()
-            unique_songs = []
-            for s in all_data["songs"]:
-                if s.get("id") and s["id"] not in seen_ids:
-                    seen_ids.add(s["id"])
-                    unique_songs.append(s)
-            all_data["songs"] = unique_songs
+            all_data["songs"] = _deduplicate_by_id(all_data["songs"])
             # Filter out explicit content if clean_only is True
             if clean_only:
                 all_data["songs"] = [s for s in all_data["songs"] if s.get("explicit") == "No"]

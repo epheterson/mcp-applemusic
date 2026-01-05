@@ -4,10 +4,11 @@ Living document tracking current work, known issues, and future improvements.
 
 ---
 
-## 🔥 Current Work: Fuzzy Matching & Resolution Refactor
+## ✅ Completed: Fuzzy Matching & Resolution Refactor
 
-**Status**: In Progress
+**Status**: Complete
 **Started**: 2026-01-04
+**Completed**: 2026-01-05
 **Priority**: High (blocking user workflows)
 
 ### Problem Statement
@@ -79,8 +80,9 @@ class ResolvedPlaylist:
 - [x] Fix API/AppleScript routing (prefer API when api_id available)
 - [x] Enhance fuzzy matching with partial-after-normalization support
 - [x] Add AppleScript-based fuzzy matching to `_resolve_playlist`
-- [ ] Debug why `_format_fuzzy_match()` output not appearing
-- [ ] Update CHANGELOG.md
+- [x] Debug why `_format_fuzzy_match()` output not appearing (fixed `fuzzy_partial` type)
+- [x] Update CHANGELOG.md
+- [x] Code review fixes: extract `_deduplicate_by_id()`, add `id` to playlist tracks
 
 ### Progress Log
 
@@ -134,6 +136,12 @@ class ResolvedPlaylist:
   - Enhanced fuzzy matching with partial-after-normalization support (e.g., "Sgt Peppers" matches "Sgt. Pepper's Lonely Hearts Club Band")
   - Added AppleScript-based fuzzy matching in `_resolve_playlist()` (emoji playlists now resolve correctly)
 - ✅ **ALL 75 TESTS PASSING**
+- ✅ Updated CHANGELOG.md with v0.4.3 release notes (993deb7)
+- ✅ Code review: 8 commits reviewed, 3 Important issues identified
+- ✅ Fixed: Removed unused `original` variable in `_normalize_with_tracking()`
+- ✅ Fixed: Extracted `_deduplicate_by_id()` helper (DRY - replaced 3 blocks)
+- ✅ Fixed: Added `id` field to `_get_playlist_track_names()` return dicts
+- ✅ **PHASE 4 COMPLETE** (afab08c)
 
 ---
 
@@ -141,7 +149,7 @@ class ResolvedPlaylist:
 
 ### High Priority
 - [x] Search results show duplicates (wrong count in header) - **FIXED** (deduplication by track ID)
-- [ ] Fuzzy match transformations not visible in output (might be working - needs verification)
+- [x] Fuzzy match transformations not visible in output - **FIXED** (added `fuzzy_partial` type handling)
 - [x] Fuzzy matching only works for playlists - **FIXED** (now applies to tracks and albums too)
 
 ### Medium Priority
@@ -225,8 +233,9 @@ Bad: `"Error: Not found"`
 2. [completed] Apply fuzzy matching to tracks/albums ✅
 3. [completed] Refactor fuzzy matching to be DRY and reusable ✅
 4. [completed] Add integration tests for user journeys ✅
-5. [pending] Debug fuzzy match output visibility
-6. [pending] Update CHANGELOG.md
+5. [completed] Debug fuzzy match output visibility ✅
+6. [completed] Update CHANGELOG.md ✅
+7. [completed] Code review fixes (3 Important issues) ✅
 
 ---
 
@@ -260,4 +269,4 @@ User input → _resolve_playlist() → ResolvedPlaylist object
 ---
 
 **Last Updated**: 2026-01-05
-**Next Review**: After CHANGELOG update
+**Next Review**: Next feature work
