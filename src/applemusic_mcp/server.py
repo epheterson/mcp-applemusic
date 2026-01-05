@@ -295,6 +295,7 @@ def _fuzzy_match_entity(
 
             for query_variant in normalized_variations:
                 for candidate_variant in candidate_variations:
+                    # Check exact match after normalization
                     if query_variant == candidate_variant:
                         fuzzy_result = FuzzyMatchResult(
                             matched_name=candidate_name,
@@ -303,6 +304,17 @@ def _fuzzy_match_entity(
                             normalized_match=candidate_variant,
                             transformations=transformations,
                             match_type="fuzzy"
+                        )
+                        return candidate, fuzzy_result
+                    # Check partial match after normalization (query contained in candidate)
+                    if query_variant in candidate_variant:
+                        fuzzy_result = FuzzyMatchResult(
+                            matched_name=candidate_name,
+                            query=query,
+                            normalized_query=query_variant,
+                            normalized_match=candidate_variant,
+                            transformations=transformations + ["partial normalized match"],
+                            match_type="fuzzy_partial"
                         )
                         return candidate, fuzzy_result
 
@@ -905,8 +917,25 @@ def _resolve_playlist(playlist: str) -> ResolvedPlaylist:
             fuzzy_match=fuzzy_match
         )
 
-    # Not found via API - fall back to AppleScript name lookup
-    # AppleScript will do its own fuzzy matching
+    # Not found via API - try AppleScript-based fuzzy matching if available
+    if APPLESCRIPT_AVAILABLE:
+        success, playlists = asc.get_playlists()
+        if success and playlists:
+            # Use fuzzy matching on AppleScript playlist names
+            def playlist_name_extractor(pl: dict) -> str:
+                return pl.get("name", "")
+
+            matched, fuzzy_result = _fuzzy_match_entity(playlist, playlists, playlist_name_extractor)
+            if matched:
+                matched_name = matched.get("name", playlist)
+                return ResolvedPlaylist(
+                    raw_input=playlist,
+                    api_id=None,
+                    applescript_name=matched_name,  # Use actual matched name
+                    fuzzy_match=fuzzy_result
+                )
+
+    # Fall back to raw input for AppleScript
     return ResolvedPlaylist(
         raw_input=playlist,
         api_id=None,
@@ -1739,8 +1768,8 @@ def get_playlist_tracks(
     use_api = bool(resolved.api_id)
     use_applescript = bool(resolved.applescript_name)
 
-    # Use AppleScript with name
-    if use_applescript:
+    # Use AppleScript with name (only if we don't have API ID)
+    if use_applescript and not use_api:
         if not APPLESCRIPT_AVAILABLE:
             return "Error: AppleScript (playlist_name) requires macOS"
         success, result = asc.get_playlist_tracks(resolved.applescript_name)
@@ -2088,7 +2117,8 @@ def search_playlist(
 
     matches = []
 
-    if use_applescript:
+    # Use AppleScript (only if we don't have API ID)
+    if use_applescript and not use_api:
         if not APPLESCRIPT_AVAILABLE:
             return "Error: playlist_name requires macOS"
         # Use native AppleScript search (fast, same as Music app search field)
@@ -2400,8 +2430,8 @@ def add_to_playlist(
             except Exception as e:
                 steps.append(f"Album '{r.value}': {e}")
 
-    # === AppleScript mode (playlist by name) ===
-    if resolved.applescript_name:
+    # === AppleScript mode (playlist by name, only if no API ID) ===
+    if resolved.applescript_name and not resolved.api_id:
         if not APPLESCRIPT_AVAILABLE:
             return "Error: Playlist name requires macOS (use playlist ID like 'p.XXX' for cross-platform)"
 
@@ -2727,8 +2757,8 @@ def copy_playlist(
     try:
         headers = get_headers()
 
-        # === AppleScript mode (by name) ===
-        if has_name:
+        # === AppleScript mode (by name, only if we don't have API ID) ===
+        if has_name and not has_id:
             if not APPLESCRIPT_AVAILABLE:
                 return "Error: Playlist name requires macOS (use playlist ID like 'p.XXX' for cross-platform)"
 
