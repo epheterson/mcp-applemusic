@@ -56,10 +56,10 @@ class ResolvedPlaylist:
 - [x] Test: `add_to_playlist("Jack and Norah", ...)` works ✅
 - [x] Test: `remove_from_playlist("Jack and Norah", ...)` works ✅
 
-#### Phase 2: Deduplication
-- [ ] Add deduplication to `search_catalog()` by track ID
-- [ ] Add deduplication to `search_library()` by track ID
-- [ ] Test: `search_catalog("Für Elise Barenboim")` shows correct count
+#### Phase 2: Deduplication ✅
+- [x] Add deduplication to `search_catalog()` by track ID
+- [x] Add deduplication to `search_library()` by track ID (both AppleScript and API paths)
+- [ ] Test: `search_catalog("Für Elise Barenboim")` shows correct count (needs MCP restart)
 
 #### Phase 3: DRY Fuzzy Matching
 - [ ] Extract `fuzzy_match_entities(query, candidates, name_field)` generic function
@@ -118,7 +118,7 @@ class ResolvedPlaylist:
 ## 🐛 Known Issues
 
 ### High Priority
-- [ ] Search results show duplicates (wrong count in header)
+- [x] Search results show duplicates (wrong count in header) - **FIXED** (deduplication by track ID)
 - [ ] Fuzzy match transformations not visible in output (might be working - needs verification)
 - [ ] Fuzzy matching only works for playlists
 

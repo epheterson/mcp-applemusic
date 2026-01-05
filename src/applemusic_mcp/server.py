@@ -2745,6 +2745,18 @@ def search_library(
                     else:
                         track["explicit"] = "Unknown"
 
+            # Deduplicate by track ID (AppleScript can return duplicates)
+            seen_ids: set[str] = set()
+            unique_results = []
+            for t in results:
+                track_id = t.get("id", "")
+                if track_id and track_id not in seen_ids:
+                    seen_ids.add(track_id)
+                    unique_results.append(t)
+                elif not track_id:
+                    unique_results.append(t)  # Keep tracks without ID
+            results = unique_results
+
             # Filter explicit content if clean_only
             if clean_only:
                 results = [t for t in results if t.get("explicit") != "Yes"]
@@ -2769,6 +2781,15 @@ def search_library(
             return "No songs found"
 
         song_data = [extract_track_data(s, full) for s in songs]
+
+        # Deduplicate by track ID (API can return duplicates)
+        seen_ids: set[str] = set()
+        unique_songs = []
+        for s in song_data:
+            if s.get("id") and s["id"] not in seen_ids:
+                seen_ids.add(s["id"])
+                unique_songs.append(s)
+        song_data = unique_songs
 
         # Filter explicit content if clean_only
         if clean_only:
@@ -3056,6 +3077,14 @@ def search_catalog(
 
         if "songs" in results:
             all_data["songs"] = [extract_track_data(s, full) for s in results["songs"].get("data", [])]
+            # Deduplicate by track ID (API can return duplicates)
+            seen_ids: set[str] = set()
+            unique_songs = []
+            for s in all_data["songs"]:
+                if s.get("id") and s["id"] not in seen_ids:
+                    seen_ids.add(s["id"])
+                    unique_songs.append(s)
+            all_data["songs"] = unique_songs
             # Filter out explicit content if clean_only is True
             if clean_only:
                 all_data["songs"] = [s for s in all_data["songs"] if s.get("explicit") == "No"]
