@@ -52,7 +52,9 @@ class ResolvedPlaylist:
 - [x] Fix CRITICAL variable shadowing bug in `remove_from_playlist` (line 5076)
 - [x] Fix CRITICAL type annotation bug in `_normalize_with_tracking` (line 149)
 - [DEFERRED] Add persistent ID resolution from AppleScript (not blocking)
-- [ ] Test: `remove_from_playlist("Jack and Norah", ...)` works
+- [x] Fix: `add_to_playlist` bypassed fuzzy matching when AppleScript mode preferred
+- [x] Test: `add_to_playlist("Jack and Norah", ...)` works ✅
+- [x] Test: `remove_from_playlist("Jack and Norah", ...)` works ✅
 
 #### Phase 2: Deduplication
 - [ ] Add deduplication to `search_catalog()` by track ID
@@ -107,6 +109,9 @@ class ResolvedPlaylist:
   - Pass 2: Partial match (O(n), substring only)
   - Pass 3: Fuzzy match (expensive normalization, only if Pass 1 & 2 fail)
 - ✅ **ALL 62 TESTS PASSING** (including performance test)
+- ✅ Fixed CRITICAL: `add_to_playlist` bypassed `_resolve_playlist()` when AppleScript mode preferred
+  - "Jack and Norah" was passed raw to AppleScript, never fuzzy-matched to "🤟👶🎸 Jack & Norah"
+  - Now always resolves first, then decides API vs AppleScript mode
 
 ---
 
@@ -120,10 +125,10 @@ class ResolvedPlaylist:
 ### Medium Priority
 - [ ] No fuzzy matching for tracks/artists/albums
 - [DEFERRED] `_resolve_playlist()` doesn't fetch persistent ID (not blocking - can add later if needed)
-- [ ] `add_to_playlist` has fragile special-case logic that bypasses `_resolve_playlist()`
 
 ### Fixed (Ready for Testing)
 - [x] `remove_from_playlist()` crash when using fuzzy-matched playlist names - **FIXED** (variable shadowing bug)
+- [x] `add_to_playlist` bypassed `_resolve_playlist()` for AppleScript mode - **FIXED** (now always resolves first)
 
 ### Low Priority
 - [ ] (None currently)

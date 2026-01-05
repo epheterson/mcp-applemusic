@@ -2150,29 +2150,33 @@ def add_to_playlist(
             elif r.input_type in (InputType.NAME, InputType.JSON_OBJECT):
                 names_list.append({"name": r.value, "artist": r.artist})
 
-    # Resolve playlist - but prefer AppleScript mode on macOS when we have track names
-    # (AppleScript searches library directly, API mode would need extra lookups)
+    # Resolve playlist with fuzzy matching
+    # Always resolve first to get fuzzy-matched name, then decide API vs AppleScript mode
     playlist_str = playlist.strip()
     resolved: ResolvedPlaylist
     if playlist_str.startswith("p.") and len(playlist_str) > 2 and playlist_str[2:].isalnum():
-        # Explicit playlist ID - use API mode only
+        # Explicit playlist ID - use API mode only (no fuzzy matching needed)
         resolved = ResolvedPlaylist(
             raw_input=playlist_str,
             api_id=playlist_str,
             applescript_name=None  # Not available for ID-only input
         )
-    elif APPLESCRIPT_AVAILABLE and names_list:
-        # macOS with track names - prefer AppleScript mode (searches library directly)
-        resolved = ResolvedPlaylist(
-            raw_input=playlist_str,
-            api_id=None,  # Will use AppleScript, no API call
-            applescript_name=playlist_str
-        )
     else:
-        # Fall back to standard resolution (may convert to API ID with fuzzy matching)
+        # Resolve playlist with fuzzy matching
         resolved = _resolve_playlist(playlist_str)
         if resolved.error:
             return resolved.error
+
+        # If we have track names and AppleScript is available, prefer AppleScript mode
+        # But use the fuzzy-matched applescript_name, not the raw input!
+        if APPLESCRIPT_AVAILABLE and names_list and resolved.applescript_name:
+            # Clear api_id to force AppleScript mode (searches library directly)
+            resolved = ResolvedPlaylist(
+                raw_input=resolved.raw_input,
+                api_id=None,
+                applescript_name=resolved.applescript_name,
+                fuzzy_match=resolved.fuzzy_match
+            )
 
     # Resolve album input - get all tracks from album(s)
     if album:
