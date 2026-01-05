@@ -13,7 +13,7 @@ import unicodedata
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
 import requests
 from mcp.server.fastmcp import FastMCP
@@ -240,6 +240,85 @@ def _normalize_with_tracking(name: str) -> tuple[list[str], list[str]]:
         all_variations.append(v)
 
     return all_variations, transformations
+
+
+def _fuzzy_match_entity(
+    query: str,
+    candidates: list[dict],
+    name_extractor: Callable[[dict], str],
+) -> tuple[dict | None, FuzzyMatchResult | None]:
+    """Generic 3-pass fuzzy matching for any entity type.
+
+    Matching priority:
+    1. Exact match (case-insensitive) - fastest, no normalization
+    2. Partial match (query contained in name) - fast, just substring
+    3. Fuzzy match (normalized with transformations) - slowest, only if needed
+
+    Args:
+        query: The search query from the user
+        candidates: List of candidate entities to match against
+        name_extractor: Function to extract name string from a candidate dict
+
+    Returns:
+        Tuple of (matched_entity, fuzzy_match_result)
+        - matched_entity: The dict from candidates that matched, or None
+        - fuzzy_match_result: Details about the match if fuzzy/partial, None if exact
+    """
+    if not candidates:
+        return None, None
+
+    query_lower = query.lower()
+
+    # PASS 1: Exact match (fastest - no normalization)
+    for candidate in candidates:
+        candidate_name = name_extractor(candidate)
+        if query_lower == candidate_name.lower():
+            return candidate, None  # Exact match, no fuzzy result
+
+    # PASS 2: Partial match (fast - just substring check)
+    partial_match = None
+    partial_match_name = None
+    for candidate in candidates:
+        candidate_name = name_extractor(candidate)
+        if query_lower in candidate_name.lower():
+            partial_match = candidate
+            partial_match_name = candidate_name
+            break  # Take first partial match
+
+    # PASS 3: Fuzzy match (slowest - only if no exact/partial)
+    if partial_match is None:
+        normalized_variations, transformations = _normalize_with_tracking(query)
+
+        for candidate in candidates:
+            candidate_name = name_extractor(candidate)
+            candidate_variations, _ = _normalize_with_tracking(candidate_name)
+
+            for query_variant in normalized_variations:
+                for candidate_variant in candidate_variations:
+                    if query_variant == candidate_variant:
+                        fuzzy_result = FuzzyMatchResult(
+                            matched_name=candidate_name,
+                            query=query,
+                            normalized_query=query_variant,
+                            normalized_match=candidate_variant,
+                            transformations=transformations,
+                            match_type="fuzzy"
+                        )
+                        return candidate, fuzzy_result
+
+    # Return partial match if found (after checking fuzzy didn't find better)
+    if partial_match:
+        fuzzy_result = FuzzyMatchResult(
+            matched_name=partial_match_name,
+            query=query,
+            normalized_query=query_lower,
+            normalized_match=partial_match_name.lower(),
+            transformations=["partial substring match"],
+            match_type="partial"
+        )
+        return partial_match, fuzzy_result
+
+    return None, None
 
 
 def get_timestamp() -> str:
@@ -721,10 +800,10 @@ def _detect_id_type(id_str: str) -> str:
 def _find_api_playlist_by_name(name: str) -> tuple[str | None, FuzzyMatchResult | None]:
     """Find API playlist ID by name with fuzzy matching.
 
-    Matching priority:
+    Uses generic _fuzzy_match_entity for 3-pass matching:
     1. Exact match (case-insensitive)
-    2. Fuzzy match (normalized with transformations)
-    3. Partial match (query contained in playlist name, case-insensitive)
+    2. Partial match (query contained in playlist name)
+    3. Fuzzy match (normalized with transformations)
 
     Args:
         name: Playlist name to search for
@@ -737,7 +816,6 @@ def _find_api_playlist_by_name(name: str) -> tuple[str | None, FuzzyMatchResult 
     try:
         headers = get_headers()
         api_offset = 0
-        name_lower = name.lower()
 
         # Collect all playlists first (for multi-pass matching)
         all_playlists = []
@@ -761,56 +839,14 @@ def _find_api_playlist_by_name(name: str) -> tuple[str | None, FuzzyMatchResult 
                 break
             api_offset += 100
 
-        # PASS 1: Exact match (fastest - no normalization)
-        for pl in all_playlists:
-            pl_name = pl.get("attributes", {}).get("name", "")
-            if name_lower == pl_name.lower():
-                return pl.get("id"), None
+        # Use generic fuzzy matching
+        def playlist_name_extractor(pl: dict) -> str:
+            return pl.get("attributes", {}).get("name", "")
 
-        # PASS 2: Partial match (fast - just substring check)
-        partial_match = None
-        partial_match_name = None
-        for pl in all_playlists:
-            pl_name = pl.get("attributes", {}).get("name", "")
-            pl_name_lower = pl_name.lower()
-            if name_lower in pl_name_lower:
-                partial_match = pl.get("id")
-                partial_match_name = pl_name
-                break  # Take first partial match
+        matched, fuzzy_result = _fuzzy_match_entity(name, all_playlists, playlist_name_extractor)
 
-        # PASS 3: Fuzzy match (slowest - only if no exact/partial)
-        # Only normalize if we didn't find exact or partial
-        if partial_match is None:
-            normalized_variations, transformations = _normalize_with_tracking(name)
-
-            for pl in all_playlists:
-                pl_name = pl.get("attributes", {}).get("name", "")
-                pl_normalized_variations, _ = _normalize_with_tracking(pl_name)
-
-                for query_variant in normalized_variations:
-                    for pl_variant in pl_normalized_variations:
-                        if query_variant == pl_variant:
-                            fuzzy_result = FuzzyMatchResult(
-                                matched_name=pl_name,
-                                query=name,
-                                normalized_query=query_variant,
-                                normalized_match=pl_variant,
-                                transformations=transformations,
-                                match_type="fuzzy"
-                            )
-                            return pl.get("id"), fuzzy_result  # Return immediately on first fuzzy match
-
-        # Return partial match if found (after checking fuzzy didn't find anything better)
-        if partial_match:
-            fuzzy_result = FuzzyMatchResult(
-                matched_name=partial_match_name,
-                query=name,
-                normalized_query=name_lower,
-                normalized_match=partial_match_name.lower(),
-                transformations=["partial substring match"],
-                match_type="partial"
-            )
-            return partial_match, fuzzy_result
+        if matched:
+            return matched.get("id"), fuzzy_result
 
     except Exception:
         pass  # Fall back to AppleScript
@@ -1102,52 +1138,76 @@ def _build_track_results(
 
 def _find_matching_catalog_song(
     name: str, artist: str = ""
-) -> tuple[dict | None, str | None]:
+) -> tuple[dict | None, str | None, FuzzyMatchResult | None]:
     """Search catalog and find a song matching name and optional artist.
 
-    Uses partial matching: name must be contained in song name,
-    artist (if provided) must be contained in artist name.
+    Matching priority:
+    1. Exact match (case-insensitive) on name, with artist filter
+    2. Partial match (name in song_name), with artist filter
+    3. Fuzzy match on name only (relaxes artist constraint)
 
     Args:
-        name: Track name to search for (partial match)
-        artist: Artist name (optional, partial match)
+        name: Track name to search for
+        artist: Artist name (optional, for filtering)
 
     Returns:
-        Tuple of (song_dict, error_message)
-        - On success: (song dict with 'id' and 'attributes', None)
-        - On not found: (None, "Not found in catalog")
+        Tuple of (song_dict, error_message, fuzzy_match_result)
+        - On success: (song dict, None, fuzzy_result or None)
+        - On not found: (None, "Not found in catalog", None)
     """
     search_term = f"{name} {artist}".strip() if artist else name
-    songs = _search_catalog_songs(search_term, limit=3)
+    songs = _search_catalog_songs(search_term, limit=5)  # Get more results for fuzzy
 
-    for song in songs:
-        attrs = song.get("attributes", {})
-        song_name = attrs.get("name", "")
-        song_artist = attrs.get("artistName", "")
+    if not songs:
+        return None, "Not found in catalog", None
 
-        # Check if name matches (partial)
-        if name.lower() not in song_name.lower():
-            continue
-        # Check artist if provided
-        if artist and artist.lower() not in song_artist.lower():
-            continue
+    # Filter by artist first if provided
+    def artist_matches(song: dict) -> bool:
+        if not artist:
+            return True
+        song_artist = song.get("attributes", {}).get("artistName", "")
+        return artist.lower() in song_artist.lower()
 
-        # Cache for later ID lookups
-        catalog_id = song.get("id", "")
-        if catalog_id and song_name:
-            cache = get_track_cache()
-            cache.set_track_metadata(
-                explicit="Yes" if attrs.get("contentRating") == "explicit" else "No",
-                catalog_id=catalog_id,
-                isrc=attrs.get("isrc") or None,
-                name=song_name,
-                artist=song_artist,
-                album=attrs.get("albumName", ""),
-            )
+    # Candidates that match artist filter
+    artist_filtered = [s for s in songs if artist_matches(s)]
 
-        return song, None
+    # Use generic fuzzy matching on name
+    def song_name_extractor(song: dict) -> str:
+        return song.get("attributes", {}).get("name", "")
 
-    return None, "Not found in catalog"
+    # Try fuzzy match on artist-filtered songs first
+    if artist_filtered:
+        matched, fuzzy_result = _fuzzy_match_entity(name, artist_filtered, song_name_extractor)
+        if matched:
+            _cache_song_metadata(matched)
+            return matched, None, fuzzy_result
+
+    # If no match with artist filter, try without (relaxed matching)
+    if artist and not artist_filtered:
+        matched, fuzzy_result = _fuzzy_match_entity(name, songs, song_name_extractor)
+        if matched:
+            _cache_song_metadata(matched)
+            return matched, None, fuzzy_result
+
+    return None, "Not found in catalog", None
+
+
+def _cache_song_metadata(song: dict) -> None:
+    """Cache song metadata for later ID lookups."""
+    attrs = song.get("attributes", {})
+    catalog_id = song.get("id", "")
+    song_name = attrs.get("name", "")
+
+    if catalog_id and song_name:
+        cache = get_track_cache()
+        cache.set_track_metadata(
+            explicit="Yes" if attrs.get("contentRating") == "explicit" else "No",
+            catalog_id=catalog_id,
+            isrc=attrs.get("isrc") or None,
+            name=song_name,
+            artist=attrs.get("artistName", ""),
+            album=attrs.get("albumName", ""),
+        )
 
 
 def _search_catalog_songs(query: str, limit: int = 5) -> list[dict]:
@@ -1175,6 +1235,87 @@ def _search_catalog_songs(query: str, limit: int = 5) -> list[dict]:
     except Exception:
         pass
     return []
+
+
+def _search_catalog_albums(query: str, limit: int = 5) -> list[dict]:
+    """Search catalog for albums and return raw album data.
+
+    Args:
+        query: Search term
+        limit: Max results (default 5)
+
+    Returns:
+        List of album dicts with 'id', 'attributes' (name, artistName, etc.)
+        Empty list on error.
+    """
+    try:
+        headers = get_headers()
+        response = requests.get(
+            f"{BASE_URL}/catalog/{get_storefront()}/search",
+            headers=headers,
+            params={"term": query, "types": "albums", "limit": min(limit, 25)},
+            timeout=REQUEST_TIMEOUT,
+        )
+        if response.status_code == 200:
+            data = response.json()
+            return data.get("results", {}).get("albums", {}).get("data", [])
+    except Exception:
+        pass
+    return []
+
+
+def _find_matching_catalog_album(
+    name: str, artist: str = ""
+) -> tuple[dict | None, str | None, FuzzyMatchResult | None]:
+    """Search catalog and find an album matching name and optional artist.
+
+    Uses _fuzzy_match_entity for 3-pass matching:
+    1. Exact match (case-insensitive) on name, with artist filter
+    2. Partial match (name in album_name), with artist filter
+    3. Fuzzy match on name only (relaxes artist constraint)
+
+    Args:
+        name: Album name to search for
+        artist: Artist name (optional, for filtering)
+
+    Returns:
+        Tuple of (album_dict, error_message, fuzzy_match_result)
+        - On success: (album dict, None, fuzzy_result or None)
+        - On not found: (None, "Not found in catalog", None)
+    """
+    search_term = f"{name} {artist}".strip() if artist else name
+    albums = _search_catalog_albums(search_term, limit=5)
+
+    if not albums:
+        return None, "Not found in catalog", None
+
+    # Filter by artist first if provided
+    def artist_matches(album: dict) -> bool:
+        if not artist:
+            return True
+        album_artist = album.get("attributes", {}).get("artistName", "")
+        return artist.lower() in album_artist.lower()
+
+    # Candidates that match artist filter
+    artist_filtered = [a for a in albums if artist_matches(a)]
+
+    # Use generic fuzzy matching on name
+    def album_name_extractor(album: dict) -> str:
+        return album.get("attributes", {}).get("name", "")
+
+    # Try fuzzy match on artist-filtered albums first
+    if artist_filtered:
+        matched, fuzzy_result = _fuzzy_match_entity(name, artist_filtered, album_name_extractor)
+        if matched:
+            return matched, None, fuzzy_result
+
+    # If no match with artist filter, try without (relaxed matching)
+    if artist and not artist_filtered:
+        matched, fuzzy_result = _fuzzy_match_entity(name, albums, album_name_extractor)
+        if matched:
+            return matched, None, fuzzy_result
+
+    return None, "Not found in catalog", None
 
 
 def _search_library_songs(query: str, limit: int = 5) -> list[dict]:
@@ -2827,7 +2968,7 @@ def add_to_library(
 
     # Helper to add a song by catalog search
     def _add_track_by_search(name: str, search_artist: str) -> None:
-        song, error = _find_matching_catalog_song(name, search_artist)
+        song, error, fuzzy_result = _find_matching_catalog_song(name, search_artist)
         if error:
             errors.append(f"{name}: {error}")
             return
@@ -2835,60 +2976,33 @@ def add_to_library(
         catalog_id = song.get("id")
         success, msg = _add_to_library_api([catalog_id], "songs")
         if success:
-            added.append(f"{attrs.get('name', name)} by {attrs.get('artistName', 'Unknown')}")
+            result_name = attrs.get('name', name)
+            result_artist = attrs.get('artistName', 'Unknown')
+            added_msg = f"{result_name} by {result_artist}"
+            if fuzzy_result:
+                added_msg += f" (fuzzy: '{fuzzy_result.query}' → '{fuzzy_result.matched_name}')"
+            added.append(added_msg)
         else:
             errors.append(f"{name}: {msg}")
 
     # Helper to add an album by catalog search
     def _add_album_by_search(name: str, search_artist: str) -> None:
-        try:
-            headers = get_headers()
-            query = f"{name} {search_artist}" if search_artist else name
-            response = requests.get(
-                f"{BASE_URL}/catalog/{get_storefront()}/search",
-                headers=headers,
-                params={"term": query, "types": "albums", "limit": 5},
-                timeout=REQUEST_TIMEOUT,
-            )
-            if response.status_code != 200:
-                errors.append(f"Album '{name}': API error {response.status_code}")
-                return
-            data = response.json()
-            albums = data.get("results", {}).get("albums", {}).get("data", [])
-            if not albums:
-                errors.append(f"Album '{name}': Not found in catalog")
-                return
-            # Find best match
-            for alb in albums:
-                attrs = alb.get("attributes", {})
-                if name.lower() in attrs.get("name", "").lower():
-                    if search_artist:
-                        if search_artist.lower() in attrs.get("artistName", "").lower():
-                            catalog_id = alb.get("id")
-                            success, msg = _add_to_library_api([catalog_id], "albums")
-                            if success:
-                                added.append(f"Album: {attrs.get('name')} by {attrs.get('artistName')}")
-                            else:
-                                errors.append(f"Album '{name}': {msg}")
-                            return
-                    else:
-                        catalog_id = alb.get("id")
-                        success, msg = _add_to_library_api([catalog_id], "albums")
-                        if success:
-                            added.append(f"Album: {attrs.get('name')} by {attrs.get('artistName')}")
-                        else:
-                            errors.append(f"Album '{name}': {msg}")
-                        return
-            # Use first result if no exact match
-            attrs = albums[0].get("attributes", {})
-            catalog_id = albums[0].get("id")
-            success, msg = _add_to_library_api([catalog_id], "albums")
-            if success:
-                added.append(f"Album: {attrs.get('name')} by {attrs.get('artistName')}")
-            else:
-                errors.append(f"Album '{name}': {msg}")
-        except Exception as e:
-            errors.append(f"Album '{name}': {e}")
+        album, error, fuzzy_result = _find_matching_catalog_album(name, search_artist)
+        if error:
+            errors.append(f"Album '{name}': {error}")
+            return
+        attrs = album.get("attributes", {})
+        catalog_id = album.get("id")
+        success, msg = _add_to_library_api([catalog_id], "albums")
+        if success:
+            result_name = attrs.get('name', name)
+            result_artist = attrs.get('artistName', 'Unknown')
+            added_msg = f"Album: {result_name} by {result_artist}"
+            if fuzzy_result:
+                added_msg += f" (fuzzy: '{fuzzy_result.query}' → '{fuzzy_result.matched_name}')"
+            added.append(added_msg)
+        else:
+            errors.append(f"Album '{name}': {msg}")
 
     # Process tracks
     if track:

@@ -59,15 +59,15 @@ class ResolvedPlaylist:
 #### Phase 2: Deduplication ✅
 - [x] Add deduplication to `search_catalog()` by track ID
 - [x] Add deduplication to `search_library()` by track ID (both AppleScript and API paths)
-- [ ] Test: `search_catalog("Für Elise Barenboim")` shows correct count (needs MCP restart)
+- [x] Test: `search_catalog("Für Elise Barenboim")` shows correct count ✅
 
-#### Phase 3: DRY Fuzzy Matching
-- [ ] Extract `fuzzy_match_entities(query, candidates, name_field)` generic function
-- [ ] Apply to playlists (replace inline code)
-- [ ] Create `ResolvedTrack`, `ResolvedArtist`, `ResolvedAlbum` dataclasses
-- [ ] Apply fuzzy matching to track resolution
-- [ ] Apply fuzzy matching to artist resolution
-- [ ] Apply fuzzy matching to album resolution
+#### Phase 3: DRY Fuzzy Matching ✅
+- [x] Extract `_fuzzy_match_entity(query, candidates, name_extractor)` generic function
+- [x] Apply to playlists (replace inline code in `_find_api_playlist_by_name`)
+- [x] Apply fuzzy matching to track resolution (`_find_matching_catalog_song`)
+- [x] Apply fuzzy matching to album resolution (`_find_matching_catalog_album`)
+- [DEFERRED] Create `ResolvedTrack`, `ResolvedArtist`, `ResolvedAlbum` dataclasses (not needed - using generic function instead)
+- [DEFERRED] Apply fuzzy matching to artist resolution (artists searched by API, not library)
 
 #### Phase 4: Reporting & Polish
 - [ ] Debug why `_format_fuzzy_match()` output not appearing
@@ -120,10 +120,10 @@ class ResolvedPlaylist:
 ### High Priority
 - [x] Search results show duplicates (wrong count in header) - **FIXED** (deduplication by track ID)
 - [ ] Fuzzy match transformations not visible in output (might be working - needs verification)
-- [ ] Fuzzy matching only works for playlists
+- [x] Fuzzy matching only works for playlists - **FIXED** (now applies to tracks and albums too)
 
 ### Medium Priority
-- [ ] No fuzzy matching for tracks/artists/albums
+- [x] No fuzzy matching for tracks/artists/albums - **FIXED** (tracks and albums now use `_fuzzy_match_entity`)
 - [DEFERRED] `_resolve_playlist()` doesn't fetch persistent ID (not blocking - can add later if needed)
 
 ### Fixed (Ready for Testing)
