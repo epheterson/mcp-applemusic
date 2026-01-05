@@ -1176,14 +1176,16 @@ def _find_matching_catalog_song(
         return song.get("attributes", {}).get("name", "")
 
     # Try fuzzy match on artist-filtered songs first
+    matched = None
+    fuzzy_result = None
     if artist_filtered:
         matched, fuzzy_result = _fuzzy_match_entity(name, artist_filtered, song_name_extractor)
         if matched:
             _cache_song_metadata(matched)
             return matched, None, fuzzy_result
 
-    # If no match with artist filter, try without (relaxed matching)
-    if artist and not artist_filtered:
+    # If no match with artist filter, try all songs (relaxed matching)
+    if artist and not matched:
         matched, fuzzy_result = _fuzzy_match_entity(name, songs, song_name_extractor)
         if matched:
             _cache_song_metadata(matched)
@@ -1304,13 +1306,15 @@ def _find_matching_catalog_album(
         return album.get("attributes", {}).get("name", "")
 
     # Try fuzzy match on artist-filtered albums first
+    matched = None
+    fuzzy_result = None
     if artist_filtered:
         matched, fuzzy_result = _fuzzy_match_entity(name, artist_filtered, album_name_extractor)
         if matched:
             return matched, None, fuzzy_result
 
-    # If no match with artist filter, try without (relaxed matching)
-    if artist and not artist_filtered:
+    # If no match with artist filter, try all albums (relaxed matching)
+    if artist and not matched:
         matched, fuzzy_result = _fuzzy_match_entity(name, albums, album_name_extractor)
         if matched:
             return matched, None, fuzzy_result
