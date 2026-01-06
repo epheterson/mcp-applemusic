@@ -1672,16 +1672,7 @@ def get_library_playlists(
     export: str = "none",
     full: bool = False,
 ) -> str:
-    """
-    Get all playlists from your Apple Music library.
-
-    Args:
-        format: "text" (default), "json", "csv", or "none" (export only)
-        export: "none" (default), "csv", or "json" to write file
-        full: Include all metadata in exports
-
-    Returns: Playlist listing in requested format
-    """
+    """Get all playlists from your Apple Music library."""
     playlist_data = []
 
     # Try AppleScript first (local, instant, no auth required)
@@ -1765,21 +1756,7 @@ def get_playlist_tracks(
     full: bool = False,
     fetch_explicit: Optional[bool] = None,
 ) -> str:
-    """
-    Get tracks in a playlist.
-
-    Args:
-        playlist: Playlist ID (p.XXX) or name (auto-detected)
-        filter: Filter by name/artist (case-insensitive)
-        limit: Max tracks (default: all)
-        offset: Skip first N tracks (for pagination)
-        format: "text", "json", "csv", or "none"
-        export: "none", "csv", or "json" to write file
-        full: Include all metadata in exports
-        fetch_explicit: Fetch explicit status via API (default: user preference)
-
-    Returns: Track listing in requested format
-    """
+    """Get tracks in a playlist by ID (p.XXX) or name. Supports filter, pagination, export."""
     start_time = time.time()
     query_stats = {"cache_hits": 0, "cache_misses": 0, "api_calls": 0}
 
@@ -2126,15 +2103,7 @@ def search_playlist(
     query: str,
     playlist: str = "",
 ) -> str:
-    """
-    Search for tracks in a playlist by name, artist, or album.
-
-    Args:
-        query: Search term (matches name, artist, album, etc.)
-        playlist: Playlist ID (p.XXX) or name
-
-    Returns: List of matching tracks or "No matches"
-    """
+    """Search for tracks in a playlist by name, artist, or album."""
     # Resolve playlist parameter
     resolved: ResolvedPlaylist = _resolve_playlist(playlist)
     if resolved.error:
@@ -2259,15 +2228,7 @@ def _find_track_in_list(
 
 @mcp.tool()
 def create_playlist(name: str, description: str = "") -> str:
-    """
-    Create a new playlist in your Apple Music library.
-
-    Args:
-        name: Name for the new playlist
-        description: Optional description
-
-    Returns: The new playlist ID
-    """
+    """Create a new playlist in your Apple Music library."""
     # Try AppleScript first (local, instant, no auth required)
     if APPLESCRIPT_AVAILABLE:
         success, result = asc.create_playlist(name, description)
@@ -2315,22 +2276,7 @@ def add_to_playlist(
     verify: bool = True,
     auto_search: Optional[bool] = None,
 ) -> str:
-    """
-    Add songs or entire albums to a playlist.
-
-    Handles catalog songs (adds to library first), checks duplicates, verifies success.
-
-    Args:
-        playlist: Playlist ID (p.XXX) or name
-        track: Catalog ID, library ID (i.XXX), name, CSV, or JSON array (auto-detected)
-        album: Album catalog ID, name, or JSON array - adds all tracks
-        artist: Artist name (improves matching accuracy)
-        allow_duplicates: Skip tracks already in playlist (default: False)
-        verify: Confirm track was added (default: True)
-        auto_search: Search catalog if not in library (default: user preference)
-
-    Returns: Result with success/failure details
-    """
+    """Add tracks or albums to a playlist. Auto-detects IDs vs names, handles catalog→library."""
     steps = []  # Track what we did for verbose output
 
     if not playlist.strip():
@@ -2761,16 +2707,7 @@ def copy_playlist(
     source: str = "",
     new_name: str = ""
 ) -> str:
-    """
-    Copy a playlist to a new API-editable playlist.
-    Use this to make an editable copy of a read-only playlist.
-
-    Args:
-        source: Source playlist ID (p.XXX) or name
-        new_name: Name for the new playlist
-
-    Returns: New playlist ID or error
-    """
+    """Copy a playlist to a new editable playlist."""
     # Validate inputs
     if not new_name:
         return "Error: new_name is required"
@@ -2905,25 +2842,7 @@ def search_library(
     fetch_explicit: Optional[bool] = None,
     clean_only: Optional[bool] = None,
 ) -> str:
-    """
-    Search your personal Apple Music library.
-
-    On macOS, uses AppleScript for fast local search. Falls back to API elsewhere.
-
-    Args:
-        query: Search term
-        types: Type of search - songs, artists, albums, or all (macOS only)
-        limit: Max results (default 25, up to 100 on macOS)
-        format: "text" (default), "json", "csv", or "none" (export only)
-        export: "none" (default), "csv", or "json" to write file
-        full: Include all metadata in exports (artwork, track numbers, etc.)
-        fetch_explicit: If True, fetch explicit status via API (uses cache for speed).
-                       Uses user preference from config if not specified.
-        clean_only: If True, filter out explicit content.
-                   Uses user preference from config if not specified.
-
-    Returns: Library items with IDs (library IDs can be added to playlists)
-    """
+    """Search your personal Apple Music library. Returns library IDs for playlist operations."""
     # Apply user preferences
     prefs = get_user_preferences()
     if fetch_explicit is None:
@@ -2998,16 +2917,7 @@ def add_to_library(
     album: str = "",
     artist: str = "",
 ) -> str:
-    """
-    Add content from the Apple Music catalog to your library.
-
-    Args:
-        track: Catalog ID, name, CSV, or JSON array (auto-detected)
-        album: Album catalog ID, name, or JSON array
-        artist: Artist name (improves matching accuracy)
-
-    Returns: Confirmation with what was added
-    """
+    """Add tracks or albums from the Apple Music catalog to your library."""
     added = []
     errors = []
 
@@ -3124,17 +3034,7 @@ def get_recently_played(
     export: str = "none",
     full: bool = False,
 ) -> str:
-    """
-    Get recently played tracks from your Apple Music history.
-
-    Args:
-        limit: Number of tracks to return (default 30, max 50)
-        format: "text" (default), "json", "csv", or "none" (export only)
-        export: "none" (default), "csv", or "json" to write file
-        full: Include all metadata in exports
-
-    Returns: Recently played tracks in requested format
-    """
+    """Get recently played tracks from your Apple Music history."""
     try:
         headers = get_headers()
         all_tracks = []
@@ -3181,23 +3081,7 @@ def search_catalog(
     full: bool = False,
     clean_only: Optional[bool] = None,
 ) -> str:
-    """
-    Search the Apple Music catalog.
-
-    Args:
-        query: Search term (leave empty with types="music-videos" for featured videos)
-        types: Comma-separated types (songs, albums, artists, playlists, music-videos)
-        limit: Max results per type (default 15)
-        format: "text" (default), "json", "csv", or "none" (export only)
-        export: "none" (default), "csv", or "json" to write file (songs only)
-        full: Include all metadata in exports
-        clean_only: If True, filter out explicit content (songs only).
-                   Uses user preference from config if not specified.
-
-    To set default: config(action="set-pref", preference="clean_only", value=True)
-
-    Returns: Search results with catalog IDs (use add_to_library to add songs)
-    """
+    """Search the Apple Music catalog. Returns catalog IDs for add_to_library."""
     # Apply user preferences
     if clean_only is None:
         prefs = get_user_preferences()
@@ -3335,20 +3219,7 @@ def get_album_tracks(
     export: str = "none",
     full: bool = False,
 ) -> str:
-    """
-    Get all tracks from an album.
-
-    Args:
-        album: Catalog ID, library ID (l.XXX), or name (auto-detected)
-        artist: Artist name (improves matching for name lookups)
-        limit: Max tracks (default: all)
-        offset: Skip first N tracks (for pagination)
-        format: "text", "json", "csv", or "none"
-        export: "none", "csv", or "json" to write file
-        full: Include all metadata in exports
-
-    Returns: Track listing in requested format
-    """
+    """Get all tracks from an album by catalog ID, library ID, or name."""
     if not album:
         return "Error: Provide album parameter"
 
@@ -3460,23 +3331,7 @@ def browse_library(
     fetch_explicit: Optional[bool] = None,
     clean_only: Optional[bool] = None,
 ) -> str:
-    """
-    Browse your Apple Music library by type.
-
-    Args:
-        item_type: What to browse - songs, albums, artists, or videos
-        limit: Max items (default 100). Omit or set higher to retrieve more.
-        offset: Skip first N items (for pagination)
-        format: "text" (default), "json", "csv", or "none" (export only)
-        export: "none" (default), "csv", or "json" to write file
-        full: Include all metadata in exports
-        fetch_explicit: If True, fetch explicit status via API (uses cache for speed).
-                       Uses user preference from config if not specified. Songs only.
-        clean_only: If True, filter out explicit content.
-                   Uses user preference from config if not specified. Songs only.
-
-    Returns: Item listing in requested format
-    """
+    """Browse your Apple Music library by type: songs, albums, artists, or videos."""
     item_type = item_type.lower().strip()
 
     # Apply user preferences (only relevant for songs)
@@ -3622,16 +3477,7 @@ def get_recommendations(
     export: str = "none",
     full: bool = False,
 ) -> str:
-    """
-    Get personalized music recommendations based on your listening history.
-
-    Args:
-        format: "text" (default), "json", "csv", or "none" (export only)
-        export: "none" (default), "csv", or "json" to write file
-        full: Include all metadata in exports
-
-    Returns: Recommendations in requested format
-    """
+    """Get personalized music recommendations based on your listening history."""
     try:
         headers = get_headers()
         response = requests.get(
@@ -3675,16 +3521,7 @@ def get_heavy_rotation(
     export: str = "none",
     full: bool = False,
 ) -> str:
-    """
-    Get your heavy rotation - content you've been playing frequently.
-
-    Args:
-        format: "text" (default), "json", "csv", or "none" (export only)
-        export: "none" (default), "csv", or "json" to write file
-        full: Include all metadata in exports
-
-    Returns: Heavy rotation items in requested format
-    """
+    """Get your heavy rotation - content you've been playing frequently."""
     try:
         headers = get_headers()
         response = requests.get(
@@ -3732,17 +3569,7 @@ def get_recently_added(
     export: str = "none",
     full: bool = False,
 ) -> str:
-    """
-    Get content recently added to your library.
-
-    Args:
-        limit: Number of items to return (default 50)
-        format: "text" (default), "json", "csv", or "none" (export only)
-        export: "none" (default), "csv", or "json" to write file
-        full: Include all metadata in exports
-
-    Returns: Recently added items in requested format
-    """
+    """Get content recently added to your library."""
     try:
         headers = get_headers()
         all_items = []
@@ -3800,14 +3627,7 @@ def get_recently_added(
 
 @mcp.tool()
 def get_artist_top_songs(artist: str) -> str:
-    """
-    Get an artist's top/most popular songs.
-
-    Args:
-        artist: Artist name or catalog ID
-
-    Returns: Artist's top songs with catalog IDs
-    """
+    """Get an artist's top/most popular songs by name or catalog ID."""
     if not artist:
         return "Error: Provide artist parameter"
 
@@ -3873,14 +3693,7 @@ def get_artist_top_songs(artist: str) -> str:
 
 @mcp.tool()
 def get_similar_artists(artist: str) -> str:
-    """
-    Get artists similar to a given artist.
-
-    Args:
-        artist: Artist name or catalog ID
-
-    Returns: List of similar artists
-    """
+    """Get artists similar to a given artist by name or catalog ID."""
     if not artist:
         return "Error: Provide artist parameter"
 
@@ -3946,14 +3759,7 @@ def get_similar_artists(artist: str) -> str:
 
 @mcp.tool()
 def get_song_station(song_id: str) -> str:
-    """
-    Get the radio station based on a song. Great for discovering similar music.
-
-    Args:
-        song_id: Catalog song ID (from search_catalog)
-
-    Returns: Station info that you can reference when asking for similar music
-    """
+    """Get the radio station based on a song for discovering similar music."""
     try:
         headers = get_headers()
 
@@ -3992,19 +3798,7 @@ def rating(
     artist: str = "",
     stars: int = 0,
 ) -> str:
-    """
-    Rate tracks: love, dislike, get stars, or set stars.
-
-    Args:
-        action: "love", "dislike", "get", or "set"
-        track: Catalog ID or name (auto-detected)
-        artist: Artist name (improves matching for name lookups)
-        stars: 0-5 stars (for "set" action only)
-
-    Note: get/set require macOS. love/dislike work cross-platform.
-
-    Returns: Rating info or confirmation
-    """
+    """Rate tracks. Actions: love, dislike, get, set. get/set require macOS."""
     action = action.lower().strip()
 
     if not track:
@@ -4135,14 +3929,7 @@ def rating(
 
 @mcp.tool()
 def get_song_details(song_id: str) -> str:
-    """
-    Get detailed information about a song from the catalog.
-
-    Args:
-        song_id: Catalog song ID
-
-    Returns: Song details including album, duration, genre, etc.
-    """
+    """Get detailed info about a catalog song: album, duration, genre, ISRC, etc."""
     try:
         headers = get_headers()
         response = requests.get(
@@ -4180,14 +3967,7 @@ def get_song_details(song_id: str) -> str:
 
 @mcp.tool()
 def get_artist_details(artist: str) -> str:
-    """
-    Get detailed information about an artist.
-
-    Args:
-        artist: Artist name or catalog ID
-
-    Returns: Artist details including genres and albums
-    """
+    """Get detailed info about an artist: genres, recent albums."""
     if not artist:
         return "Error: Provide artist parameter"
 
@@ -4264,14 +4044,7 @@ def get_artist_details(artist: str) -> str:
 
 @mcp.tool()
 def get_charts(chart_type: str = "songs") -> str:
-    """
-    Get Apple Music charts (top songs, albums, etc.).
-
-    Args:
-        chart_type: Type of chart - 'songs', 'albums', 'music-videos', or 'playlists'
-
-    Returns: Current chart listings
-    """
+    """Get Apple Music charts. Types: songs, albums, music-videos, playlists."""
     try:
         headers = get_headers()
         response = requests.get(
@@ -4310,11 +4083,7 @@ def get_charts(chart_type: str = "songs") -> str:
 
 @mcp.tool()
 def get_genres() -> str:
-    """
-    Get all available music genres in the Apple Music catalog.
-
-    Returns: List of genres with their IDs
-    """
+    """Get all available music genres in the Apple Music catalog."""
     try:
         headers = get_headers()
         response = requests.get(
@@ -4343,15 +4112,7 @@ def get_genres() -> str:
 
 @mcp.tool()
 def get_search_suggestions(term: str) -> str:
-    """
-    Get autocomplete/typeahead suggestions for a search term.
-    Useful for building search interfaces or getting quick results.
-
-    Args:
-        term: Partial search term (e.g., "tay" for Taylor Swift)
-
-    Returns: List of suggested search terms
-    """
+    """Get autocomplete suggestions for a partial search term."""
     try:
         headers = get_headers()
         response = requests.get(
@@ -4381,12 +4142,7 @@ def get_search_suggestions(term: str) -> str:
 
 @mcp.tool()
 def get_personal_station() -> str:
-    """
-    Get your personal Apple Music radio station.
-    This is a station curated based on your listening history.
-
-    Returns: Personal station info
-    """
+    """Get your personal Apple Music radio station based on listening history."""
     try:
         headers = get_headers()
         response = requests.get(
@@ -4435,19 +4191,7 @@ def config(
     string_value: str = "",
     limit: int = 20,
 ) -> str:
-    """
-    Configuration, preferences, cache management, and audit log.
-
-    Args:
-        action: One of: info, set-pref, list-storefronts, audit-log, clear-tracks, clear-exports, clear-audit-log
-        days_old: When clearing exports, only delete files older than this (0 = all)
-        preference: For set-pref: fetch_explicit, reveal_on_library_miss, clean_only, auto_search, or storefront
-        value: For set-pref (bool prefs): true or false
-        string_value: For set-pref (string prefs like storefront): e.g., "us", "gb", "de"
-        limit: For audit-log: max entries to show (default 20)
-
-    Returns: Config info, preference update, or cache deletion summary
-    """
+    """Config and cache management. Actions: info, set-pref, list-storefronts, audit-log, clear-tracks, clear-exports, clear-audit-log."""
     try:
         action = action.lower()
 
@@ -4675,96 +4419,6 @@ def config(
         return f"Error: {str(e)}"
 
 
-@mcp.tool()
-def test_output_size(target_chars: int = 50000) -> str:
-    """
-    Diagnostic tool to test MCP response size limits using real library data.
-
-    Fetches tracks from multiple playlists to build unique (non-repeating) content
-    until hitting the target character count. Use this to find where output gets
-    truncated by checking if the END marker is visible.
-
-    Args:
-        target_chars: Target character count to test (default 50000)
-
-    Returns: Real track data from your library, with markers to detect truncation
-    """
-    try:
-        headers = get_headers()
-
-        # Fetch all playlists
-        response = requests.get(
-            f"{BASE_URL}/me/library/playlists",
-            headers=headers,
-            params={"limit": 100},
-            timeout=REQUEST_TIMEOUT,
-        )
-        response.raise_for_status()
-        playlists = response.json().get("data", [])
-
-        if not playlists:
-            return "No playlists found in library"
-
-        # Build output by fetching tracks from different playlists
-        header = f"=== SIZE TEST: {target_chars:,} chars target ===\n"
-        header += f"=== Found {len(playlists)} playlists to draw from ===\n\n"
-
-        content = header
-        playlists_used = 0
-        total_tracks = 0
-
-        for playlist in playlists:
-            if len(content) >= target_chars:
-                break
-
-            playlist_id = playlist.get("id", "")
-            playlist_name = playlist.get("attributes", {}).get("name", "Unknown")
-
-            # Fetch this playlist's tracks
-            try:
-                track_response = requests.get(
-                    f"{BASE_URL}/me/library/playlists/{playlist_id}/tracks",
-                    headers=headers,
-                    params={"limit": 100},
-                    timeout=REQUEST_TIMEOUT,
-                )
-                track_response.raise_for_status()
-                tracks = track_response.json().get("data", [])
-            except requests.exceptions.RequestException:
-                continue  # Skip playlists that fail
-
-            if not tracks:
-                continue
-
-            # Format and add this playlist's tracks
-            playlist_header = f"--- {playlist_name} ({len(tracks)} tracks, char {len(content):,}) ---\n"
-            content += playlist_header
-
-            for t in tracks:
-                if len(content) >= target_chars:
-                    break
-                data = extract_track_data(t, include_extras=False)
-                line = _format_full(data)
-                content += line + "\n"
-                total_tracks += 1
-
-            content += "\n"
-            playlists_used += 1
-
-        # If we still haven't hit target, note it
-        if len(content) < target_chars:
-            content += f"\n(Exhausted all {len(playlists)} playlists at {len(content):,} chars)\n"
-
-        footer = f"\n\n=== END: {len(content):,} chars, {playlists_used} playlists, {total_tracks} tracks ==="
-
-        return content + footer
-
-    except requests.exceptions.RequestException as e:
-        return f"API Error: {str(e)}"
-    except (FileNotFoundError, ValueError) as e:
-        return str(e)
-
-
 # ============ STATUS ============
 
 
@@ -4843,24 +4497,7 @@ if APPLESCRIPT_AVAILABLE:
         reveal: Optional[bool] = None,
         add_to_library: bool = False,
     ) -> str:
-        """Play a track, playlist, or album (macOS only).
-
-        Provide ONE of: track, playlist, or album.
-
-        Args:
-            track: Track name or catalog ID (auto-detected)
-            playlist: Playlist name to play
-            album: Album name (starts playing first track; Music app continues with album)
-            artist: Artist name to disambiguate tracks/albums
-            shuffle: Shuffle playlist or album (default False)
-            reveal: Open in Music app when not in library (you click play).
-                   Uses user preference from config if not specified.
-            add_to_library: Add catalog item to library first, then auto-play
-
-        Response shows source: [Library], [Catalog], or [Catalog→Library].
-
-        Returns: Status message
-        """
+        """Play a track, playlist, or album (macOS). Provide ONE of track/playlist/album."""
         # Count how many targets provided
         targets = sum(1 for t in [track, playlist, album] if t)
         if targets == 0:
@@ -5113,14 +4750,7 @@ if APPLESCRIPT_AVAILABLE:
 
     @mcp.tool()
     def playback_control(action: str, seconds: float = 0) -> str:
-        """Control playback: play, pause, stop, next, previous, seek (macOS only).
-
-        Args:
-            action: One of: play, pause, playpause, stop, next, previous, seek
-            seconds: For seek action, position in seconds from track start
-
-        Returns: Confirmation message or error
-        """
+        """Control playback (macOS). Actions: play, pause, playpause, stop, next, previous, seek."""
         action = action.lower().strip()
 
         # Handle seek separately since it takes a parameter
@@ -5148,10 +4778,7 @@ if APPLESCRIPT_AVAILABLE:
 
     @mcp.tool()
     def get_now_playing() -> str:
-        """Get info about the currently playing track and player state (macOS only).
-
-        Returns: Player state and track info (name, artist, album, position)
-        """
+        """Get currently playing track and player state (macOS)."""
         success, info = asc.get_current_track()
         if not success:
             return f"Error: {info}"
@@ -5188,17 +4815,7 @@ if APPLESCRIPT_AVAILABLE:
         shuffle: str = "",
         repeat: str = "",
     ) -> str:
-        """Get or set playback settings (macOS only).
-
-        With no args, returns current settings. Provide any arg to change it.
-
-        Args:
-            volume: 0-100 (-1 to leave unchanged)
-            shuffle: "on" or "off" (empty to leave unchanged)
-            repeat: "off", "one", or "all" (empty to leave unchanged)
-
-        Returns: Current/updated settings or confirmation
-        """
+        """Get or set playback settings (macOS): volume, shuffle, repeat."""
         changes = []
 
         # Apply any changes
@@ -5244,18 +4861,7 @@ if APPLESCRIPT_AVAILABLE:
         track: str = "",
         artist: str = "",
     ) -> str:
-        """Remove track(s) from a playlist (macOS only).
-
-        Args:
-            playlist: Playlist name (playlist IDs not supported)
-            track: Track(s) - name, ID, CSV, or JSON array
-            artist: Artist name (helps with matching)
-
-        Note: Removes from playlist only, not from library. Catalog/library IDs
-        work if the track was previously cached (e.g., from search results).
-
-        Returns: Confirmation message or error
-        """
+        """Remove track(s) from a playlist (macOS). Removes from playlist only, not library."""
         # Resolve playlist (name-based only for removal)
         resolved = _resolve_playlist(playlist)
         if resolved.error:
@@ -5357,16 +4963,7 @@ if APPLESCRIPT_AVAILABLE:
         track: str = "",
         artist: str = "",
     ) -> str:
-        """Remove track(s) from your library entirely (macOS only).
-
-        Args:
-            track: Track(s) - name, ID, CSV, or JSON array
-            artist: Artist name (helps with matching)
-
-        Warning: PERMANENTLY deletes tracks. Catalog/library IDs work if cached.
-
-        Returns: Confirmation message or error
-        """
+        """Remove track(s) from your library entirely (macOS). PERMANENT deletion."""
         if not track:
             return "Error: Provide track parameter"
 
@@ -5448,15 +5045,7 @@ if APPLESCRIPT_AVAILABLE:
 
     @mcp.tool()
     def delete_playlist(playlist_name: str) -> str:
-        """Delete a playlist entirely (macOS only).
-
-        Warning: This permanently deletes the playlist. It cannot be undone.
-
-        Args:
-            playlist_name: Name of the playlist to delete
-
-        Returns: Confirmation message or error
-        """
+        """Delete a playlist entirely (macOS). PERMANENT, cannot be undone."""
         # Get track count before deletion for audit log
         track_count = 0
         track_names = []
@@ -5478,16 +5067,7 @@ if APPLESCRIPT_AVAILABLE:
 
     @mcp.tool()
     def reveal_in_music(track_name: str, artist: str = "") -> str:
-        """Reveal a track in the Music app window (macOS only).
-
-        Opens Music app and navigates to show the track.
-
-        Args:
-            track_name: Name of the track (can be partial match)
-            artist: Optional artist name to disambiguate
-
-        Returns: Confirmation message or error
-        """
+        """Reveal a track in the Music app window (macOS)."""
         success, result = asc.reveal_track(track_name, artist if artist else None)
         if success:
             return result
@@ -5495,13 +5075,7 @@ if APPLESCRIPT_AVAILABLE:
 
     @mcp.tool()
     def airplay(device_name: str = "") -> str:
-        """List or switch AirPlay devices (macOS only).
-
-        Args:
-            device_name: Device to switch to (partial match OK). Omit to list devices.
-
-        Returns: Device list or switch confirmation
-        """
+        """List or switch AirPlay devices (macOS). Omit device_name to list."""
         if device_name:
             success, result = asc.set_airplay_device(device_name)
             if success:
