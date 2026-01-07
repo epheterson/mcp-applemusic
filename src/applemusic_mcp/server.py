@@ -3410,6 +3410,113 @@ def _catalog_album_tracks(
         return str(e)
 
 
+def _catalog_album_details(
+    album: str = "",
+    artist: str = "",
+    format: str = "text",
+    export: str = "none",
+    full: bool = False,
+) -> str:
+    """Internal: Get complete album details including metadata and tracks."""
+    if not album:
+        return "Error: Provide album parameter"
+
+    # Resolve album input
+    resolved = _resolve_album(album, artist)
+    if not resolved:
+        return "Error: Could not resolve album"
+
+    r = resolved[0]  # Only use first resolved album
+    if r.error:
+        return f"Error: {r.error}"
+
+    album_id = None
+
+    if r.input_type == InputType.CATALOG_ID:
+        album_id = r.value
+    elif r.input_type == InputType.ALBUM_ID:
+        album_id = r.value
+    elif r.input_type == InputType.NAME:
+        # Search for album by name using fuzzy matching
+        album_match, error, fuzzy_result = _find_matching_catalog_album(r.value, r.artist)
+        if error:
+            return f"Album not found: {r.value}"
+        album_id = album_match.get("id")
+    else:
+        return f"Unsupported input type for album lookup"
+
+    try:
+        headers = get_headers()
+
+        # Fetch album metadata
+        album_url = f"{BASE_URL}/catalog/{get_storefront()}/albums/{album_id}"
+        album_response = requests.get(
+            album_url,
+            headers=headers,
+            timeout=REQUEST_TIMEOUT,
+        )
+        album_response.raise_for_status()
+        album_data = album_response.json().get("data", [])
+
+        if not album_data:
+            return "Album not found"
+
+        album_obj = album_data[0]
+        attrs = album_obj.get("attributes", {})
+
+        # Build metadata output
+        output_lines = [
+            f"=== {attrs.get('name', 'Unknown Album')} ===",
+            f"Artist: {attrs.get('artistName', 'Unknown')}",
+            f"Release Date: {attrs.get('releaseDate', 'Unknown')}",
+            f"Genre: {attrs.get('genreNames', ['Unknown'])[0] if attrs.get('genreNames') else 'Unknown'}",
+            f"Label: {attrs.get('recordLabel', 'Unknown')}",
+            f"Track Count: {attrs.get('trackCount', 0)}",
+            f"Copyright: {attrs.get('copyright', 'Unknown')}",
+            f"Album ID: {album_id}",
+            "",
+            "=== Tracks ===",
+        ]
+
+        # Fetch all tracks
+        tracks_url = f"{BASE_URL}/catalog/{get_storefront()}/albums/{album_id}/tracks"
+        all_tracks = []
+        api_offset = 0
+
+        while True:
+            response = requests.get(
+                tracks_url,
+                headers=headers,
+                params={"limit": 100, "offset": api_offset},
+                timeout=REQUEST_TIMEOUT,
+            )
+            if response.status_code == 404:
+                break
+            response.raise_for_status()
+            tracks = response.json().get("data", [])
+            if not tracks:
+                break
+            all_tracks.extend(tracks)
+            if len(tracks) < 100:
+                break
+            api_offset += 100
+
+        # Format tracks
+        for i, track in enumerate(all_tracks, 1):
+            track_attrs = track.get("attributes", {})
+            track_name = track_attrs.get("name", "Unknown")
+            duration_ms = track_attrs.get("durationInMillis", 0)
+            duration = f"{duration_ms // 60000}:{(duration_ms % 60000) // 1000:02d}"
+            output_lines.append(f"{i}. {track_name} ({duration})")
+
+        return "\n".join(output_lines)
+
+    except requests.exceptions.RequestException as e:
+        return f"API Error: {str(e)}"
+    except (FileNotFoundError, ValueError) as e:
+        return str(e)
+
+
 # ============ LIBRARY BROWSING ============
 
 
@@ -3563,7 +3670,7 @@ def _library_browse(
 # ============ DISCOVERY & PERSONALIZATION ============
 
 
-def _discover_recommendations(format: str, export: str, full: bool) -> str:
+def _discover_recommendations(limit: int, format: str, export: str, full: bool) -> str:
     """Internal: Get personalized recommendations."""
     try:
         headers = get_headers()
@@ -3593,6 +3700,10 @@ def _discover_recommendations(format: str, export: str, full: bool) -> str:
                     "id": item.get("id"),
                     "year": item_attrs.get("releaseDate", "")[:4],
                 })
+
+        # Apply user's limit to final results
+        if limit > 0:
+            all_items = all_items[:limit]
 
         return format_output(all_items, format, export, full, "recommendations")
 
@@ -3746,48 +3857,53 @@ def discover(
     format: str = "text",
     export: str = "none",
     full: bool = False,
+    storefront: str = "",
 ) -> str:
     """Personalized discovery. Actions: recommendations, heavy_rotation, personal_station, charts, top_songs, similar_artists, song_station."""
     action = action.lower().strip().replace("-", "_")
 
+    # Determine storefront to use (parameter overrides default)
+    sf = storefront if storefront else get_storefront()
+
     if action == "recommendations":
-        return _discover_recommendations(format, export, full)
+        return _discover_recommendations(limit, format, export, full)
     elif action == "heavy_rotation":
         return _discover_heavy_rotation(format, export, full)
     elif action == "personal_station":
         return _discover_personal_station()
     elif action == "charts":
-        return _discover_charts(chart_type)
+        return _discover_charts(chart_type, sf)
     elif action == "top_songs":
         if not artist:
             return "Error: artist required for top_songs"
-        return _discover_top_songs(artist)
+        return _discover_top_songs(artist, sf)
     elif action == "similar_artists":
         if not artist:
             return "Error: artist required for similar_artists"
-        return _discover_similar_artists(artist)
+        return _discover_similar_artists(artist, sf)
     elif action == "song_station":
         if not song_id:
             return "Error: song_id required for song_station"
-        return _discover_song_station(song_id)
+        return _discover_song_station(song_id, sf)
     else:
         return f"Unknown action: {action}. Use: recommendations, heavy_rotation, personal_station, charts, top_songs, similar_artists, song_station"
 
 
-def _discover_top_songs(artist: str) -> str:
+def _discover_top_songs(artist: str, storefront: str = "") -> str:
     """Internal: Get artist's top songs."""
     if not artist:
         return "Error: Provide artist parameter"
 
     try:
         headers = get_headers()
+        sf = storefront if storefront else get_storefront()
 
         # Check if it's a catalog ID (all digits)
         if artist.isdigit():
             artist_id = artist
             # Look up artist name
             response = requests.get(
-                f"{BASE_URL}/catalog/{get_storefront()}/artists/{artist_id}",
+                f"{BASE_URL}/catalog/{sf}/artists/{artist_id}",
                 headers=headers,
                 timeout=REQUEST_TIMEOUT,
             )
@@ -3799,7 +3915,7 @@ def _discover_top_songs(artist: str) -> str:
         else:
             # Search for artist by name
             search_response = requests.get(
-                f"{BASE_URL}/catalog/{get_storefront()}/search",
+                f"{BASE_URL}/catalog/{sf}/search",
                 headers=headers,
                 params={"term": artist, "types": "artists", "limit": 1},
                 timeout=REQUEST_TIMEOUT,
@@ -3816,7 +3932,7 @@ def _discover_top_songs(artist: str) -> str:
 
         # Get top songs
         response = requests.get(
-            f"{BASE_URL}/catalog/{get_storefront()}/artists/{artist_id}/view/top-songs",
+            f"{BASE_URL}/catalog/{sf}/artists/{artist_id}/view/top-songs",
             headers=headers,
             timeout=REQUEST_TIMEOUT,
         )
@@ -3839,20 +3955,21 @@ def _discover_top_songs(artist: str) -> str:
         return str(e)
 
 
-def _discover_similar_artists(artist: str) -> str:
+def _discover_similar_artists(artist: str, storefront: str = "") -> str:
     """Internal: Get similar artists."""
     if not artist:
         return "Error: Provide artist parameter"
 
     try:
         headers = get_headers()
+        sf = storefront if storefront else get_storefront()
 
         # Check if it's a catalog ID (all digits)
         if artist.isdigit():
             artist_id = artist
             # Look up artist name
             response = requests.get(
-                f"{BASE_URL}/catalog/{get_storefront()}/artists/{artist_id}",
+                f"{BASE_URL}/catalog/{sf}/artists/{artist_id}",
                 headers=headers,
                 timeout=REQUEST_TIMEOUT,
             )
@@ -3864,7 +3981,7 @@ def _discover_similar_artists(artist: str) -> str:
         else:
             # Search for artist by name
             search_response = requests.get(
-                f"{BASE_URL}/catalog/{get_storefront()}/search",
+                f"{BASE_URL}/catalog/{sf}/search",
                 headers=headers,
                 params={"term": artist, "types": "artists", "limit": 1},
                 timeout=REQUEST_TIMEOUT,
@@ -3881,7 +3998,7 @@ def _discover_similar_artists(artist: str) -> str:
 
         # Get similar artists
         response = requests.get(
-            f"{BASE_URL}/catalog/{get_storefront()}/artists/{artist_id}/view/similar-artists",
+            f"{BASE_URL}/catalog/{sf}/artists/{artist_id}/view/similar-artists",
             headers=headers,
             timeout=REQUEST_TIMEOUT,
         )
@@ -3904,13 +4021,14 @@ def _discover_similar_artists(artist: str) -> str:
         return str(e)
 
 
-def _discover_song_station(song_id: str) -> str:
+def _discover_song_station(song_id: str, storefront: str = "") -> str:
     """Internal: Get song station."""
     try:
         headers = get_headers()
+        sf = storefront if storefront else get_storefront()
 
         response = requests.get(
-            f"{BASE_URL}/catalog/{get_storefront()}/songs/{song_id}/station",
+            f"{BASE_URL}/catalog/{sf}/songs/{song_id}/station",
             headers=headers,
             timeout=REQUEST_TIMEOUT,
         )
@@ -4185,12 +4303,13 @@ def _catalog_artist_details(artist: str) -> str:
         return str(e)
 
 
-def _discover_charts(chart_type: str = "songs") -> str:
+def _discover_charts(chart_type: str = "songs", storefront: str = "") -> str:
     """Internal: Get charts."""
     try:
         headers = get_headers()
+        sf = storefront if storefront else get_storefront()
         response = requests.get(
-            f"{BASE_URL}/catalog/{get_storefront()}/charts",
+            f"{BASE_URL}/catalog/{sf}/charts",
             headers=headers,
             params={"types": chart_type, "limit": 20},
             timeout=REQUEST_TIMEOUT,
@@ -4297,13 +4416,17 @@ def catalog(
     full: bool = False,
     clean_only: Optional[bool] = None,
 ) -> str:
-    """Apple Music catalog. Actions: search, album_tracks, song_details, artist_details, genres, suggestions."""
+    """Apple Music catalog. Actions: search, album_tracks, album_details, song_details, artist_details, genres, suggestions."""
     action = action.lower().strip().replace("-", "_")
 
     if action == "search":
         return _catalog_search(query, types, limit, format, export, full, clean_only)
     elif action == "album_tracks":
         return _catalog_album_tracks(album, artist, limit, offset, format, export, full)
+    elif action == "album_details":
+        if not album:
+            return "Error: album required for album_details"
+        return _catalog_album_details(album, artist, format, export, full)
     elif action == "song_details":
         if not song_id:
             return "Error: song_id required for song_details"
@@ -4319,7 +4442,7 @@ def catalog(
             return "Error: term required for suggestions"
         return _catalog_suggestions(term)
     else:
-        return f"Unknown action: {action}. Use: search, album_tracks, song_details, artist_details, genres, suggestions"
+        return f"Unknown action: {action}. Use: search, album_tracks, album_details, song_details, artist_details, genres, suggestions"
 
 
 # ============ SYSTEM MANAGEMENT ============

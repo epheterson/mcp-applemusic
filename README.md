@@ -210,6 +210,7 @@ Catalog search and details - search, albums, songs, artists, genres, stations
 |--------|-----------|-------------|----------|
 | `search` | `query`, `types`, `limit`, `format`, `export`, `full`, `clean_only` | Search Apple Music catalog | All |
 | `album_tracks` | `album`, `artist`, `limit`, `offset`, `format`, `export`, `full` | Get album tracks (by name or ID) | All |
+| `album_details` | `album`, `artist`, `format`, `export`, `full` | Full album metadata + track listing | All |
 | `song_details` | `song_id` | Full song metadata | All |
 | `artist_details` | `artist` | Artist info and discography | All |
 | `song_station` | `song_id` | Get radio station for song | All |
@@ -219,6 +220,7 @@ Catalog search and details - search, albums, songs, artists, genres, stations
 ```python
 catalog(action="search", query="90s alternative", types="songs", limit=50)
 catalog(action="album_tracks", album="Abbey Road", artist="Beatles")
+catalog(action="album_details", album="GNX", artist="Kendrick Lamar")
 catalog(action="artist_details", artist="The Beatles")
 ```
 
@@ -230,16 +232,18 @@ Discovery and recommendations - personalized stations, charts, top songs, simila
 | `recommendations` | `format`, `export`, `full` | Personalized recommendations | All |
 | `heavy_rotation` | `format`, `export`, `full` | Your frequently played | All |
 | `charts` | `chart_type`, `format`, `export`, `full` | Apple Music charts | All |
-| `artist_top_songs` | `artist` | Artist's popular songs | All |
+| `top_songs` | `artist` | Artist's popular songs | All |
 | `similar_artists` | `artist` | Find similar artists | All |
 | `search_suggestions` | `term` | Autocomplete suggestions | All |
 | `personal_station` | - | Your personal radio station | All |
 
+**Optional:** All catalog-based discover actions (`charts`, `top_songs`, `similar_artists`, `song_station`) accept an optional `storefront` parameter to query other regions without changing your default storefront.
+
 **Examples:**
 ```python
 discover(action="recommendations")
-discover(action="charts", chart_type="songs")
-discover(action="artist_top_songs", artist="The Beatles")
+discover(action="charts", chart_type="songs", storefront="it")  # Italy charts
+discover(action="top_songs", artist="The Beatles")
 ```
 
 ### Playback (macOS only)
@@ -259,7 +263,7 @@ discover(action="artist_top_songs", artist="The Beatles")
 | `config(action=...)` | Preferences, storefronts, cache, audit log | All |
 | `check_auth_status()` | Verify tokens and API connection | All |
 | `airplay(device_name=...)` | List or switch AirPlay devices | macOS |
-| `reveal_in_music(track_name, artist)` | Show track in Music app | macOS |
+| `reveal_in_music(track, artist)` | Show track in Music app | macOS |
 
 **Config actions:** `info`, `set-pref`, `list-storefronts`, `audit-log`, `clear-tracks`, `clear-exports`, `clear-audit-log`
 

@@ -5,6 +5,34 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0] - 2026-01-06
+
+### Added
+
+- **Storefront parameter for discover actions** - All catalog-based discover actions (`charts`, `top_songs`, `similar_artists`, `song_station`) now accept an optional `storefront` parameter to query other regions without modifying your default storefront setting. No more 3-step workflow for international queries!
+  ```python
+  discover(action="charts", chart_type="songs", storefront="it")  # Italy charts
+  ```
+
+- **Album details action** - New `catalog(action="album_details")` provides complete album information including metadata and full track listing in a single call. Eliminates the need for a 2-step workflow (search → get tracks).
+  ```python
+  catalog(action="album_details", album="GNX", artist="Kendrick Lamar")
+  # Returns: metadata (artist, release date, genre, label) + full track listing
+  ```
+
+### Fixed
+
+- **Recommendations limit parameter** - The `discover(action="recommendations", limit=N)` action now correctly respects the `limit` parameter. Previously returned all 77 items regardless of limit.
+
+- **README documentation errors**:
+  - Fixed action name: `artist_top_songs` → `top_songs`
+  - Fixed parameter name in `reveal_in_music`: `track_name` → `track`
+
+### Improved
+
+- Enhanced album resolution - All album lookup operations now use fuzzy matching for improved flexibility
+- Better album support - User can provide album name, ID, or any identifier; the system resolves to the optimal format for each operation
+
 ## [0.5.0] - 2026-01-06
 
 ### Breaking Changes
