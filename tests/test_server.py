@@ -100,7 +100,7 @@ class TestGetLibraryPlaylists:
             status=200,
         )
 
-        result = server.get_library_playlists()
+        result = server.playlist(action="list")
 
         assert "Test Playlist" in result
         assert "p.abc123" in result
@@ -130,7 +130,7 @@ class TestGetLibraryPlaylists:
             status=401,
         )
 
-        result = server.get_library_playlists()
+        result = server.playlist(action="list")
 
         assert "API Error" in result or "401" in result
 
@@ -160,7 +160,7 @@ class TestCreatePlaylist:
             status=201,
         )
 
-        result = server.create_playlist("My New Playlist", "A description")
+        result = server.playlist(action="create", name="My New Playlist", description="A description")
 
         assert "My New Playlist" in result
         assert "p.newplaylist123" in result
@@ -187,9 +187,7 @@ class TestAddToPlaylist:
             status=204,
         )
 
-        result = server.add_to_playlist(
-            playlist="p.test123", track="i.song1, i.song2, i.song3"
-        )
+        result = server.playlist(action="add", playlist="p.test123", track="i.song1, i.song2, i.song3")
 
         assert "Added" in result
         assert "3 track" in result
@@ -205,7 +203,7 @@ class TestAddToPlaylist:
         with open(user_token_file, "w") as f:
             json.dump({"music_user_token": mock_user_token}, f)
 
-        result = server.add_to_playlist(playlist="p.test123", track="")
+        result = server.playlist(action="add", playlist="p.test123", track="")
 
         assert "Provide track or album parameter" in result
 
@@ -250,7 +248,7 @@ class TestSearchLibrary:
             status=200,
         )
 
-        result = server.search_library("Wonderwall")
+        result = server.library(action="search", query="Wonderwall")
 
         assert "Wonderwall" in result
         assert "Oasis" in result
@@ -293,7 +291,7 @@ class TestSearchCatalog:
             status=200,
         )
 
-        result = server.search_catalog("Let It Be")
+        result = server.catalog(action="search", query="Let It Be")
 
         assert "Let It Be" in result
         assert "The Beatles" in result
@@ -305,7 +303,7 @@ class TestCheckAuthStatus:
 
     def test_reports_missing_tokens(self, mock_config_dir):
         """Should report missing tokens."""
-        result = server.check_auth_status()
+        result = server.config(action="auth-status")
 
         assert "MISSING" in result
         assert "Developer Token" in result
@@ -326,7 +324,7 @@ class TestCheckAuthStatus:
         with patch.object(server, "get_headers", return_value={}):
             with patch("requests.get") as mock_get:
                 mock_get.return_value.status_code = 200
-                result = server.check_auth_status()
+                result = server.config(action="auth-status")
 
         assert "OK" in result
         assert "Developer Token" in result
@@ -342,7 +340,7 @@ class TestCheckAuthStatus:
         with open(user_token_file, "w") as f:
             json.dump({"music_user_token": mock_user_token}, f)
 
-        result = server.check_auth_status()
+        result = server.config(action="auth-status")
 
         assert "EXPIRES IN" in result or "10" in result
 
@@ -692,7 +690,7 @@ class TestAddToLibraryTool:
 
     def test_returns_error_for_empty_input(self):
         """Should return error when no input provided."""
-        result = server.add_to_library()
+        result = server.library(action="add")
         assert "Error: Provide track or album parameter" in result
 
     @responses.activate
@@ -713,7 +711,7 @@ class TestAddToLibraryTool:
             status=202,
         )
 
-        result = server.add_to_library(track="1234567890, 9876543210")
+        result = server.library(action="add", track="1234567890, 9876543210")
         assert "Added" in result
         assert "2" in result
 
@@ -826,10 +824,7 @@ class TestPaginationWithFetchExplicit:
         with patch.object(server.asc, 'get_playlist_tracks', side_effect=mock_asc_get_tracks):
             with patch.object(server, 'get_track_cache', return_value=mock_cache):
                 # Call with playlist name and fetch_explicit=True
-                result = server.get_playlist_tracks(
-                    playlist="Test Playlist",
-                    fetch_explicit=True,
-                )
+                result = server.playlist(action="tracks", playlist="Test Playlist", fetch_explicit=True)
 
                 # Should use AppleScript
                 assert mock_applescript_called, "AppleScript should be called for fast native access"
@@ -891,10 +886,7 @@ class TestPaginationWithFetchExplicit:
         )
 
         # Call with playlist ID and limit=5
-        result = server.get_playlist_tracks(
-            playlist="p.test123",
-            limit=5,
-        )
+        result = server.playlist(action="tracks", playlist="p.test123", limit=5)
 
         # Should only make 1 API call, not multiple
         assert api_call_count == 1, f"Expected 1 API call, got {api_call_count}"
@@ -1359,7 +1351,7 @@ class TestUserJourneyAPIOnly:
             status=200,
         )
 
-        result = server.search_catalog("Hey Jude Beatles")
+        result = server.catalog(action="search", query="Hey Jude Beatles")
         assert "Hey Jude" in result
         assert "Beatles" in result
 
@@ -1376,7 +1368,7 @@ class TestUserJourneyAPIOnly:
             status=200,
         )
 
-        result = server.get_library_playlists()
+        result = server.playlist(action="list")
         assert "Favorites" in result
         assert "Workout Mix" in result
 
@@ -1399,7 +1391,7 @@ class TestUserJourneyAPIOnly:
             ]}}},
             status=200,
         )
-        result = server.search_catalog("Bohemian Rhapsody")
+        result = server.catalog(action="search", query="Bohemian Rhapsody")
         assert "Bohemian Rhapsody" in result
 
         # 2. List playlists
@@ -1411,7 +1403,7 @@ class TestUserJourneyAPIOnly:
             ]},
             status=200,
         )
-        result = server.get_library_playlists()
+        result = server.playlist(action="list")
         assert "Classic Rock" in result
 
         # 3. Get playlist tracks
@@ -1432,7 +1424,7 @@ class TestUserJourneyAPIOnly:
             ]},
             status=200,
         )
-        result = server.get_playlist_tracks("Classic Rock")
+        result = server.playlist(action="tracks", playlist="Classic Rock")
         assert "Stairway to Heaven" in result
 
         # 4. Search library
@@ -1445,7 +1437,7 @@ class TestUserJourneyAPIOnly:
             ]}}},
             status=200,
         )
-        result = server.search_library("Hotel California")
+        result = server.library(action="search", query="Hotel California")
         assert "Hotel California" in result
 
         # 5. Add track to playlist (via catalog search + add)
@@ -1485,7 +1477,7 @@ class TestUserJourneyAPIOnly:
             ]},
             status=200,
         )
-        result = server.add_to_playlist(playlist="Classic Rock", track="Dream On", artist="Aerosmith")
+        result = server.playlist(action="add", playlist="Classic Rock", track="Dream On", artist="Aerosmith")
         assert "Dream On" in result or "Added" in result or "error" not in result.lower()
 
     @responses.activate
@@ -1503,7 +1495,7 @@ class TestUserJourneyAPIOnly:
             json={"data": [{"id": "p.new123", "attributes": {"name": "My New Playlist"}}]},
             status=201,
         )
-        result = server.create_playlist("My New Playlist", "Created for testing")
+        result = server.playlist(action="create", name="My New Playlist", description="Created for testing")
         assert "p.new123" in result or "My New Playlist" in result
 
         # 7. Get recently played
@@ -1516,7 +1508,7 @@ class TestUserJourneyAPIOnly:
             ]},
             status=200,
         )
-        result = server.get_recently_played(limit=5)
+        result = server.library(action="recently_played", limit=5)
         assert "Yesterday" in result or "recent" in result.lower()
 
         # 8. Get recommendations
@@ -1528,7 +1520,7 @@ class TestUserJourneyAPIOnly:
             ]},
             status=200,
         )
-        result = server.get_recommendations()
+        result = server.discover(action="recommendations")
         # Just check it doesn't error
 
         # 9. Get heavy rotation
@@ -1540,7 +1532,7 @@ class TestUserJourneyAPIOnly:
             ]},
             status=200,
         )
-        result = server.get_heavy_rotation()
+        result = server.discover(action="heavy_rotation")
         assert "Abbey Road" in result or result  # Just check no error
 
         # 10. Get artist top songs
@@ -1561,7 +1553,7 @@ class TestUserJourneyAPIOnly:
             ]},
             status=200,
         )
-        result = server.get_artist_top_songs("The Beatles")
+        result = server.discover(action="top_songs", artist="The Beatles")
         assert "Come Together" in result or "Beatles" in result
 
     def _setup_tokens(self, mock_config_dir, mock_developer_token, mock_user_token):
@@ -1608,7 +1600,7 @@ class TestUserJourneyFuzzyMatching:
             status=200,
         )
 
-        result = server.get_playlist_tracks("Rock and Roll Classics")
+        result = server.playlist(action="tracks", playlist="Rock and Roll Classics")
         assert "Sweet Child" in result
         assert "Fuzzy match" in result or "fuzzy" in result.lower()
 
@@ -1648,7 +1640,7 @@ class TestUserJourneyFuzzyMatching:
             status=200,
         )
 
-        result = server.add_to_playlist(playlist="Rock and Roll Classics", track="Back in Black")
+        result = server.playlist(action="add", playlist="Rock and Roll Classics", track="Back in Black")
         assert "Back in Black" in result or "Added" in result
 
     @responses.activate
@@ -1672,7 +1664,7 @@ class TestUserJourneyFuzzyMatching:
         )
 
         # User types without apostrophe
-        result = server.search_catalog("Cant Buy Me Love Beatles")
+        result = server.catalog(action="search", query="Cant Buy Me Love Beatles")
         assert "Can't Buy Me Love" in result or "Cant Buy Me Love" in result
 
     @responses.activate
@@ -1727,7 +1719,7 @@ class TestUserJourneyMacOSOnly:
         ])
         monkeypatch.setattr(server, "asc", mock_asc)
 
-        result = server.get_library_playlists()
+        result = server.playlist(action="list")
         assert "Chill Vibes" in result
         mock_asc.get_playlists.assert_called_once()
 
@@ -1793,7 +1785,7 @@ class TestUserJourneyCombinedMode:
         )
 
         # Add track by name - should use AppleScript
-        result = server.add_to_playlist(playlist="Workout", track="Eye of the Tiger")
+        result = server.playlist(action="add", playlist="Workout", track="Eye of the Tiger")
 
         # AppleScript should have been called for track name operations
         # (The exact assertion depends on implementation details)
@@ -1821,7 +1813,7 @@ class TestUserJourneyCombinedMode:
             status=200,
         )
 
-        result = server.get_library_playlists()
+        result = server.playlist(action="list")
         assert "API Playlist" in result
 
     def _setup_tokens(self, mock_config_dir, mock_developer_token, mock_user_token):
@@ -1865,7 +1857,7 @@ class TestUserJourneyPowerUser:
             status=202,
         )
 
-        result = server.add_to_library(album="Dark Side of the Moon", artist="Pink Floyd")
+        result = server.library(action="add", album="Dark Side of the Moon", artist="Pink Floyd")
         assert "Dark Side" in result or "Added" in result.lower() or "Album" in result
 
     @responses.activate
@@ -1911,7 +1903,7 @@ class TestUserJourneyPowerUser:
             status=201,
         )
 
-        result = server.copy_playlist("Original Mix", "Copy of Original Mix")
+        result = server.playlist(action="copy", source="Original Mix", new_name="Copy of Original Mix")
         assert "p.new" in result or "Copy" in result or "copied" in result.lower()
 
     @responses.activate
@@ -1940,7 +1932,7 @@ class TestUserJourneyPowerUser:
             status=200,
         )
 
-        result = server.search_catalog("test query")
+        result = server.catalog(action="search", query="test query")
 
         # Should show "2 Songs" not "3 Songs"
         assert "2 Songs" in result

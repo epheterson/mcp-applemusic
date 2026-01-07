@@ -1666,13 +1666,12 @@ def _rate_song_api(song_id: str, rating: str) -> tuple[bool, str]:
 # ============ PLAYLIST MANAGEMENT ============
 
 
-@mcp.tool()
-def get_library_playlists(
+def _playlist_list(
     format: str = "text",
     export: str = "none",
     full: bool = False,
 ) -> str:
-    """Get all playlists from your Apple Music library."""
+    """Internal: Get all playlists."""
     playlist_data = []
 
     # Try AppleScript first (local, instant, no auth required)
@@ -1745,8 +1744,7 @@ def get_library_playlists(
         return str(e)
 
 
-@mcp.tool()
-def get_playlist_tracks(
+def _playlist_tracks(
     playlist: str = "",
     filter: str = "",
     limit: int = 0,
@@ -1756,7 +1754,7 @@ def get_playlist_tracks(
     full: bool = False,
     fetch_explicit: Optional[bool] = None,
 ) -> str:
-    """Get tracks in a playlist by ID (p.XXX) or name. Supports filter, pagination, export."""
+    """Internal: Get playlist tracks."""
     start_time = time.time()
     query_stats = {"cache_hits": 0, "cache_misses": 0, "api_calls": 0}
 
@@ -2098,12 +2096,11 @@ def get_playlist_tracks(
         return str(e)
 
 
-@mcp.tool()
-def search_playlist(
+def _playlist_search(
     query: str,
     playlist: str = "",
 ) -> str:
-    """Search for tracks in a playlist by name, artist, or album."""
+    """Internal: Search playlist tracks."""
     # Resolve playlist parameter
     resolved: ResolvedPlaylist = _resolve_playlist(playlist)
     if resolved.error:
@@ -2226,9 +2223,8 @@ def _find_track_in_list(
     return matches
 
 
-@mcp.tool()
-def create_playlist(name: str, description: str = "") -> str:
-    """Create a new playlist in your Apple Music library."""
+def _playlist_create(name: str, description: str = "") -> str:
+    """Internal: Create playlist."""
     # Try AppleScript first (local, instant, no auth required)
     if APPLESCRIPT_AVAILABLE:
         success, result = asc.create_playlist(name, description)
@@ -2266,8 +2262,7 @@ def create_playlist(name: str, description: str = "") -> str:
         return str(e)
 
 
-@mcp.tool()
-def add_to_playlist(
+def _playlist_add(
     playlist: str = "",
     track: str = "",
     album: str = "",
@@ -2276,7 +2271,7 @@ def add_to_playlist(
     verify: bool = True,
     auto_search: Optional[bool] = None,
 ) -> str:
-    """Add tracks or albums to a playlist. Auto-detects IDs vs names, handles catalog→library."""
+    """Internal: Add to playlist."""
     steps = []  # Track what we did for verbose output
 
     if not playlist.strip():
@@ -2702,12 +2697,11 @@ def add_to_playlist(
         return f"Error: {str(e)}\n" + "\n".join(steps)
 
 
-@mcp.tool()
-def copy_playlist(
+def _playlist_copy(
     source: str = "",
     new_name: str = ""
 ) -> str:
-    """Copy a playlist to a new editable playlist."""
+    """Internal: Copy playlist."""
     # Validate inputs
     if not new_name:
         return "Error: new_name is required"
@@ -2828,11 +2822,114 @@ def copy_playlist(
         return str(e)
 
 
+@mcp.tool()
+def playlist(
+    action: str = "list",
+    name: str = "",
+    playlist: str = "",
+    query: str = "",
+    track: str = "",
+    album: str = "",
+    artist: str = "",
+    source: str = "",
+    new_name: str = "",
+    description: str = "",
+    filter: str = "",
+    limit: int = 0,
+    offset: int = 0,
+    format: str = "text",
+    export: str = "none",
+    full: bool = False,
+    fetch_explicit: Optional[bool] = None,
+    allow_duplicates: bool = False,
+    verify: bool = True,
+    auto_search: Optional[bool] = None,
+) -> str:
+    """Playlist operations. Actions: list, tracks, search, create, add, copy, remove (macOS), delete (macOS)."""
+    action = action.lower().strip().replace("-", "_")
+
+    if action == "list":
+        return _playlist_list(format, export, full)
+    elif action == "tracks":
+        return _playlist_tracks(playlist, filter, limit, offset, format, export, full, fetch_explicit)
+    elif action == "search":
+        if not query:
+            return "Error: query required for search"
+        return _playlist_search(query, playlist)
+    elif action == "create":
+        if not name:
+            return "Error: name required for create"
+        return _playlist_create(name, description)
+    elif action == "add":
+        return _playlist_add(playlist, track, album, artist, allow_duplicates, verify, auto_search)
+    elif action == "copy":
+        return _playlist_copy(source, new_name)
+    elif action == "remove":
+        if not APPLESCRIPT_AVAILABLE:
+            return "Error: remove action requires macOS"
+        return _playlist_remove(playlist, track, artist)
+    elif action == "delete":
+        if not APPLESCRIPT_AVAILABLE:
+            return "Error: delete action requires macOS"
+        playlist_name = name or playlist
+        if not playlist_name:
+            return "Error: name or playlist required for delete"
+        return _playlist_delete(playlist_name)
+    else:
+        return f"Unknown action: {action}. Use: list, tracks, search, create, add, copy, remove, delete"
+
+
 # ============ LIBRARY MANAGEMENT ============
 
 
 @mcp.tool()
-def search_library(
+def library(
+    action: str = "search",
+    query: str = "",
+    types: str = "songs",
+    item_type: str = "songs",
+    track: str = "",
+    album: str = "",
+    artist: str = "",
+    limit: int = 25,
+    offset: int = 0,
+    format: str = "text",
+    export: str = "none",
+    full: bool = False,
+    fetch_explicit: Optional[bool] = None,
+    clean_only: Optional[bool] = None,
+    # rate params
+    rate_action: str = "",
+    stars: int = 0,
+) -> str:
+    """Your library. Actions: search, add, recently_played, recently_added, browse, rate, remove (macOS)."""
+    action = action.lower().strip().replace("-", "_")
+
+    if action == "search":
+        if not query:
+            return "Error: query is required for search action"
+        return _library_search(query, types, limit, format, export, full, fetch_explicit, clean_only)
+    elif action == "add":
+        return _library_add(track, album, artist)
+    elif action == "recently_played":
+        return _library_recently_played(limit, format, export, full)
+    elif action == "recently_added":
+        return _library_recently_added(limit, format, export, full)
+    elif action == "browse":
+        return _library_browse(item_type, limit, offset, format, export, full, fetch_explicit, clean_only)
+    elif action == "rate":
+        if not rate_action:
+            return "Error: rate_action required (love, dislike, get, set)"
+        return _library_rate(rate_action, track, artist, stars)
+    elif action == "remove":
+        if not APPLESCRIPT_AVAILABLE:
+            return "Error: remove action requires macOS"
+        return _library_remove(track, artist)
+    else:
+        return f"Unknown action: {action}. Use: search, add, recently_played, recently_added, browse, rate, remove"
+
+
+def _library_search(
     query: str,
     types: str = "songs",
     limit: int = 25,
@@ -2911,8 +3008,7 @@ def search_library(
         return str(e)
 
 
-@mcp.tool()
-def add_to_library(
+def _library_add(
     track: str = "",
     album: str = "",
     artist: str = "",
@@ -3027,8 +3123,7 @@ def add_to_library(
         return "No items added"
 
 
-@mcp.tool()
-def get_recently_played(
+def _library_recently_played(
     limit: int = 30,
     format: str = "text",
     export: str = "none",
@@ -3071,8 +3166,7 @@ def get_recently_played(
 # ============ CATALOG SEARCH ============
 
 
-@mcp.tool()
-def search_catalog(
+def _catalog_search(
     query: str = "",
     types: str = "songs",
     limit: int = 15,
@@ -3081,7 +3175,7 @@ def search_catalog(
     full: bool = False,
     clean_only: Optional[bool] = None,
 ) -> str:
-    """Search the Apple Music catalog. Returns catalog IDs for add_to_library."""
+    """Internal: Search catalog."""
     # Apply user preferences
     if clean_only is None:
         prefs = get_user_preferences()
@@ -3209,8 +3303,7 @@ def search_catalog(
         return str(e)
 
 
-@mcp.tool()
-def get_album_tracks(
+def _catalog_album_tracks(
     album: str = "",
     artist: str = "",
     limit: int = 0,
@@ -3219,7 +3312,7 @@ def get_album_tracks(
     export: str = "none",
     full: bool = False,
 ) -> str:
-    """Get all tracks from an album by catalog ID, library ID, or name."""
+    """Internal: Get album tracks."""
     if not album:
         return "Error: Provide album parameter"
 
@@ -3320,8 +3413,7 @@ def get_album_tracks(
 # ============ LIBRARY BROWSING ============
 
 
-@mcp.tool()
-def browse_library(
+def _library_browse(
     item_type: str = "songs",
     limit: int = 100,
     offset: int = 0,
@@ -3471,13 +3563,8 @@ def browse_library(
 # ============ DISCOVERY & PERSONALIZATION ============
 
 
-@mcp.tool()
-def get_recommendations(
-    format: str = "text",
-    export: str = "none",
-    full: bool = False,
-) -> str:
-    """Get personalized music recommendations based on your listening history."""
+def _discover_recommendations(format: str, export: str, full: bool) -> str:
+    """Internal: Get personalized recommendations."""
     try:
         headers = get_headers()
         response = requests.get(
@@ -3515,13 +3602,8 @@ def get_recommendations(
         return str(e)
 
 
-@mcp.tool()
-def get_heavy_rotation(
-    format: str = "text",
-    export: str = "none",
-    full: bool = False,
-) -> str:
-    """Get your heavy rotation - content you've been playing frequently."""
+def _discover_heavy_rotation(format: str, export: str, full: bool) -> str:
+    """Internal: Get heavy rotation."""
     try:
         headers = get_headers()
         response = requests.get(
@@ -3536,7 +3618,6 @@ def get_heavy_rotation(
         if not items:
             return "No heavy rotation data"
 
-        # Extract item data
         item_data = []
         for item in items:
             attrs = item.get("attributes", {})
@@ -3562,21 +3643,14 @@ def get_heavy_rotation(
         return str(e)
 
 
-@mcp.tool()
-def get_recently_added(
-    limit: int = 50,
-    format: str = "text",
-    export: str = "none",
-    full: bool = False,
-) -> str:
-    """Get content recently added to your library."""
+def _library_recently_added(limit: int, format: str, export: str, full: bool) -> str:
+    """Internal: Get recently added content."""
     try:
         headers = get_headers()
         all_items = []
         offset = 0
         max_to_fetch = min(limit, 100)
 
-        # Paginate
         while len(all_items) < max_to_fetch:
             batch_limit = min(25, max_to_fetch - len(all_items))
             response = requests.get(
@@ -3594,12 +3668,11 @@ def get_recently_added(
             all_items.extend(items)
             if len(items) < batch_limit:
                 break
-            offset += 25  # Recently-added uses fixed 25-item pages
+            offset += 25
 
         if not all_items:
             return "No recently added content"
 
-        # Extract item data
         item_data = []
         for item in all_items:
             attrs = item.get("attributes", {})
@@ -3625,9 +3698,84 @@ def get_recently_added(
         return str(e)
 
 
+def _discover_personal_station() -> str:
+    """Internal: Get personal station."""
+    try:
+        headers = get_headers()
+        response = requests.get(
+            f"{BASE_URL}/catalog/{get_storefront()}/stations",
+            headers=headers,
+            params={"filter[identity]": "personal"},
+            timeout=REQUEST_TIMEOUT,
+        )
+        response.raise_for_status()
+        data = response.json()
+
+        stations = data.get("data", [])
+        if not stations:
+            return "No personal station found (may require more listening history)"
+
+        station = stations[0]
+        attrs = station.get("attributes", {})
+        name = attrs.get("name", "Your Personal Station")
+        station_id = station.get("id")
+        is_live = attrs.get("isLive", False)
+
+        output = [
+            f"=== {name} ===",
+            f"Station ID: {station_id}",
+            f"Type: {'Live' if is_live else 'On-demand'}",
+            "",
+            "This station plays music based on your listening history and preferences.",
+        ]
+        return "\n".join(output)
+
+    except requests.exceptions.RequestException as e:
+        return f"API Error: {str(e)}"
+    except (FileNotFoundError, ValueError) as e:
+        return str(e)
+
+
 @mcp.tool()
-def get_artist_top_songs(artist: str) -> str:
-    """Get an artist's top/most popular songs by name or catalog ID."""
+def discover(
+    action: str = "recommendations",
+    artist: str = "",
+    song_id: str = "",
+    chart_type: str = "songs",
+    limit: int = 50,
+    format: str = "text",
+    export: str = "none",
+    full: bool = False,
+) -> str:
+    """Personalized discovery. Actions: recommendations, heavy_rotation, personal_station, charts, top_songs, similar_artists, song_station."""
+    action = action.lower().strip().replace("-", "_")
+
+    if action == "recommendations":
+        return _discover_recommendations(format, export, full)
+    elif action == "heavy_rotation":
+        return _discover_heavy_rotation(format, export, full)
+    elif action == "personal_station":
+        return _discover_personal_station()
+    elif action == "charts":
+        return _discover_charts(chart_type)
+    elif action == "top_songs":
+        if not artist:
+            return "Error: artist required for top_songs"
+        return _discover_top_songs(artist)
+    elif action == "similar_artists":
+        if not artist:
+            return "Error: artist required for similar_artists"
+        return _discover_similar_artists(artist)
+    elif action == "song_station":
+        if not song_id:
+            return "Error: song_id required for song_station"
+        return _discover_song_station(song_id)
+    else:
+        return f"Unknown action: {action}. Use: recommendations, heavy_rotation, personal_station, charts, top_songs, similar_artists, song_station"
+
+
+def _discover_top_songs(artist: str) -> str:
+    """Internal: Get artist's top songs."""
     if not artist:
         return "Error: Provide artist parameter"
 
@@ -3691,9 +3839,8 @@ def get_artist_top_songs(artist: str) -> str:
         return str(e)
 
 
-@mcp.tool()
-def get_similar_artists(artist: str) -> str:
-    """Get artists similar to a given artist by name or catalog ID."""
+def _discover_similar_artists(artist: str) -> str:
+    """Internal: Get similar artists."""
     if not artist:
         return "Error: Provide artist parameter"
 
@@ -3757,9 +3904,8 @@ def get_similar_artists(artist: str) -> str:
         return str(e)
 
 
-@mcp.tool()
-def get_song_station(song_id: str) -> str:
-    """Get the radio station based on a song for discovering similar music."""
+def _discover_song_station(song_id: str) -> str:
+    """Internal: Get song station."""
     try:
         headers = get_headers()
 
@@ -3791,8 +3937,7 @@ def get_song_station(song_id: str) -> str:
 # ============ RATINGS ============
 
 
-@mcp.tool()
-def rating(
+def _library_rate(
     action: str,
     track: str = "",
     artist: str = "",
@@ -3927,9 +4072,8 @@ def rating(
 # ============ CATALOG DETAILS ============
 
 
-@mcp.tool()
-def get_song_details(song_id: str) -> str:
-    """Get detailed info about a catalog song: album, duration, genre, ISRC, etc."""
+def _catalog_song_details(song_id: str) -> str:
+    """Internal: Get song details."""
     try:
         headers = get_headers()
         response = requests.get(
@@ -3965,9 +4109,8 @@ def get_song_details(song_id: str) -> str:
         return str(e)
 
 
-@mcp.tool()
-def get_artist_details(artist: str) -> str:
-    """Get detailed info about an artist: genres, recent albums."""
+def _catalog_artist_details(artist: str) -> str:
+    """Internal: Get artist details."""
     if not artist:
         return "Error: Provide artist parameter"
 
@@ -4042,9 +4185,8 @@ def get_artist_details(artist: str) -> str:
         return str(e)
 
 
-@mcp.tool()
-def get_charts(chart_type: str = "songs") -> str:
-    """Get Apple Music charts. Types: songs, albums, music-videos, playlists."""
+def _discover_charts(chart_type: str = "songs") -> str:
+    """Internal: Get charts."""
     try:
         headers = get_headers()
         response = requests.get(
@@ -4081,9 +4223,8 @@ def get_charts(chart_type: str = "songs") -> str:
         return str(e)
 
 
-@mcp.tool()
-def get_genres() -> str:
-    """Get all available music genres in the Apple Music catalog."""
+def _catalog_genres() -> str:
+    """Internal: Get genres."""
     try:
         headers = get_headers()
         response = requests.get(
@@ -4110,9 +4251,8 @@ def get_genres() -> str:
         return str(e)
 
 
-@mcp.tool()
-def get_search_suggestions(term: str) -> str:
-    """Get autocomplete suggestions for a partial search term."""
+def _catalog_suggestions(term: str) -> str:
+    """Internal: Get search suggestions."""
     try:
         headers = get_headers()
         response = requests.get(
@@ -4141,42 +4281,45 @@ def get_search_suggestions(term: str) -> str:
 
 
 @mcp.tool()
-def get_personal_station() -> str:
-    """Get your personal Apple Music radio station based on listening history."""
-    try:
-        headers = get_headers()
-        response = requests.get(
-            f"{BASE_URL}/catalog/{get_storefront()}/stations",
-            headers=headers,
-            params={"filter[identity]": "personal"},
-            timeout=REQUEST_TIMEOUT,
-        )
-        response.raise_for_status()
-        data = response.json()
+def catalog(
+    action: str = "search",
+    query: str = "",
+    types: str = "songs",
+    album: str = "",
+    artist: str = "",
+    song_id: str = "",
+    chart_type: str = "songs",
+    term: str = "",
+    limit: int = 15,
+    offset: int = 0,
+    format: str = "text",
+    export: str = "none",
+    full: bool = False,
+    clean_only: Optional[bool] = None,
+) -> str:
+    """Apple Music catalog. Actions: search, album_tracks, song_details, artist_details, genres, suggestions."""
+    action = action.lower().strip().replace("-", "_")
 
-        stations = data.get("data", [])
-        if not stations:
-            return "No personal station found (may require more listening history)"
-
-        station = stations[0]
-        attrs = station.get("attributes", {})
-        name = attrs.get("name", "Your Personal Station")
-        station_id = station.get("id")
-        is_live = attrs.get("isLive", False)
-
-        output = [
-            f"=== {name} ===",
-            f"Station ID: {station_id}",
-            f"Type: {'Live' if is_live else 'On-demand'}",
-            "",
-            "This station plays music based on your listening history and preferences.",
-        ]
-        return "\n".join(output)
-
-    except requests.exceptions.RequestException as e:
-        return f"API Error: {str(e)}"
-    except (FileNotFoundError, ValueError) as e:
-        return str(e)
+    if action == "search":
+        return _catalog_search(query, types, limit, format, export, full, clean_only)
+    elif action == "album_tracks":
+        return _catalog_album_tracks(album, artist, limit, offset, format, export, full)
+    elif action == "song_details":
+        if not song_id:
+            return "Error: song_id required for song_details"
+        return _catalog_song_details(song_id)
+    elif action == "artist_details":
+        if not artist:
+            return "Error: artist required for artist_details"
+        return _catalog_artist_details(artist)
+    elif action == "genres":
+        return _catalog_genres()
+    elif action == "suggestions":
+        if not term:
+            return "Error: term required for suggestions"
+        return _catalog_suggestions(term)
+    else:
+        return f"Unknown action: {action}. Use: search, album_tracks, song_details, artist_details, genres, suggestions"
 
 
 # ============ SYSTEM MANAGEMENT ============
@@ -4191,7 +4334,7 @@ def config(
     string_value: str = "",
     limit: int = 20,
 ) -> str:
-    """Config and cache management. Actions: info, set-pref, list-storefronts, audit-log, clear-tracks, clear-exports, clear-audit-log."""
+    """Config and cache. Actions: info, auth-status, set-pref, list-storefronts, audit-log, clear-tracks, clear-exports, clear-audit-log."""
     try:
         action = action.lower()
 
@@ -4411,19 +4554,19 @@ def config(
 
             return "\n".join(output)
 
+        # === AUTH STATUS ===
+        if action in ("auth-status", "auth_status"):
+            return _config_auth_status()
+
         # === UNKNOWN ACTION ===
-        valid_actions = "info, set-pref, list-storefronts, audit-log, clear-tracks, clear-exports, clear-audit-log"
+        valid_actions = "info, set-pref, list-storefronts, audit-log, clear-tracks, clear-exports, clear-audit-log, auth-status"
         return f"Error: Unknown action '{action}'. Valid: {valid_actions}"
 
     except Exception as e:
         return f"Error: {str(e)}"
 
 
-# ============ STATUS ============
-
-
-@mcp.tool()
-def check_auth_status() -> str:
+def _config_auth_status() -> str:
     """Check if authentication tokens are valid and API is accessible."""
     config_dir = get_config_dir()
     dev_token_file = config_dir / "developer_token.json"
@@ -4488,7 +4631,52 @@ def check_auth_status() -> str:
 if APPLESCRIPT_AVAILABLE:
 
     @mcp.tool()
-    def play(
+    def playback(
+        action: str = "now_playing",
+        # play params
+        track: str = "",
+        playlist: str = "",
+        album: str = "",
+        artist: str = "",
+        shuffle: bool = False,
+        reveal: Optional[bool] = None,
+        add_to_library: bool = False,
+        # control params
+        control: str = "",
+        seconds: float = 0,
+        # settings params
+        volume: int = -1,
+        shuffle_mode: str = "",
+        repeat: str = "",
+        # reveal params
+        track_name: str = "",
+        # airplay params
+        device_name: str = "",
+    ) -> str:
+        """Playback (macOS). Actions: play, control, now_playing, settings, reveal, airplay."""
+        action = action.lower().strip().replace("-", "_")
+
+        if action == "play":
+            return _playback_play(track, playlist, album, artist, shuffle, reveal, add_to_library)
+        elif action == "control":
+            if not control:
+                return "Error: control param required. Use: play, pause, stop, next, previous, seek"
+            return _playback_control(control, seconds)
+        elif action == "now_playing":
+            return _playback_now_playing()
+        elif action == "settings":
+            return _playback_settings(volume, shuffle_mode, repeat)
+        elif action == "reveal":
+            name = track_name or track
+            if not name:
+                return "Error: track_name or track required for reveal action"
+            return _playback_reveal(name, artist)
+        elif action == "airplay":
+            return _playback_airplay(device_name)
+        else:
+            return f"Unknown action: {action}. Use: play, control, now_playing, settings, reveal, airplay"
+
+    def _playback_play(
         track: str = "",
         playlist: str = "",
         album: str = "",
@@ -4748,8 +4936,7 @@ if APPLESCRIPT_AVAILABLE:
 
         return f"Track not found in library or catalog: {track_name}"
 
-    @mcp.tool()
-    def playback_control(action: str, seconds: float = 0) -> str:
+    def _playback_control(action: str, seconds: float = 0) -> str:
         """Control playback (macOS). Actions: play, pause, playpause, stop, next, previous, seek."""
         action = action.lower().strip()
 
@@ -4776,8 +4963,7 @@ if APPLESCRIPT_AVAILABLE:
             return f"Playback: {action}"
         return f"Error: {result}"
 
-    @mcp.tool()
-    def get_now_playing() -> str:
+    def _playback_now_playing() -> str:
         """Get currently playing track and player state (macOS)."""
         success, info = asc.get_current_track()
         if not success:
@@ -4809,8 +4995,7 @@ if APPLESCRIPT_AVAILABLE:
 
         return "\n".join(parts) if parts else "Playing (no track info available)"
 
-    @mcp.tool()
-    def playback_settings(
+    def _playback_settings(
         volume: int = -1,
         shuffle: str = "",
         repeat: str = "",
@@ -4855,8 +5040,7 @@ if APPLESCRIPT_AVAILABLE:
             f"Repeat: {stats['repeat']}"
         )
 
-    @mcp.tool()
-    def remove_from_playlist(
+    def _playlist_remove(
         playlist: str = "",
         track: str = "",
         artist: str = "",
@@ -4958,8 +5142,7 @@ if APPLESCRIPT_AVAILABLE:
         fuzzy_info = _format_fuzzy_match(resolved.fuzzy_match)
         return result + fuzzy_info
 
-    @mcp.tool()
-    def remove_from_library(
+    def _library_remove(
         track: str = "",
         artist: str = "",
     ) -> str:
@@ -5043,8 +5226,7 @@ if APPLESCRIPT_AVAILABLE:
             error_verb="failed to remove"
         )
 
-    @mcp.tool()
-    def delete_playlist(playlist_name: str) -> str:
+    def _playlist_delete(playlist_name: str) -> str:
         """Delete a playlist entirely (macOS). PERMANENT, cannot be undone."""
         # Get track count before deletion for audit log
         track_count = 0
@@ -5065,16 +5247,14 @@ if APPLESCRIPT_AVAILABLE:
             return result
         return f"Error: {result}"
 
-    @mcp.tool()
-    def reveal_in_music(track_name: str, artist: str = "") -> str:
+    def _playback_reveal(track_name: str, artist: str = "") -> str:
         """Reveal a track in the Music app window (macOS)."""
         success, result = asc.reveal_track(track_name, artist if artist else None)
         if success:
             return result
         return f"Error: {result}"
 
-    @mcp.tool()
-    def airplay(device_name: str = "") -> str:
+    def _playback_airplay(device_name: str = "") -> str:
         """List or switch AirPlay devices (macOS). Omit device_name to list."""
         if device_name:
             success, result = asc.set_airplay_device(device_name)
