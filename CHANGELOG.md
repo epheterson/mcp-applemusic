@@ -80,6 +80,12 @@ Playback tools (`play`, `playback_control`, `playback_settings`, `get_now_playin
   # Returns: metadata (artist, release date, genre, label) + full track listing
   ```
 
+- **Rename playlist action** - New `playlist(action="rename")` allows renaming playlists in-place without creating a copy (macOS only).
+  ```python
+  playlist(action="rename", playlist="Old Name", new_name="New Name")
+  # Much cleaner than copy + delete workflow
+  ```
+
 ### Fixed
 
 - **Recommendations limit parameter** - The `discover(action="recommendations", limit=N)` action now correctly respects the `limit` parameter. Previously returned all 77 items regardless of limit.

@@ -461,6 +461,32 @@ def delete_playlist(playlist_name: str) -> tuple[bool, str]:
     return success, output
 
 
+def rename_playlist(playlist_name: str, new_name: str) -> tuple[bool, str]:
+    """Rename a playlist.
+
+    Args:
+        playlist_name: Current name of the playlist
+        new_name: New name for the playlist
+
+    Returns:
+        Tuple of (success, message or error)
+    """
+    safe_old = _escape_for_applescript(playlist_name)
+    safe_new = _escape_for_applescript(new_name)
+    script = f'''
+    tell application "Music"
+{_find_playlist_applescript(safe_old)}
+        set oldName to name of targetPlaylist
+        set name of targetPlaylist to "{safe_new}"
+        return "Renamed: " & oldName & " → {safe_new}"
+    end tell
+    '''
+    success, output = run_applescript(script)
+    if output.startswith("ERROR:"):
+        return False, output[6:]
+    return success, output
+
+
 def track_exists_in_playlist(playlist_name: str, track_name: str, artist: Optional[str] = None) -> tuple[bool, bool | str]:
     """Quick check if a track exists in a playlist.
 

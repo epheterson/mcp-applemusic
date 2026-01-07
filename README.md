@@ -159,7 +159,7 @@ Add to config.json:
 **v0.5.0 Update:** All tools consolidated into 5 action-based dispatchers for reduced MCP overhead. See [CHANGELOG](CHANGELOG.md#050---2026-01-06) for migration guide.
 
 ### `playlist(action=...)`
-Playlist operations - list, manage tracks, create, copy, remove (macOS), delete (macOS)
+Playlist operations - list, manage tracks, create, copy, remove (macOS), delete (macOS), rename (macOS)
 
 | Action | Parameters | Description | Platform |
 |--------|-----------|-------------|----------|
@@ -171,6 +171,7 @@ Playlist operations - list, manage tracks, create, copy, remove (macOS), delete 
 | `copy` | `source`, `new_name` | Copy playlist to editable version | All (by-name: macOS) |
 | `remove` | `playlist`, `track`, `artist` | Remove track(s) from playlist | macOS |
 | `delete` | `name` or `playlist` | Delete playlist | macOS |
+| `rename` | `playlist`, `new_name` | Rename playlist in-place | macOS |
 
 **Examples:**
 ```python

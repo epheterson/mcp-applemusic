@@ -2845,7 +2845,7 @@ def playlist(
     verify: bool = True,
     auto_search: Optional[bool] = None,
 ) -> str:
-    """Playlist operations. Actions: list, tracks, search, create, add, copy, remove (macOS), delete (macOS)."""
+    """Playlist operations. Actions: list, tracks, search, create, add, copy, remove (macOS), delete (macOS), rename (macOS)."""
     action = action.lower().strip().replace("-", "_")
 
     if action == "list":
@@ -2875,8 +2875,13 @@ def playlist(
         if not playlist_name:
             return "Error: name or playlist required for delete"
         return _playlist_delete(playlist_name)
+    elif action == "rename":
+        if not APPLESCRIPT_AVAILABLE:
+            return "Error: rename action requires macOS"
+        playlist_name = name or playlist
+        return _playlist_rename(playlist_name, new_name)
     else:
-        return f"Unknown action: {action}. Use: list, tracks, search, create, add, copy, remove, delete"
+        return f"Unknown action: {action}. Use: list, tracks, search, create, add, copy, remove, delete, rename"
 
 
 # ============ LIBRARY MANAGEMENT ============
@@ -5367,6 +5372,24 @@ if APPLESCRIPT_AVAILABLE:
                 "delete_playlist",
                 {"name": playlist_name, "track_count": track_count},
                 undo_info={"playlist_name": playlist_name, "tracks": track_names, "note": "Recreate playlist and re-add tracks"}
+            )
+            return result
+        return f"Error: {result}"
+
+    def _playlist_rename(playlist_name: str, new_name: str) -> str:
+        """Rename a playlist (macOS)."""
+        if not playlist_name:
+            return "Error: playlist name required"
+        if not new_name:
+            return "Error: new_name required"
+
+        success, result = asc.rename_playlist(playlist_name, new_name)
+        if success:
+            # Log rename for audit trail
+            audit_log.log_action(
+                "rename_playlist",
+                {"old_name": playlist_name, "new_name": new_name},
+                undo_info={"note": f"Rename back to '{playlist_name}'"}
             )
             return result
         return f"Error: {result}"

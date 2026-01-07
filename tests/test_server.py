@@ -166,6 +166,42 @@ class TestCreatePlaylist:
         assert "p.newplaylist123" in result
 
 
+class TestRenamePlaylist:
+    """Tests for rename_playlist function (AppleScript path)."""
+
+    def test_renames_playlist_successfully(self, monkeypatch):
+        """Should rename playlist via AppleScript."""
+        # Mock AppleScript to return success
+        def mock_rename_playlist(old_name, new_name):
+            return (True, f"Renamed: {old_name} → {new_name}")
+
+        monkeypatch.setattr(server.asc, "rename_playlist", mock_rename_playlist)
+        monkeypatch.setattr(server, "APPLESCRIPT_AVAILABLE", True)
+
+        result = server.playlist(action="rename", playlist="Old Name", new_name="New Name")
+
+        assert "Renamed" in result
+        assert "Old Name" in result
+        assert "New Name" in result
+
+    def test_requires_macos(self, monkeypatch):
+        """Should error when AppleScript not available."""
+        monkeypatch.setattr(server, "APPLESCRIPT_AVAILABLE", False)
+
+        result = server.playlist(action="rename", playlist="Old Name", new_name="New Name")
+
+        assert "Error" in result
+        assert "macOS" in result
+
+    def test_requires_new_name(self, monkeypatch):
+        """Should error when new_name not provided."""
+        monkeypatch.setattr(server, "APPLESCRIPT_AVAILABLE", True)
+
+        result = server.playlist(action="rename", playlist="Old Name", new_name="")
+
+        assert "Error" in result
+
+
 class TestAddToPlaylist:
     """Tests for add_to_playlist function."""
 
