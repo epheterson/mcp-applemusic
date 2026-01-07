@@ -3862,31 +3862,32 @@ def discover(
     """Personalized discovery. Actions: recommendations, heavy_rotation, personal_station, charts, top_songs, similar_artists, song_station."""
     action = action.lower().strip().replace("-", "_")
 
-    # Determine storefront to use (parameter overrides default)
-    sf = storefront if storefront else get_storefront()
-
     if action == "recommendations":
         return _discover_recommendations(limit, format, export, full)
     elif action == "heavy_rotation":
         return _discover_heavy_rotation(format, export, full)
     elif action == "personal_station":
         return _discover_personal_station()
-    elif action == "charts":
-        return _discover_charts(chart_type, sf)
-    elif action == "top_songs":
-        if not artist:
-            return "Error: artist required for top_songs"
-        return _discover_top_songs(artist, sf)
-    elif action == "similar_artists":
-        if not artist:
-            return "Error: artist required for similar_artists"
-        return _discover_similar_artists(artist, sf)
-    elif action == "song_station":
-        if not song_id:
-            return "Error: song_id required for song_station"
-        return _discover_song_station(song_id, sf)
     else:
-        return f"Unknown action: {action}. Use: recommendations, heavy_rotation, personal_station, charts, top_songs, similar_artists, song_station"
+        # Determine storefront for catalog-based actions
+        sf = storefront if storefront else get_storefront()
+
+        if action == "charts":
+            return _discover_charts(chart_type, sf)
+        elif action == "top_songs":
+            if not artist:
+                return "Error: artist required for top_songs"
+            return _discover_top_songs(artist, sf)
+        elif action == "similar_artists":
+            if not artist:
+                return "Error: artist required for similar_artists"
+            return _discover_similar_artists(artist, sf)
+        elif action == "song_station":
+            if not song_id:
+                return "Error: song_id required for song_station"
+            return _discover_song_station(song_id, sf)
+        else:
+            return f"Unknown action: {action}. Use: recommendations, heavy_rotation, personal_station, charts, top_songs, similar_artists, song_station"
 
 
 def _discover_top_songs(artist: str, storefront: str = "") -> str:

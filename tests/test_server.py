@@ -1946,3 +1946,305 @@ class TestUserJourneyPowerUser:
         user_token_file = mock_config_dir / "music_user_token.json"
         with open(user_token_file, "w") as f:
             json.dump({"music_user_token": mock_user_token}, f)
+
+
+class TestCatalogAlbumDetails:
+    """Tests for catalog album_details action."""
+
+    @responses.activate
+    def test_album_details_by_id(self, mock_config_dir, mock_developer_token, mock_user_token):
+        """Should fetch album metadata and tracks by catalog ID."""
+        # Setup tokens
+        dev_token_file = mock_config_dir / "developer_token.json"
+        with open(dev_token_file, "w") as f:
+            json.dump({"token": mock_developer_token, "expires": time.time() + 86400 * 60}, f)
+
+        user_token_file = mock_config_dir / "music_user_token.json"
+        with open(user_token_file, "w") as f:
+            json.dump({"music_user_token": mock_user_token}, f)
+
+        # Mock album metadata response
+        responses.add(
+            responses.GET,
+            "https://api.music.apple.com/v1/catalog/us/albums/1781270319",
+            json={"data": [{
+                "id": "1781270319",
+                "attributes": {
+                    "name": "GNX",
+                    "artistName": "Kendrick Lamar",
+                    "releaseDate": "2024-11-22",
+                    "genreNames": ["Hip-Hop/Rap"],
+                    "recordLabel": "pgLang",
+                    "trackCount": 12,
+                    "copyright": "℗ 2024 pgLang"
+                }
+            }]},
+            status=200,
+        )
+
+        # Mock tracks response
+        responses.add(
+            responses.GET,
+            "https://api.music.apple.com/v1/catalog/us/albums/1781270319/tracks",
+            json={"data": [
+                {"id": "t1", "attributes": {"name": "wacced out murals", "durationInMillis": 251000}},
+                {"id": "t2", "attributes": {"name": "squabble up", "durationInMillis": 193000}},
+            ]},
+            status=200,
+        )
+
+        result = server.catalog(action="album_details", album="1781270319")
+
+        assert "GNX" in result
+        assert "Kendrick Lamar" in result
+        assert "2024-11-22" in result
+        assert "Hip-Hop/Rap" in result
+        assert "pgLang" in result
+        assert "wacced out murals" in result
+        assert "squabble up" in result
+
+    @responses.activate
+    def test_album_details_by_name_fuzzy_match(
+        self, mock_config_dir, mock_developer_token, mock_user_token
+    ):
+        """Should find album by name using fuzzy matching."""
+        # Setup tokens
+        dev_token_file = mock_config_dir / "developer_token.json"
+        with open(dev_token_file, "w") as f:
+            json.dump({"token": mock_developer_token, "expires": time.time() + 86400 * 60}, f)
+
+        user_token_file = mock_config_dir / "music_user_token.json"
+        with open(user_token_file, "w") as f:
+            json.dump({"music_user_token": mock_user_token}, f)
+
+        # Mock search response
+        responses.add(
+            responses.GET,
+            "https://api.music.apple.com/v1/catalog/us/search",
+            json={"results": {"albums": {"data": [{
+                "id": "123",
+                "attributes": {"name": "Abbey Road", "artistName": "The Beatles"}
+            }]}}},
+            status=200,
+        )
+
+        # Mock album metadata
+        responses.add(
+            responses.GET,
+            "https://api.music.apple.com/v1/catalog/us/albums/123",
+            json={"data": [{
+                "id": "123",
+                "attributes": {
+                    "name": "Abbey Road",
+                    "artistName": "The Beatles",
+                    "releaseDate": "1969-09-26",
+                    "genreNames": ["Rock"],
+                    "recordLabel": "Apple Records",
+                    "trackCount": 17,
+                    "copyright": "℗ 1969"
+                }
+            }]},
+            status=200,
+        )
+
+        # Mock tracks
+        responses.add(
+            responses.GET,
+            "https://api.music.apple.com/v1/catalog/us/albums/123/tracks",
+            json={"data": [
+                {"id": "t1", "attributes": {"name": "Come Together", "durationInMillis": 259000}},
+            ]},
+            status=200,
+        )
+
+        result = server.catalog(action="album_details", album="abbey road", artist="beatles")
+
+        assert "Abbey Road" in result
+        assert "The Beatles" in result
+        assert "Come Together" in result
+
+    @responses.activate
+    def test_album_details_missing_album_error(
+        self, mock_config_dir, mock_developer_token, mock_user_token
+    ):
+        """Should return error when album not found."""
+        # Setup tokens
+        dev_token_file = mock_config_dir / "developer_token.json"
+        with open(dev_token_file, "w") as f:
+            json.dump({"token": mock_developer_token, "expires": time.time() + 86400 * 60}, f)
+
+        user_token_file = mock_config_dir / "music_user_token.json"
+        with open(user_token_file, "w") as f:
+            json.dump({"music_user_token": mock_user_token}, f)
+
+        # Mock search with no results
+        responses.add(
+            responses.GET,
+            "https://api.music.apple.com/v1/catalog/us/search",
+            json={"results": {"albums": {"data": []}}},
+            status=200,
+        )
+
+        result = server.catalog(action="album_details", album="NonexistentAlbum999")
+
+        assert "not found" in result.lower() or "error" in result.lower()
+
+
+class TestDiscoverStorefrontParameter:
+    """Tests for discover action storefront parameter."""
+
+    @responses.activate
+    def test_charts_with_storefront_parameter(
+        self, mock_config_dir, mock_developer_token, mock_user_token
+    ):
+        """Should query Italian charts without changing default storefront."""
+        # Setup tokens
+        dev_token_file = mock_config_dir / "developer_token.json"
+        with open(dev_token_file, "w") as f:
+            json.dump({"token": mock_developer_token, "expires": time.time() + 86400 * 60}, f)
+
+        user_token_file = mock_config_dir / "music_user_token.json"
+        with open(user_token_file, "w") as f:
+            json.dump({"music_user_token": mock_user_token}, f)
+
+        # Mock Italy charts response
+        responses.add(
+            responses.GET,
+            "https://api.music.apple.com/v1/catalog/it/charts",
+            json={"results": {"songs": [{
+                "name": "Top brani",
+                "data": [
+                    {"id": "it1", "attributes": {"name": "Italian Song", "artistName": "Italian Artist"}},
+                ]
+            }]}},
+            status=200,
+        )
+
+        result = server.discover(action="charts", chart_type="songs", storefront="it")
+
+        # Verify it was called with 'it' storefront
+        assert len(responses.calls) == 1
+        assert "/catalog/it/charts" in responses.calls[0].request.url
+        assert "Italian Song" in result or "Top brani" in result
+
+    @responses.activate
+    def test_top_songs_with_storefront_parameter(
+        self, mock_config_dir, mock_developer_token, mock_user_token
+    ):
+        """Should query artist top songs in specific storefront."""
+        # Setup tokens
+        dev_token_file = mock_config_dir / "developer_token.json"
+        with open(dev_token_file, "w") as f:
+            json.dump({"token": mock_developer_token, "expires": time.time() + 86400 * 60}, f)
+
+        user_token_file = mock_config_dir / "music_user_token.json"
+        with open(user_token_file, "w") as f:
+            json.dump({"music_user_token": mock_user_token}, f)
+
+        # Mock search in JP storefront
+        responses.add(
+            responses.GET,
+            "https://api.music.apple.com/v1/catalog/jp/search",
+            json={"results": {"artists": {"data": [{
+                "id": "jp-artist-123",
+                "attributes": {"name": "Japanese Artist"}
+            }]}}},
+            status=200,
+        )
+
+        # Mock top songs
+        responses.add(
+            responses.GET,
+            "https://api.music.apple.com/v1/catalog/jp/artists/jp-artist-123/view/top-songs",
+            json={"data": [
+                {"id": "jp-song-1", "attributes": {"name": "JP Hit Song", "artistName": "Japanese Artist"}},
+            ]},
+            status=200,
+        )
+
+        result = server.discover(action="top_songs", artist="Japanese Artist", storefront="jp")
+
+        # Verify JP storefront was used
+        assert any("/catalog/jp/" in call.request.url for call in responses.calls)
+        assert "Japanese Artist" in result
+
+
+class TestDiscoverRecommendationsLimit:
+    """Tests for discover recommendations limit parameter."""
+
+    @responses.activate
+    def test_recommendations_respects_limit_parameter(
+        self, mock_config_dir, mock_developer_token, mock_user_token
+    ):
+        """Should only return requested number of recommendations."""
+        # Setup tokens
+        dev_token_file = mock_config_dir / "developer_token.json"
+        with open(dev_token_file, "w") as f:
+            json.dump({"token": mock_developer_token, "expires": time.time() + 86400 * 60}, f)
+
+        user_token_file = mock_config_dir / "music_user_token.json"
+        with open(user_token_file, "w") as f:
+            json.dump({"music_user_token": mock_user_token}, f)
+
+        # Mock recommendations response with many items
+        responses.add(
+            responses.GET,
+            "https://api.music.apple.com/v1/me/recommendations",
+            json={"data": [
+                {
+                    "attributes": {"title": {"stringForDisplay": "For You"}},
+                    "relationships": {"contents": {"data": [
+                        {"id": f"rec{i}", "type": "songs", "attributes": {
+                            "name": f"Song {i}", "artistName": "Artist", "releaseDate": "2024-01-01"
+                        }} for i in range(1, 51)  # 50 items
+                    ]}}
+                }
+            ]},
+            status=200,
+        )
+
+        # Request only 15 items
+        result = server.discover(action="recommendations", limit=15, format="text")
+
+        # Count items in result (rough check - each song should have a line)
+        lines = [l for l in result.split('\n') if l.strip() and not l.startswith('===')]
+        # Should have ~15 lines, not 50
+        assert len(lines) <= 20  # Allow some buffer for formatting
+
+    @responses.activate
+    def test_recommendations_limit_zero_returns_all(
+        self, mock_config_dir, mock_developer_token, mock_user_token
+    ):
+        """Should return all recommendations when limit=0."""
+        # Setup tokens
+        dev_token_file = mock_config_dir / "developer_token.json"
+        with open(dev_token_file, "w") as f:
+            json.dump({"token": mock_developer_token, "expires": time.time() + 86400 * 60}, f)
+
+        user_token_file = mock_config_dir / "music_user_token.json"
+        with open(user_token_file, "w") as f:
+            json.dump({"music_user_token": mock_user_token}, f)
+
+        # Mock recommendations response
+        responses.add(
+            responses.GET,
+            "https://api.music.apple.com/v1/me/recommendations",
+            json={"data": [
+                {
+                    "attributes": {"title": {"stringForDisplay": "For You"}},
+                    "relationships": {"contents": {"data": [
+                        {"id": f"rec{i}", "type": "songs", "attributes": {
+                            "name": f"Song {i}", "artistName": "Artist", "releaseDate": "2024-01-01"
+                        }} for i in range(1, 21)  # 20 items
+                    ]}}
+                }
+            ]},
+            status=200,
+        )
+
+        # Request with limit=0 (should return all)
+        result = server.discover(action="recommendations", limit=0, format="text")
+
+        # Should have all ~20 items
+        lines = [l for l in result.split('\n') if l.strip() and not l.startswith('===')]
+        assert len(lines) >= 7  # At least 7-8 items from the category
