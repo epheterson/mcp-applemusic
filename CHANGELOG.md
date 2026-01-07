@@ -5,6 +5,74 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0] - 2026-01-06
+
+### Breaking Changes
+
+**MCP Tool Consolidation** - Reduced from 37 to 5 action-based dispatchers to minimize MCP context footprint (80%+ reduction):
+
+#### Playlist Operations → `playlist(action=...)`
+
+| Old Tool | New Call |
+|----------|----------|
+| `get_library_playlists()` | `playlist(action="list")` |
+| `get_playlist_tracks(playlist, ...)` | `playlist(action="tracks", playlist=playlist, ...)` |
+| `search_playlist(query, playlist)` | `playlist(action="search", query=query, playlist=playlist)` |
+| `create_playlist(name, description)` | `playlist(action="create", name=name, description=description)` |
+| `add_to_playlist(playlist, ...)` | `playlist(action="add", playlist=playlist, ...)` |
+| `copy_playlist(source, new_name)` | `playlist(action="copy", source=source, new_name=new_name)` |
+| `remove_from_playlist(...)` | `playlist(action="remove", ...)` _(macOS only)_ |
+| `delete_playlist(name)` | `playlist(action="delete", name=name)` _(macOS only)_ |
+
+#### Library Operations → `library(action=...)`
+
+| Old Tool | New Call |
+|----------|----------|
+| `search_library(query, ...)` | `library(action="search", query=query, ...)` |
+| `add_to_library(track, album, ...)` | `library(action="add", track=track, album=album, ...)` |
+| `get_recently_played(...)` | `library(action="recently_played", ...)` |
+| `get_recently_added(...)` | `library(action="recently_added", ...)` |
+| `browse_library(item_type, ...)` | `library(action="browse", item_type=item_type, ...)` |
+| `rating(rate_action, ...)` | `library(action="rate", rate_action=rate_action, ...)` |
+| `remove_from_library(...)` | `library(action="remove", ...)` _(macOS only)_ |
+
+#### Catalog Operations → `catalog(action=...)`
+
+| Old Tool | New Call |
+|----------|----------|
+| `search_catalog(query, ...)` | `catalog(action="search", query=query, ...)` |
+| `get_album_tracks(album, ...)` | `catalog(action="album_tracks", album=album, ...)` |
+| `get_song_details(song_id)` | `catalog(action="song_details", song_id=song_id)` |
+| `get_artist_details(artist)` | `catalog(action="artist_details", artist=artist)` |
+| `get_song_station(song_id)` | `catalog(action="song_station", song_id=song_id)` |
+| `get_genres()` | `catalog(action="genres")` |
+
+#### Discovery → `discover(action=...)`
+
+| Old Tool | New Call |
+|----------|----------|
+| `get_recommendations(...)` | `discover(action="recommendations", ...)` |
+| `get_heavy_rotation(...)` | `discover(action="heavy_rotation", ...)` |
+| `get_charts(chart_type)` | `discover(action="charts", chart_type=chart_type)` |
+| `get_artist_top_songs(artist)` | `discover(action="artist_top_songs", artist=artist)` |
+| `get_similar_artists(artist)` | `discover(action="similar_artists", artist=artist)` |
+| `get_search_suggestions(term)` | `discover(action="search_suggestions", term=term)` |
+| `get_personal_station()` | `discover(action="personal_station")` |
+
+#### Configuration → `config(action=...)` _(unchanged)_
+
+Playback tools (`play`, `playback_control`, `playback_settings`, `get_now_playing`) remain unchanged.
+
+**Rationale:** Reduces MCP context overhead from 37 tools to 5 dispatchers, enabling more efficient token usage for Claude and other LLM clients. Each dispatcher accepts a superset of parameters and routes to internal implementation functions.
+
+**Migration:** All functionality preserved. Update MCP client code to use action-based API.
+
+### Changed
+
+- **Trimmed tool docstrings** - Reduced verbose multi-line docstrings to concise 1-2 line summaries to further reduce MCP context footprint (commit 0984338)
+- **Action normalization** - All dispatchers normalize action names: `action.lower().strip().replace("-", "_")` allows both "recently-played" and "recently_played"
+- **Consistent error messages** - All dispatchers validate required parameters and provide helpful error messages with valid action lists
+
 ## [0.4.3] - 2026-01-05
 
 ### Added

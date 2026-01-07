@@ -154,57 +154,95 @@ Add to config.json:
 
 ---
 
-## Tools (37 total)
+## Tools
 
-### Playlists
-| Tool | Description | Method | Platform |
-|------|-------------|--------|----------|
-| `get_library_playlists` | List all playlists | API | All |
-| `get_playlist_tracks` | Get tracks with filter/limit, optional explicit status | API or AS | All (by-name: macOS) |
-| `create_playlist` | Create new playlist | API | All |
-| `add_to_playlist` | Smart add: auto-search catalog, auto-add to library, skip duplicates | API or AS | All (by-name: macOS) |
-| `copy_playlist` | Copy playlist to editable version (by ID or name) | API or AS | All (by-name: macOS) |
-| `remove_from_playlist` | Remove track(s): single, array, or by ID | AppleScript | macOS |
-| `delete_playlist` | Delete playlist | AppleScript | macOS |
-| `search_playlist` | Search playlist tracks (native AS search, fast) | API or AS | All |
+**v0.5.0 Update:** All tools consolidated into 5 action-based dispatchers for reduced MCP overhead. See [CHANGELOG](CHANGELOG.md#050---2026-01-06) for migration guide.
 
-`add_to_playlist` uses a **unified `track` parameter** that auto-detects format: names (`track="Hey Jude"`), IDs (`track="1440783617"`), CSV (`track="Hey Jude, Let It Be"`), or JSON (`track='[{"name":"Hey Jude","artist":"Beatles"}]'`). You can also add entire albums with the `album` parameter. With `auto_search=True`, tracks not in your library are automatically found in the catalog, added to your library, then added to the playlist—all in one call.
+### `playlist(action=...)`
+Playlist operations - list, manage tracks, create, copy, remove (macOS), delete (macOS)
 
-`remove_from_playlist` and `remove_from_library` use the same unified `track` parameter format.
+| Action | Parameters | Description | Platform |
+|--------|-----------|-------------|----------|
+| `list` | `format`, `export`, `full` | List all playlists | All |
+| `tracks` | `playlist`, `filter`, `limit`, `offset`, `format`, `export`, `full`, `fetch_explicit` | Get playlist tracks with filter/pagination | All (by-name: macOS) |
+| `search` | `query`, `playlist` | Search tracks in playlist | All |
+| `create` | `name`, `description` | Create new playlist | All |
+| `add` | `playlist`, `track`, `album`, `artist`, `allow_duplicates`, `verify`, `auto_search` | Smart add: auto-search catalog, skip duplicates | All (by-name: macOS) |
+| `copy` | `source`, `new_name` | Copy playlist to editable version | All (by-name: macOS) |
+| `remove` | `playlist`, `track`, `artist` | Remove track(s) from playlist | macOS |
+| `delete` | `name` or `playlist` | Delete playlist | macOS |
 
-### Library
-| Tool | Description | Method | Platform |
-|------|-------------|--------|----------|
-| `search_library` | Search your library by types (fast local on macOS) | AS + API | All |
-| `browse_library` | List songs/albums/artists/videos by type | API | All |
-| `get_album_tracks` | Get tracks from album (by name or ID) | API | All |
-| `get_recently_played` | Recent listening history | API | All |
-| `get_recently_added` | Recently added content | API | All |
-| `add_to_library` | Add tracks or albums from catalog | API | All |
-| `remove_from_library` | Remove track(s) from library | AppleScript | macOS |
-| `rating` | Love/dislike/get/set star ratings | API + AS | All (stars: macOS) |
+**Examples:**
+```python
+playlist(action="list")
+playlist(action="create", name="Road Trip", description="Summer vibes")
+playlist(action="add", playlist="Road Trip", track="Hey Jude", artist="Beatles")
+playlist(action="tracks", playlist="p.abc123", limit=50)
+```
 
-`add_to_library` supports both `track` and `album` parameters. `get_album_tracks` accepts album names (`album="Abbey Road"`) or IDs. Artist tools accept names or catalog IDs.
+**Unified `track` parameter** auto-detects: names, IDs (catalog/library/persistent), CSV, or JSON arrays. Add entire albums with `album` parameter.
 
-### Catalog & Discovery
-| Tool | Description | Method | Platform |
-|------|-------------|--------|----------|
-| `search_catalog` | Search Apple Music (songs, albums, artists, playlists, music-videos) | API | All |
-| `get_song_details` | Full song details | API | All |
-| `get_artist_details` | Artist info and discography | API | All |
-| `get_artist_top_songs` | Artist's popular songs | API | All |
-| `get_similar_artists` | Find similar artists | API | All |
-| `get_recommendations` | Personalized recommendations | API | All |
-| `get_heavy_rotation` | Your frequently played | API | All |
-| `get_personal_station` | Your personal radio station | API | All |
-| `get_song_station` | Radio station from a song | API | All |
-| `get_charts` | Top songs, albums, playlists | API | All |
-| `get_genres` | List all genres | API | All |
-| `get_search_suggestions` | Autocomplete suggestions | API | All |
+### `library(action=...)`
+Library management - search, add, browse, rate, recently played/added, remove (macOS)
 
-`search_catalog` supports `types="music-videos"` for video search. Leave query empty for featured videos.
+| Action | Parameters | Description | Platform |
+|--------|-----------|-------------|----------|
+| `search` | `query`, `types`, `limit`, `format`, `export`, `full`, `fetch_explicit`, `clean_only` | Search your library (fast local on macOS) | All |
+| `add` | `track`, `album`, `artist` | Add tracks/albums from catalog | All |
+| `browse` | `item_type`, `limit`, `offset`, `format`, `export`, `full`, `fetch_explicit`, `clean_only` | List songs/albums/artists/videos | All |
+| `recently_played` | `limit`, `format`, `export`, `full` | Recent listening history | All |
+| `recently_added` | `limit`, `format`, `export`, `full` | Recently added content | All |
+| `rate` | `rate_action`, `track`, `artist`, `stars` | Love/dislike/get/set ratings | All (stars: macOS) |
+| `remove` | `track`, `artist` | Remove track(s) from library | macOS |
 
-### Playback
+**Examples:**
+```python
+library(action="search", query="Beatles", types="songs", limit=25)
+library(action="add", album="Abbey Road", artist="Beatles")
+library(action="recently_played", limit=30)
+library(action="rate", rate_action="love", track="Hey Jude")
+```
+
+### `catalog(action=...)`
+Catalog search and details - search, albums, songs, artists, genres, stations
+
+| Action | Parameters | Description | Platform |
+|--------|-----------|-------------|----------|
+| `search` | `query`, `types`, `limit`, `format`, `export`, `full`, `clean_only` | Search Apple Music catalog | All |
+| `album_tracks` | `album`, `artist`, `limit`, `offset`, `format`, `export`, `full` | Get album tracks (by name or ID) | All |
+| `song_details` | `song_id` | Full song metadata | All |
+| `artist_details` | `artist` | Artist info and discography | All |
+| `song_station` | `song_id` | Get radio station for song | All |
+| `genres` | - | List all available genres | All |
+
+**Examples:**
+```python
+catalog(action="search", query="90s alternative", types="songs", limit=50)
+catalog(action="album_tracks", album="Abbey Road", artist="Beatles")
+catalog(action="artist_details", artist="The Beatles")
+```
+
+### `discover(action=...)`
+Discovery and recommendations - personalized stations, charts, top songs, similar artists
+
+| Action | Parameters | Description | Platform |
+|--------|-----------|-------------|----------|
+| `recommendations` | `format`, `export`, `full` | Personalized recommendations | All |
+| `heavy_rotation` | `format`, `export`, `full` | Your frequently played | All |
+| `charts` | `chart_type`, `format`, `export`, `full` | Apple Music charts | All |
+| `artist_top_songs` | `artist` | Artist's popular songs | All |
+| `similar_artists` | `artist` | Find similar artists | All |
+| `search_suggestions` | `term` | Autocomplete suggestions | All |
+| `personal_station` | - | Your personal radio station | All |
+
+**Examples:**
+```python
+discover(action="recommendations")
+discover(action="charts", chart_type="songs")
+discover(action="artist_top_songs", artist="The Beatles")
+```
+
+### Playback (macOS only)
 | Tool | Description | Method | Platform |
 |------|-------------|--------|----------|
 | `play` | Play track, playlist, or album (with shuffle option) | API + AS | macOS |
@@ -215,14 +253,15 @@ Add to config.json:
 `play` accepts ONE of: `track`, `playlist`, or `album`. Use `shuffle=True` for shuffled playback. Response shows source: `[Library]`, `[Catalog]`, or `[Catalog→Library]`. Catalog items can be added first (`add_to_library=True`) or opened in Music (`reveal=True`).
 
 ### Utilities
-| Tool | Description | Method | Platform |
-|------|-------------|--------|----------|
-| `check_auth_status` | Verify tokens and API connection | API | All |
-| `config` | Preferences, storefronts, cache, audit log | Local + API | All |
-| `airplay` | List or switch AirPlay devices | AppleScript | macOS |
-| `reveal_in_music` | Show track in Music app | AppleScript | macOS |
 
-`config(action="list-storefronts")` shows available Apple Music regions.
+| Tool | Description | Platform |
+|------|-------------|----------|
+| `config(action=...)` | Preferences, storefronts, cache, audit log | All |
+| `check_auth_status()` | Verify tokens and API connection | All |
+| `airplay(device_name=...)` | List or switch AirPlay devices | macOS |
+| `reveal_in_music(track_name, artist)` | Show track in Music app | macOS |
+
+**Config actions:** `info`, `set-pref`, `list-storefronts`, `audit-log`, `clear-tracks`, `clear-exports`, `clear-audit-log`
 
 ### Output Format
 
@@ -241,10 +280,10 @@ Most list tools support these output options:
 
 **Examples:**
 ```
-search_library("beatles", format="json")                      # JSON response
-browse_library("songs", export="csv")                         # Text + CSV file
-browse_library("songs", format="none", export="csv")          # CSV only (saves tokens)
-get_playlist_tracks("p.123", export="json", full=True)        # JSON file with all metadata
+library(action="search", query="beatles", format="json")                      # JSON response
+library(action="browse", item_type="songs", export="csv")                     # Text + CSV file
+library(action="browse", item_type="songs", format="none", export="csv")      # CSV only (saves tokens)
+playlist(action="tracks", playlist="p.123", export="json", full=True)         # JSON file with all metadata
 ```
 
 ### MCP Resources
