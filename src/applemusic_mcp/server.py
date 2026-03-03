@@ -202,7 +202,8 @@ def _normalize_with_tracking(name: str) -> tuple[list[str], list[str]]:
     for article in [r'\bthe\s+', r'\ban\s+', r'\ba\s+']:
         if re.match(article, name):
             name = re.sub(f'^{article}', '', name)
-            transformations.append(f"removed article '{article.replace(r'\\b', '').replace(r'\\s+', '').strip()}'")
+            clean_article = article.replace(r'\b', '').replace(r'\s+', '').strip()
+            transformations.append(f"removed article '{clean_article}'")
             break
 
     # Step 4: Normalize "and" / "&"
