@@ -8,6 +8,8 @@ import csv
 import io
 import json
 import re
+import subprocess
+import threading
 import time
 import unicodedata
 from dataclasses import dataclass
@@ -5423,6 +5425,119 @@ if APPLESCRIPT_AVAILABLE:
                 return "No AirPlay devices found"
             return f"AirPlay devices ({len(devices)}):\n" + "\n".join(f"  - {d}" for d in devices)
 
+
+
+# =============================================================================
+# URL-based playback and command execution tools (macOS only)
+# =============================================================================
+
+if APPLESCRIPT_AVAILABLE:
+
+    _UI_PLAY_BUTTON = (
+        'button "Play" of UI element 1 of list 1 of list 1'
+        ' of scroll area 2 of splitter group 1 of window "Music"'
+    )
+
+    def _delayed_play_attempt():
+        """Background task: wait for Music app to load content, then click Play via UI scripting."""
+        for delay in (3, 3, 3):
+            time.sleep(delay)
+            # Check if something started playing on its own
+            check = subprocess.run(
+                ["osascript", "-e", 'tell application "Music" to get player state'],
+                capture_output=True, text=True, timeout=5,
+            )
+            if check.stdout.strip() == "playing":
+                return
+            # Click the Play button via System Events UI scripting
+            subprocess.run(
+                ["osascript", "-e",
+                 f'tell application "System Events" to tell process "Music"'
+                 f' to click {_UI_PLAY_BUTTON}'],
+                capture_output=True, text=True, timeout=5,
+            )
+
+    @mcp.tool()
+    def play_url(url: str) -> str:
+        """Open an Apple Music URL in the Music app and attempt to start playback.
+
+        Accepts https://music.apple.com/... or music:// URLs.
+        Converts HTTPS URLs to music:// format so the Music app handles them directly.
+        After opening, clicks the Play button via UI scripting (requires Accessibility permissions).
+        Streams to whatever AirPlay device is currently active.
+        """
+        url = url.strip()
+        if not url:
+            return "Error: url parameter is required"
+
+        # Validate URL format
+        if not (url.startswith("https://music.apple.com/") or url.startswith("music://")):
+            return "Error: url must be an Apple Music URL (https://music.apple.com/... or music://...)"
+
+        # Convert HTTPS to music:// scheme
+        if url.startswith("https://music.apple.com/"):
+            url = "music://" + url[len("https://"):]
+
+        try:
+            result = subprocess.run(
+                ["open", url],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            if result.returncode != 0:
+                return f"Error: open command failed: {result.stderr.strip()}"
+        except subprocess.TimeoutExpired:
+            return "Error: timed out opening URL"
+        except Exception as e:
+            return f"Error: {e}"
+
+        # Kick off background retries to start playback
+        threading.Thread(target=_delayed_play_attempt, daemon=True).start()
+
+        return f"Opened {url} in Music app. Playback will be attempted automatically."
+
+    @mcp.tool()
+    def run_command(command: str) -> str:
+        """Run a shell command on the local machine and return stdout/stderr.
+
+        Intended for osascript commands to control the Music app (volume, playback, etc.).
+        Command length limited to 500 characters. Commands containing rm, sudo, or mkfs are rejected.
+        """
+        command = command.strip()
+        if not command:
+            return "Error: command parameter is required"
+
+        if len(command) > 500:
+            return "Error: command exceeds 500 character limit"
+
+        # Basic safety: reject dangerous commands
+        blocked = ["rm ", "rm\t", "sudo ", "sudo\t", "mkfs"]
+        command_lower = command.lower()
+        for token in blocked:
+            if token in command_lower:
+                return f"Error: commands containing '{token.strip()}' are not allowed"
+
+        try:
+            result = subprocess.run(
+                command,
+                shell=True,
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            parts = []
+            if result.stdout.strip():
+                parts.append(f"stdout:\n{result.stdout.strip()}")
+            if result.stderr.strip():
+                parts.append(f"stderr:\n{result.stderr.strip()}")
+            if not parts:
+                return f"Command completed (exit code {result.returncode}), no output"
+            return "\n".join(parts)
+        except subprocess.TimeoutExpired:
+            return "Error: command timed out after 30 seconds"
+        except Exception as e:
+            return f"Error: {e}"
 
 
 def main():
