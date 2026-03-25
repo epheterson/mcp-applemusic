@@ -1237,6 +1237,313 @@ def open_catalog_and_play(url: str, shuffle: bool = False, timeout: float = 15.0
 
 
 # =============================================================================
+# UI Catalog Automation (no API required)
+# =============================================================================
+# These functions control Music.app through its UI (System Events + CoreGraphics)
+# to provide catalog search, add-to-library, and play functionality without
+# needing an Apple Developer account or API token.
+#
+# Requirements: macOS, Accessibility permissions for System Events,
+# Music.app visible (not minimized), display attached (not headless).
+
+_SEARCH_FIELD = (
+    'text field 1 of UI element 1 of row 1 of outline 1'
+    ' of scroll area 1 of splitter group 1 of window "Music"'
+)
+
+
+def ui_search_catalog(query: str) -> tuple[bool, list[dict]]:
+    """Search the Apple Music catalog via Music.app's search field.
+
+    Types the query into the search field, submits it, and parses
+    the "Top Results" section from the results page.
+
+    Args:
+        query: Search query (e.g. "Radiohead Creep", "Taylor Swift")
+
+    Returns:
+        Tuple of (success, list of result dicts).
+        Each result dict has: name, type ("Song", "Album", "Artist", etc.),
+        artist (if applicable), and index (position in results).
+    """
+    if not query or not query.strip():
+        return False, []
+
+    # Focus and populate the search field
+    ok, _ = run_applescript(f'''
+tell application "Music" to activate
+delay 0.5
+tell application "System Events"
+    tell process "Music"
+        set searchField to {_SEARCH_FIELD}
+        set focused of searchField to true
+        delay 0.3
+        set value of searchField to "{_escape_for_applescript(query)}"
+        delay 0.5
+        key code 36
+    end tell
+end tell''')
+    if not ok:
+        return False, []
+
+    # Wait for results to load
+    time.sleep(4)
+
+    # Parse the Top Results section
+    ok, raw = run_applescript('''
+tell application "System Events"
+    tell process "Music"
+        set sg to splitter group 1 of window "Music"
+        set sa to scroll area 2 of sg
+        set resultList to list 1 of sa
+        try
+            set topResults to list 1 of resultList
+        on error
+            return "NO_RESULTS"
+        end try
+        set ec to every UI element of topResults
+        set r to ""
+        set idx to 0
+        repeat with e in ec
+            try
+                set c to class of e as text
+                if c is "UI element" then
+                    set d to description of e
+                    if d is not "Top Results" and d is not "group" then
+                        set idx to idx + 1
+                        -- Get the type line (second static text, e.g. "Song · Radiohead")
+                        set typeLine to ""
+                        set stTexts to every static text of e
+                        if (count of stTexts) > 1 then
+                            set typeLine to name of item 2 of stTexts
+                        end if
+                        set r to r & idx & "|||" & d & "|||" & typeLine & return
+                    end if
+                end if
+            end try
+        end repeat
+        return r
+    end tell
+end tell''')
+    if not ok or not raw or raw.strip() == "NO_RESULTS":
+        return False, []
+
+    results = []
+    for line in raw.strip().split("\n"):
+        line = line.strip()
+        if not line or "|||" not in line:
+            continue
+        parts = line.split("|||")
+        if len(parts) >= 3:
+            name = parts[1].strip()
+            type_line = parts[2].strip()
+            # Parse "Song · Radiohead" or "Album · Radiohead" etc.
+            # Apple uses U+2004 (three-per-em space) + U+00B7 (middle dot) + U+2004
+            result_type = ""
+            artist = ""
+            for sep in ["\u2004\u00b7\u2004", " \u00b7 ", " · "]:
+                if sep in type_line:
+                    result_type, artist = type_line.split(sep, 1)
+                    break
+            else:
+                result_type = type_line
+            results.append({
+                "name": name,
+                "type": result_type.strip(),
+                "artist": artist.strip(),
+                "index": int(parts[0]),
+            })
+
+    return True, results
+
+
+def ui_clear_search() -> None:
+    """Clear the Music.app search field and dismiss search."""
+    run_applescript(f'''
+tell application "System Events"
+    tell process "Music"
+        set searchField to {_SEARCH_FIELD}
+        set focused of searchField to true
+        delay 0.2
+        set value of searchField to ""
+        delay 0.2
+        key code 53
+    end tell
+end tell''')
+
+
+def ui_add_to_library(result_name: str) -> tuple[bool, str]:
+    """Add a catalog item to library via Music.app UI.
+
+    Must be called after ui_search_catalog() with results visible.
+    Hovers over the result to reveal the "Add to Library" button and clicks it.
+
+    Args:
+        result_name: Exact name of the result to add (as returned by ui_search_catalog)
+
+    Returns:
+        Tuple of (success, message)
+    """
+    safe_name = _escape_for_applescript(result_name)
+
+    # Find the result's position
+    ok, pos_str = run_applescript(f'''
+tell application "System Events"
+    tell process "Music"
+        set sg to splitter group 1 of window "Music"
+        set sa to scroll area 2 of sg
+        set resultList to list 1 of sa
+        try
+            set topResults to list 1 of resultList
+        on error
+            return "NO_RESULTS"
+        end try
+        repeat with e in (every UI element of topResults)
+            try
+                if description of e is "{safe_name}" then
+                    set {{x, y}} to position of e
+                    set {{w, h}} to size of e
+                    return ((x + w / 2) as text) & "," & ((y + h / 2) as text)
+                end if
+            end try
+        end repeat
+        return "NOT_FOUND"
+    end tell
+end tell''')
+    if not ok or not pos_str or pos_str.strip() in ("NOT_FOUND", "NO_RESULTS"):
+        return False, f"Could not find '{result_name}' in search results"
+
+    try:
+        cx, cy = [float(v) for v in pos_str.strip().split(",")]
+    except ValueError:
+        return False, f"Invalid position: {pos_str}"
+
+    # Hover to reveal the Add to Library button
+    _ensure_music_frontmost()
+    if not _jxa_mouse_move(cx, cy):
+        return False, "Failed to move mouse for hover"
+    time.sleep(1)
+
+    # Click the Add to Library button
+    ok, click_result = run_applescript(f'''
+tell application "System Events"
+    tell process "Music"
+        set sg to splitter group 1 of window "Music"
+        set sa to scroll area 2 of sg
+        set resultList to list 1 of sa
+        try
+            set topResults to list 1 of resultList
+        on error
+            return "NO_RESULTS"
+        end try
+        repeat with e in (every UI element of topResults)
+            try
+                if description of e is "{safe_name}" then
+                    -- Look for Add to Library button
+                    repeat with btn in (every button of e)
+                        if description of btn is "Add to Library" then
+                            click btn
+                            return "ADDED"
+                        end if
+                    end repeat
+                    return "NO_ADD_BUTTON"
+                end if
+            end try
+        end repeat
+        return "NOT_FOUND"
+    end tell
+end tell''')
+    if ok and click_result and click_result.strip() == "ADDED":
+        return True, f"Added '{result_name}' to library"
+
+    if click_result and "NO_ADD_BUTTON" in click_result:
+        return False, f"No 'Add to Library' button found — may already be in library, or hover didn't reveal it"
+
+    return False, f"Failed to add: {click_result}"
+
+
+def ui_play_result(result_name: str) -> tuple[bool, str]:
+    """Play a catalog item from search results via Music.app UI.
+
+    Must be called after ui_search_catalog() with results visible.
+    Hovers over the result to reveal the play checkbox and clicks it.
+
+    Args:
+        result_name: Exact name of the result to play (as returned by ui_search_catalog)
+
+    Returns:
+        Tuple of (success, message)
+    """
+    safe_name = _escape_for_applescript(result_name)
+
+    # Find position
+    ok, pos_str = run_applescript(f'''
+tell application "System Events"
+    tell process "Music"
+        set sg to splitter group 1 of window "Music"
+        set sa to scroll area 2 of sg
+        set resultList to list 1 of sa
+        try
+            set topResults to list 1 of resultList
+        on error
+            return "NOT_FOUND"
+        end try
+        repeat with e in (every UI element of topResults)
+            try
+                if description of e is "{safe_name}" then
+                    set {{x, y}} to position of e
+                    set {{w, h}} to size of e
+                    return ((x + w / 2) as text) & "," & ((y + h / 2) as text)
+                end if
+            end try
+        end repeat
+        return "NOT_FOUND"
+    end tell
+end tell''')
+    if not ok or not pos_str or pos_str.strip() == "NOT_FOUND":
+        return False, f"Could not find '{result_name}' in search results"
+
+    try:
+        cx, cy = [float(v) for v in pos_str.strip().split(",")]
+    except ValueError:
+        return False, f"Invalid position: {pos_str}"
+
+    # Hover to reveal play checkbox
+    _ensure_music_frontmost()
+    if not _jxa_mouse_move(cx, cy):
+        return False, "Failed to hover"
+    time.sleep(1)
+
+    # Click the play checkbox
+    ok, _ = run_applescript(f'''
+tell application "System Events"
+    tell process "Music"
+        set sg to splitter group 1 of window "Music"
+        set sa to scroll area 2 of sg
+        set resultList to list 1 of sa
+        try
+            set topResults to list 1 of resultList
+        on error
+            return "NOT_FOUND"
+        end try
+        repeat with e in (every UI element of topResults)
+            try
+                if description of e is "{safe_name}" then
+                    click checkbox 1 of e
+                    return "CLICKED"
+                end if
+            end try
+        end repeat
+        return "NOT_FOUND"
+    end tell
+end tell''')
+    time.sleep(2)
+    if _check_playing():
+        return True, f"Playing: {result_name}"
+    return False, f"Clicked play on '{result_name}' but playback didn't start"
+
+
+# =============================================================================
 # Library Snapshot & Diff
 # =============================================================================
 
