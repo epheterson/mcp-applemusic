@@ -1543,6 +1543,36 @@ end tell''')
     return False, f"Clicked play on '{result_name}' but playback didn't start"
 
 
+def ui_play_result_by_query(query: str) -> tuple[bool, str]:
+    """Search catalog via UI and play the first song result.
+
+    Convenience function that combines ui_search_catalog + ui_play_result.
+
+    Args:
+        query: Search query (e.g. "Radiohead Creep")
+
+    Returns:
+        Tuple of (success, message)
+    """
+    ok, results = ui_search_catalog(query)
+    if not ok or not results:
+        ui_clear_search()
+        return False, f"No results found for '{query}'"
+
+    # Find first song result
+    target = None
+    for r in results:
+        if r["type"] == "Song":
+            target = r
+            break
+    if target is None:
+        target = results[0]
+
+    ok, msg = ui_play_result(target["name"])
+    ui_clear_search()
+    return ok, msg
+
+
 def ui_add_to_playlist(playlist_name: str, query: str, artist: str = "") -> tuple[bool, str]:
     """Add a catalog track to a playlist via UI automation (no API required).
 

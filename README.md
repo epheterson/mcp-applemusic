@@ -32,7 +32,7 @@
 
 **Requirements:** Python 3.10+, Apple Music app with subscription.
 
-**No Apple Developer account needed!** Most features work instantly via AppleScript.
+**No Apple Developer account needed!** All features work via AppleScript and UI automation. The API is optional — when available it enables cross-platform support and faster catalog access, but everything works without it on macOS.
 
 ```bash
 git clone https://github.com/epheterson/mcp-applemusic.git

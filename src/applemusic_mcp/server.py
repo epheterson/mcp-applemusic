@@ -2563,6 +2563,13 @@ def _playlist_add(
                     ids_list.append(catalog_id)
                     steps.append(f"Found in catalog: {display}")
                 else:
+                    # API catalog search failed — try UI fallback for add-to-playlist
+                    if APPLESCRIPT_AVAILABLE:
+                        search_q = f"{name} {track_artist}".strip() if track_artist else name
+                        ui_ok, ui_msg = asc.ui_add_to_playlist(resolved.applescript_name, search_q, track_artist)
+                        if ui_ok:
+                            steps.append(f"[UI] {ui_msg}")
+                            return "\n".join(steps)
                     steps.append(f"Could not find '{name}' in library or catalog")
 
         if not ids_list:
@@ -5299,6 +5306,14 @@ if APPLESCRIPT_AVAILABLE:
                 f"[Catalog] Found: {song_name} by {song_artist}. "
                 f"Use reveal=True to open in Music, or add_to_library=True to save & play."
             )
+
+        # API catalog search found nothing — try UI search as last resort
+        if APPLESCRIPT_AVAILABLE:
+            search_term = f"{track_name} {track_artist}".strip() if track_artist else track_name
+            ok, msg = asc.ui_play_result_by_query(search_term)
+            if ok:
+                audit_log.log_action("play_track", {"track": track_name, "artist": track_artist, "source": "ui_search"})
+                return f"[UI Search] {msg}"
 
         return f"Track not found in library or catalog: {track_name}"
 
