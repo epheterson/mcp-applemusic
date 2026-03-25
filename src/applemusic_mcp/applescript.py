@@ -1237,6 +1237,173 @@ def open_catalog_and_play(url: str, shuffle: bool = False, timeout: float = 15.0
 
 
 # =============================================================================
+# Library Snapshot & Diff
+# =============================================================================
+
+def library_snapshot() -> tuple[bool, dict]:
+    """Capture a full snapshot of the Music library for integrity checking.
+
+    Returns a dict with:
+        - track_count: total library tracks
+        - playlists: dict mapping playlist name -> list of {name, artist, album}
+
+    This is intentionally thorough (captures full track lists) so diffs can
+    detect any accidental additions, removals, or reorders.
+    """
+    # Get total track count
+    ok, count_str = run_applescript(
+        'tell application "Music" to return (count of tracks of library playlist 1) as text'
+    )
+    if not ok:
+        return False, {"error": f"Failed to count tracks: {count_str}"}
+    try:
+        track_count = int(count_str.strip())
+    except ValueError:
+        return False, {"error": f"Invalid track count: {count_str}"}
+
+    # Get playback state
+    ok, pb_str = run_applescript('''
+tell application "Music"
+    set ps to player state as text
+    set v to (sound volume) as text
+    set sh to (shuffle enabled) as text
+    set rp to song repeat as text
+    set ct to ""
+    set ca to ""
+    set calb to ""
+    try
+        set ct to name of current track
+        set ca to artist of current track
+        set calb to album of current track
+    end try
+    return ps & return & v & return & sh & return & rp & return & ct & return & ca & return & calb
+end tell''')
+    playback_state = {}
+    if ok and pb_str:
+        lines = pb_str.strip().split("\n")
+        playback_state = {
+            "player_state": lines[0] if len(lines) > 0 else "unknown",
+            "volume": int(lines[1]) if len(lines) > 1 and lines[1].strip().isdigit() else 0,
+            "shuffle": lines[2].strip() == "true" if len(lines) > 2 else False,
+            "repeat": lines[3].strip() if len(lines) > 3 else "unknown",
+            "current_track": lines[4].strip() if len(lines) > 4 and lines[4].strip() else None,
+            "current_artist": lines[5].strip() if len(lines) > 5 and lines[5].strip() else None,
+            "current_album": lines[6].strip() if len(lines) > 6 and lines[6].strip() else None,
+        }
+
+    # Get all user playlists and their contents
+    ok, playlist_data = run_applescript('''
+tell application "Music"
+    set r to ""
+    repeat with p in user playlists
+        set pName to name of p
+        set pKind to smart of p
+        if pKind is false and pName is not "Music" and pName is not "Music Videos" then
+            set r to r & "PLAYLIST:" & pName & return
+            try
+                repeat with t in tracks of p
+                    set r to r & name of t & "|||" & artist of t & "|||" & album of t & return
+                end repeat
+            end try
+        end if
+    end repeat
+    return r
+end tell''')
+    if not ok:
+        return False, {"error": f"Failed to get playlists: {playlist_data}"}
+
+    playlists = {}
+    current_playlist = None
+    for line in playlist_data.strip().split("\n"):
+        line = line.strip()
+        if not line:
+            continue
+        if line.startswith("PLAYLIST:"):
+            current_playlist = line[9:]
+            playlists[current_playlist] = []
+        elif current_playlist is not None and "|||" in line:
+            parts = line.split("|||")
+            if len(parts) >= 3:
+                playlists[current_playlist].append({
+                    "name": parts[0],
+                    "artist": parts[1],
+                    "album": parts[2],
+                })
+
+    return True, {
+        "track_count": track_count,
+        "playback": playback_state,
+        "playlists": playlists,
+    }
+
+
+def library_diff(before: dict, after: dict) -> dict:
+    """Compare two library snapshots and return differences.
+
+    Args:
+        before: snapshot dict from library_snapshot()
+        after: snapshot dict from library_snapshot()
+
+    Returns:
+        Dict with:
+            - track_count_change: int (positive = added, negative = removed)
+            - playlists_added: list of playlist names
+            - playlists_removed: list of playlist names
+            - playlists_changed: dict of {name: {added: [...], removed: [...]}}
+            - is_clean: bool (True if no changes detected)
+    """
+    # Compare playback state
+    before_pb = before.get("playback", {})
+    after_pb = after.get("playback", {})
+    playback_changes = {}
+    for key in ["player_state", "volume", "shuffle", "repeat", "current_track", "current_artist"]:
+        if before_pb.get(key) != after_pb.get(key):
+            playback_changes[key] = {"before": before_pb.get(key), "after": after_pb.get(key)}
+
+    result = {
+        "track_count_change": after.get("track_count", 0) - before.get("track_count", 0),
+        "playback_changes": playback_changes,
+        "playlists_added": [],
+        "playlists_removed": [],
+        "playlists_changed": {},
+        "is_clean": True,
+    }
+
+    before_pl = before.get("playlists", {})
+    after_pl = after.get("playlists", {})
+
+    # Find added/removed playlists
+    for name in after_pl:
+        if name not in before_pl:
+            result["playlists_added"].append(name)
+    for name in before_pl:
+        if name not in after_pl:
+            result["playlists_removed"].append(name)
+
+    # Compare track lists for playlists that exist in both
+    for name in before_pl:
+        if name in after_pl:
+            before_tracks = {f"{t['name']}|{t['artist']}" for t in before_pl[name]}
+            after_tracks = {f"{t['name']}|{t['artist']}" for t in after_pl[name]}
+            added = after_tracks - before_tracks
+            removed = before_tracks - after_tracks
+            if added or removed:
+                result["playlists_changed"][name] = {
+                    "added": list(added),
+                    "removed": list(removed),
+                }
+
+    # Determine if clean
+    if (result["track_count_change"] != 0
+            or result["playlists_added"]
+            or result["playlists_removed"]
+            or result["playlists_changed"]):
+        result["is_clean"] = False
+
+    return result
+
+
+# =============================================================================
 # Library Search
 # =============================================================================
 

@@ -414,6 +414,63 @@ class TestOpenCatalogAndPlay:
         assert "test track" in result.lower()
 
 
+class TestLibrarySnapshot:
+    """Test library snapshot and diff functions."""
+
+    def test_snapshot_returns_valid_structure(self):
+        """Should capture track count, playback state, and playlists."""
+        ok, snap = asc.library_snapshot()
+        assert ok is True
+        assert isinstance(snap["track_count"], int)
+        assert snap["track_count"] > 0
+        assert isinstance(snap["playlists"], dict)
+        assert len(snap["playlists"]) > 0
+        assert isinstance(snap["playback"], dict)
+        assert "player_state" in snap["playback"]
+        assert "volume" in snap["playback"]
+
+    def test_snapshot_playlists_have_tracks(self):
+        """Should capture full track lists in playlists."""
+        ok, snap = asc.library_snapshot()
+        assert ok is True
+        # Find a non-empty playlist
+        for name, tracks in snap["playlists"].items():
+            if len(tracks) > 0:
+                assert "name" in tracks[0]
+                assert "artist" in tracks[0]
+                assert "album" in tracks[0]
+                break
+
+    def test_diff_clean_when_no_changes(self):
+        """Back-to-back snapshots should produce a clean diff."""
+        ok1, snap1 = asc.library_snapshot()
+        ok2, snap2 = asc.library_snapshot()
+        diff = asc.library_diff(snap1, snap2)
+        assert diff["is_clean"] is True
+        assert diff["track_count_change"] == 0
+        assert diff["playlists_added"] == []
+        assert diff["playlists_removed"] == []
+        assert diff["playlists_changed"] == {}
+
+    def test_diff_detects_playlist_creation_and_deletion(self):
+        """Should detect when a playlist is added, then verify cleanup."""
+        test_name = "_TEST_SNAPSHOT_DIFF_"
+        ok1, snap1 = asc.library_snapshot()
+
+        # Create test playlist
+        asc.create_playlist(test_name)
+        ok2, snap2 = asc.library_snapshot()
+        diff = asc.library_diff(snap1, snap2)
+        assert test_name in diff["playlists_added"]
+        assert diff["is_clean"] is False
+
+        # Delete and verify clean
+        asc.delete_playlist(test_name)
+        ok3, snap3 = asc.library_snapshot()
+        diff2 = asc.library_diff(snap1, snap3)
+        assert diff2["is_clean"] is True
+
+
 class TestAddTrackDisambiguation:
     """Test artist exact match and album disambiguation in add_track_to_playlist.
 
