@@ -4433,7 +4433,25 @@ def catalog(
     action = action.lower().strip().replace("-", "_")
 
     if action == "search":
-        return _catalog_search(query, types, limit, format, export, full, clean_only)
+        # Try API first, fall back to UI search if no API token
+        try:
+            get_headers()  # Verify API access is available
+            return _catalog_search(query, types, limit, format, export, full, clean_only)
+        except (FileNotFoundError, ValueError):
+            if APPLESCRIPT_AVAILABLE and query:
+                ok, results = asc.ui_search_catalog(query)
+                if ok and results:
+                    asc.ui_clear_search()
+                    lines = [f"=== UI Search: {query} (no API — results from Music.app) ===", ""]
+                    for r in results:
+                        artist_str = f" by {r['artist']}" if r.get('artist') else ""
+                        type_str = f" ({r['type']})" if r.get('type') else ""
+                        lines.append(f"{r['index']}. {r['name']}{type_str}{artist_str}")
+                    lines.append("")
+                    lines.append("Note: UI search shows Top Results only. For full catalog search, set up API access.")
+                    return "\n".join(lines)
+                asc.ui_clear_search()
+            return "Error: API token required for catalog search. Set up API access or use UI search on macOS."
     elif action == "album_tracks":
         return _catalog_album_tracks(album, artist, limit, offset, format, export, full)
     elif action == "album_details":

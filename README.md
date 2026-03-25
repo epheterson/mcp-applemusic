@@ -13,8 +13,8 @@
 | Love/dislike tracks | ✓ | ✓ |
 | CSV/JSON export | ✓ | ✓ |
 | Add tracks to playlists | ✓ | API-created |
-| Search catalog |   | ✓ |
-| Add songs to library |   | ✓ |
+| Search catalog | ✓* | ✓ |
+| Add songs to library | ✓* | ✓ |
 | Recommendations, charts, radio |   | ✓ |
 | Play tracks | ✓ |   |
 | Play by URL (album, playlist, song) | ✓ |   |
@@ -24,7 +24,7 @@
 | Remove tracks from playlists | ✓ |   |
 | Delete playlists | ✓ |   |
 
-**macOS** uses AppleScript for full local control. **API** mode enables catalog features and works cross-platform.
+**macOS** uses AppleScript for full local control. **API** mode enables catalog features and works cross-platform. *\* UI automation fallback — uses Music.app UI scripting when API is unavailable (macOS only, requires display + Accessibility permissions).*
 
 ---
 
@@ -278,7 +278,18 @@ Supports albums, editorial playlists, personal playlists (`pl.u-` prefix), and s
 | `airplay(device_name=...)` | List or switch AirPlay devices | macOS |
 | `reveal_in_music(track, artist)` | Show track in Music app | macOS |
 
-**Config actions:** `info`, `set-pref`, `list-storefronts`, `audit-log`, `clear-tracks`, `clear-exports`, `clear-audit-log`
+**Config actions:** `info`, `set-pref`, `list-storefronts`, `audit-log`, `snapshot`, `diff`, `clear-tracks`, `clear-exports`, `clear-audit-log`
+
+### Library Safety
+
+Full library integrity checking via snapshots and diffs:
+
+```
+config(action="snapshot")  # Capture full library state (tracks, playlists, playback)
+config(action="diff")      # Compare current state to last snapshot
+```
+
+All modifying operations (add/remove tracks, create/delete playlists, playback changes) are logged to the audit log. Use `config(action="audit-log")` to review.
 
 ### Output Format
 
