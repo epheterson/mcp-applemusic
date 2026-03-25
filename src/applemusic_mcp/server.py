@@ -4470,7 +4470,7 @@ def config(
     string_value: str = "",
     limit: int = 20,
 ) -> str:
-    """Config and cache. Actions: info, auth-status, set-pref, list-storefronts, audit-log, clear-tracks, clear-exports, clear-audit-log."""
+    """Config and cache. Actions: info, auth-status, set-pref, list-storefronts, audit-log, snapshot, diff, clear-tracks, clear-exports, clear-audit-log."""
     try:
         action = action.lower()
 
@@ -4597,8 +4597,16 @@ def config(
         if action == "clear-audit-log":
             entries = audit_log.get_recent_entries(limit=1000)
             if audit_log.clear_audit_log():
-                return f"✓ Cleared audit log ({len(entries)} entries removed)"
+                return f"Cleared audit log ({len(entries)} entries removed)"
             return "Error: Failed to clear audit log"
+
+        # === LIBRARY SNAPSHOT ===
+        if action == "snapshot":
+            return _config_snapshot(limit)
+
+        # === LIBRARY DIFF ===
+        if action == "diff":
+            return _config_diff()
 
         # === INFO (DEFAULT) ===
         if action == "info":
@@ -4687,6 +4695,15 @@ def config(
             output.append(f"  Location: {log_path}")
             output.append(f"  View: config(action='audit-log')")
             output.append(f"  Clear: config(action='clear-audit-log')")
+            output.append("")
+            snap_dir = _get_snapshot_dir()
+            snap_files = sorted(snap_dir.glob("snapshot-*.json"), reverse=True)
+            if snap_files:
+                output.append(f"Library Snapshots: {len(snap_files)} saved")
+            else:
+                output.append("Library Snapshots: None (take one: config(action='snapshot'))")
+            output.append(f"  Take: config(action='snapshot')")
+            output.append(f"  Compare: config(action='diff')")
 
             return "\n".join(output)
 
@@ -4695,11 +4712,139 @@ def config(
             return _config_auth_status()
 
         # === UNKNOWN ACTION ===
-        valid_actions = "info, set-pref, list-storefronts, audit-log, clear-tracks, clear-exports, clear-audit-log, auth-status"
+        valid_actions = "info, set-pref, list-storefronts, audit-log, snapshot, diff, clear-tracks, clear-exports, clear-audit-log, auth-status"
         return f"Error: Unknown action '{action}'. Valid: {valid_actions}"
 
     except Exception as e:
         return f"Error: {str(e)}"
+
+
+def _get_snapshot_dir() -> Path:
+    """Get the snapshot storage directory."""
+    snap_dir = Path.home() / ".cache" / "applemusic-mcp" / "snapshots"
+    snap_dir.mkdir(parents=True, exist_ok=True)
+    return snap_dir
+
+
+def _save_snapshot(snapshot: dict, label: str = "") -> Path:
+    """Save a snapshot to disk with timestamp."""
+    snap_dir = _get_snapshot_dir()
+    ts = time.strftime("%Y%m%d-%H%M%S")
+    suffix = f"-{label}" if label else ""
+    path = snap_dir / f"snapshot-{ts}{suffix}.json"
+    path.write_text(json.dumps(snapshot, indent=2, default=str))
+    return path
+
+
+def _get_latest_snapshot() -> Optional[tuple[dict, Path]]:
+    """Load the most recent saved snapshot."""
+    snap_dir = _get_snapshot_dir()
+    files = sorted(snap_dir.glob("snapshot-*.json"), reverse=True)
+    if not files:
+        return None
+    try:
+        data = json.loads(files[0].read_text())
+        return data, files[0]
+    except (json.JSONDecodeError, OSError):
+        return None
+
+
+def _config_snapshot(limit: int = 20) -> str:
+    """Take a library snapshot and save it."""
+    if not APPLESCRIPT_AVAILABLE:
+        return "Error: Snapshots require macOS with AppleScript"
+
+    ok, snapshot = asc.library_snapshot()
+    if not ok:
+        return f"Error: Failed to take snapshot: {snapshot.get('error', 'unknown')}"
+
+    path = _save_snapshot(snapshot)
+    playlist_count = len(snapshot.get("playlists", {}))
+    total_playlist_tracks = sum(len(t) for t in snapshot.get("playlists", {}).values())
+    pb = snapshot.get("playback", {})
+
+    output = [
+        "=== Library Snapshot ===",
+        f"Saved to: {path.name}",
+        "",
+        f"Library: {snapshot['track_count']} tracks",
+        f"Playlists: {playlist_count} ({total_playlist_tracks} total playlist tracks)",
+        f"Player: {pb.get('player_state', '?')}, vol {pb.get('volume', '?')}, "
+        f"shuffle {'on' if pb.get('shuffle') else 'off'}, repeat {pb.get('repeat', '?')}",
+    ]
+    if pb.get("current_track"):
+        output.append(f"Now playing: {pb['current_track']} - {pb.get('current_artist', '?')}")
+
+    output.append("")
+    output.append("Playlists:")
+    for name, tracks in sorted(snapshot.get("playlists", {}).items()):
+        output.append(f"  {name}: {len(tracks)} tracks")
+
+    output.append("")
+    output.append("To compare changes: config(action='diff')")
+
+    # List saved snapshots
+    snap_dir = _get_snapshot_dir()
+    files = sorted(snap_dir.glob("snapshot-*.json"), reverse=True)
+    if len(files) > 1:
+        output.append(f"Saved snapshots: {len(files)} (in {snap_dir})")
+
+    return "\n".join(output)
+
+
+def _config_diff() -> str:
+    """Compare current library state to the most recent snapshot."""
+    if not APPLESCRIPT_AVAILABLE:
+        return "Error: Diff requires macOS with AppleScript"
+
+    prev = _get_latest_snapshot()
+    if prev is None:
+        return "No previous snapshot found. Take one first: config(action='snapshot')"
+    prev_data, prev_path = prev
+
+    ok, current = asc.library_snapshot()
+    if not ok:
+        return f"Error: Failed to take current snapshot: {current.get('error', 'unknown')}"
+
+    diff = asc.library_diff(prev_data, current)
+
+    if diff["is_clean"]:
+        return f"No changes detected since {prev_path.name}."
+
+    output = [f"=== Changes since {prev_path.name} ===", ""]
+
+    if diff["track_count_change"]:
+        sign = "+" if diff["track_count_change"] > 0 else ""
+        output.append(f"Library tracks: {sign}{diff['track_count_change']}")
+
+    if diff.get("playback_changes"):
+        output.append("Playback changes:")
+        for key, vals in diff["playback_changes"].items():
+            output.append(f"  {key}: {vals['before']} -> {vals['after']}")
+
+    if diff["playlists_added"]:
+        output.append(f"Playlists added: {', '.join(diff['playlists_added'])}")
+
+    if diff["playlists_removed"]:
+        output.append(f"Playlists removed: {', '.join(diff['playlists_removed'])}")
+
+    if diff["playlists_changed"]:
+        output.append("Playlist changes:")
+        for name, changes in diff["playlists_changed"].items():
+            if changes["added"]:
+                output.append(f"  {name}: +{len(changes['added'])} tracks")
+                for t in changes["added"][:5]:
+                    output.append(f"    + {t}")
+                if len(changes["added"]) > 5:
+                    output.append(f"    ... and {len(changes['added']) - 5} more")
+            if changes["removed"]:
+                output.append(f"  {name}: -{len(changes['removed'])} tracks")
+                for t in changes["removed"][:5]:
+                    output.append(f"    - {t}")
+                if len(changes["removed"]) > 5:
+                    output.append(f"    ... and {len(changes['removed']) - 5} more")
+
+    return "\n".join(output)
 
 
 def _config_auth_status() -> str:
