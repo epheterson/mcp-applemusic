@@ -4894,6 +4894,7 @@ if APPLESCRIPT_AVAILABLE:
         if playlist:
             success, result = asc.play_playlist(playlist, shuffle)
             if success:
+                audit_log.log_action("play_playlist", {"playlist": playlist, "shuffle": shuffle})
                 return result
             return f"Error: {result}"
 
@@ -4921,6 +4922,7 @@ if APPLESCRIPT_AVAILABLE:
                     success, result = asc.play_track(lib_track.get("name", ""), lib_artist)
                     if success:
                         shuffle_note = " (shuffled)" if shuffle else ""
+                        audit_log.log_action("play_album", {"album": lib_album, "artist": lib_artist})
                         return f"[Library] Playing: {lib_album} by {lib_artist}{shuffle_note}"
                     break
 
@@ -4965,6 +4967,7 @@ if APPLESCRIPT_AVAILABLE:
                                                 success, result = asc.play_track(lib_track2.get("name", ""), lib_track2.get("artist", ""))
                                                 if success:
                                                     shuffle_note = " (shuffled)" if shuffle else ""
+                                                    audit_log.log_action("play_album", {"album": album_name, "artist": album_artist})
                                                     return f"[Catalog→Library] Playing: {album_name} by {album_artist}{shuffle_note}"
                                                 break
                                 return f"[Catalog→Library] Added but sync pending: {album_name} by {album_artist}"
@@ -5036,6 +5039,7 @@ if APPLESCRIPT_AVAILABLE:
                                     if success:
                                         if reveal:
                                             asc.reveal_track(track_name, track_artist)
+                                        audit_log.log_action("play_track", {"track": track_name, "artist": track_artist})
                                         return f"[Catalog→Library] Playing: {track_name} by {track_artist}"
                                 return f"[Catalog→Library] Added but sync pending: {track_name} by {track_artist}"
                             return f"[Catalog] Failed to add: {add_msg}"
@@ -5076,6 +5080,7 @@ if APPLESCRIPT_AVAILABLE:
                 if success:
                     if reveal:
                         asc.reveal_track(lib_name, lib_artist)
+                    audit_log.log_action("play_track", {"track": lib_name, "artist": lib_artist})
                     return f"[Library] {result}"
                 break
 
@@ -5112,6 +5117,7 @@ if APPLESCRIPT_AVAILABLE:
                         if success:
                             if reveal:
                                 asc.reveal_track(song_name, song_artist)
+                            audit_log.log_action("play_track", {"track": song_name, "artist": song_artist})
                             return f"[Catalog→Library] Playing: {song_name} by {song_artist}"
                     return f"[Catalog→Library] Added but sync pending: {song_name} by {song_artist}"
                 return f"[Catalog] Failed to add: {add_msg}"
@@ -5141,6 +5147,7 @@ if APPLESCRIPT_AVAILABLE:
         if action == "seek":
             success, result = asc.seek(seconds)
             if success:
+                audit_log.log_action("playback_control", {"control": action, "seconds": seconds if seconds else None})
                 return f"Seeked to {int(seconds // 60)}:{int(seconds % 60):02d}"
             return f"Error: {result}"
 
@@ -5157,6 +5164,7 @@ if APPLESCRIPT_AVAILABLE:
 
         success, result = action_map[action]()
         if success:
+            audit_log.log_action("playback_control", {"control": action, "seconds": None})
             return f"Playback: {action}"
         return f"Error: {result}"
 
@@ -5223,6 +5231,15 @@ if APPLESCRIPT_AVAILABLE:
 
         # If changes were made, return confirmation
         if changes:
+            audit_changes = {}
+            if volume >= 0:
+                audit_changes["volume"] = volume
+            if shuffle:
+                audit_changes["shuffle"] = shuffle
+            if repeat:
+                audit_changes["repeat"] = repeat
+            if audit_changes:
+                audit_log.log_action("playback_settings", audit_changes)
             return "Updated: " + ", ".join(changes)
 
         # Otherwise return current settings
@@ -5474,6 +5491,7 @@ if APPLESCRIPT_AVAILABLE:
         if device_name:
             success, result = asc.set_airplay_device(device_name)
             if success:
+                audit_log.log_action("airplay_switch", {"device": device_name})
                 return result
             return f"Error: {result}"
         else:
