@@ -1543,6 +1543,71 @@ end tell''')
     return False, f"Clicked play on '{result_name}' but playback didn't start"
 
 
+def ui_add_to_playlist(playlist_name: str, query: str, artist: str = "") -> tuple[bool, str]:
+    """Add a catalog track to a playlist via UI automation (no API required).
+
+    Composite flow:
+    1. Search catalog via Music.app UI
+    2. Add the best matching song to library via hover+click
+    3. Wait for iCloud sync
+    4. Add to playlist via existing AppleScript backend
+
+    Args:
+        playlist_name: Target playlist name
+        query: Search query (e.g. "Artist Song")
+        artist: Optional artist filter for result matching
+
+    Returns:
+        Tuple of (success, message)
+    """
+    # Search
+    ok, results = ui_search_catalog(query)
+    if not ok or not results:
+        ui_clear_search()
+        return False, f"No results found for '{query}'"
+
+    # Find best song result
+    target = None
+    for r in results:
+        if r["type"] == "Song":
+            if artist and artist.lower() not in r.get("artist", "").lower():
+                continue
+            target = r
+            break
+
+    if target is None:
+        # Fall back to first result if no Song type match
+        target = results[0]
+
+    # Add to library
+    ok, msg = ui_add_to_library(target["name"])
+    if not ok:
+        ui_clear_search()
+        return False, f"Failed to add to library: {msg}"
+
+    ui_clear_search()
+
+    # Wait for iCloud sync
+    track_name = target["name"]
+    track_artist = target.get("artist", artist)
+    time.sleep(8)
+
+    # Verify it's in library
+    for attempt in range(3):
+        ok, lib_results = search_library(track_name.replace("\u0301", ""), "songs")
+        if ok and lib_results:
+            break
+        time.sleep(3)
+    else:
+        return False, f"Added to library but sync not confirmed for '{track_name}'"
+
+    # Add to playlist via existing backend
+    ok, result = add_track_to_playlist(playlist_name, track_name, track_artist)
+    if ok:
+        return True, f"Added {track_name} by {track_artist} to {playlist_name}"
+    return False, f"Added to library but failed to add to playlist: {result}"
+
+
 # =============================================================================
 # Library Snapshot & Diff
 # =============================================================================
