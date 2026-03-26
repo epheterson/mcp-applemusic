@@ -4774,6 +4774,7 @@ if APPLESCRIPT_AVAILABLE:
         playlist: str = "",
         album: str = "",
         artist: str = "",
+        url: str = "",
         shuffle: bool = False,
         reveal: Optional[bool] = None,
         add_to_library: bool = False,
@@ -4793,7 +4794,7 @@ if APPLESCRIPT_AVAILABLE:
         action = action.lower().strip().replace("-", "_")
 
         if action == "play":
-            return _playback_play(track, playlist, album, artist, shuffle, reveal, add_to_library)
+            return _playback_play(track, playlist, album, artist, shuffle, reveal, add_to_library, url)
         elif action == "control":
             if not control:
                 return "Error: control param required. Use: play, pause, stop, next, previous, seek"
@@ -4812,6 +4813,46 @@ if APPLESCRIPT_AVAILABLE:
         else:
             return f"Unknown action: {action}. Use: play, control, now_playing, settings, reveal, airplay"
 
+    def _convert_song_url_to_album(url: str) -> Optional[str]:
+        """Convert a /song/ URL to /album/?i= format via Apple Music API.
+
+        Extracts the song ID from the URL, looks up its album via API,
+        and returns an album URL with ?i=songId. Returns None if the API
+        is unavailable or the lookup fails.
+        """
+        match = re.search(r'/song/[^/]*/(\d+)', url)
+        if not match:
+            return None
+        song_id = match.group(1)
+
+        try:
+            headers = get_headers()
+            sf = get_storefront()
+            response = requests.get(
+                f"{BASE_URL}/catalog/{sf}/songs/{song_id}",
+                headers=headers,
+                params={"include": "albums"},
+                timeout=REQUEST_TIMEOUT,
+            )
+            if response.status_code != 200:
+                return None
+            data = response.json().get("data", [])
+            if not data:
+                return None
+            # Get album from relationships
+            albums = data[0].get("relationships", {}).get("albums", {}).get("data", [])
+            if not albums:
+                return None
+            album_id = albums[0].get("id")
+            album_name = data[0].get("attributes", {}).get("albumName", "album")
+            if album_id:
+                # Construct album URL with ?i= for the specific song
+                album_slug = re.sub(r'[^a-z0-9]+', '-', album_name.lower()).strip('-')
+                return f"https://music.apple.com/{sf}/album/{album_slug}/{album_id}?i={song_id}"
+        except Exception:
+            pass
+        return None
+
     def _playback_play(
         track: str = "",
         playlist: str = "",
@@ -4820,8 +4861,27 @@ if APPLESCRIPT_AVAILABLE:
         shuffle: bool = False,
         reveal: Optional[bool] = None,
         add_to_library: bool = False,
+        url: str = "",
     ) -> str:
-        """Play a track, playlist, or album (macOS). Provide ONE of track/playlist/album."""
+        """Play a track, playlist, album, or URL (macOS). Provide ONE target."""
+        # === URL === (handle first, separate from other targets)
+        if url:
+            url = url.strip()
+            if track or playlist or album or artist:
+                return "Error: When using url, don't provide track, playlist, album, or artist"
+
+            # Convert /song/ URLs to /album/?i= format via API lookup
+            if "/song/" in url and "?i=" not in url:
+                converted = _convert_song_url_to_album(url)
+                if converted:
+                    url = converted
+
+            success, result = asc.open_catalog_and_play(url, shuffle=shuffle)
+            if success:
+                audit_log.log_action("play_url", {"url": url, "result": result})
+                return result
+            return f"Error: {result}"
+
         # Count how many targets provided
         targets = sum(1 for t in [track, playlist, album] if t)
         if targets == 0:

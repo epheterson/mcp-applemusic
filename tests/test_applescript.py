@@ -379,3 +379,131 @@ class TestAddTrackDisambiguation:
 
         # Cleanup
         asc.remove_track_from_playlist(self.TEST_PLAYLIST, "Hot Potato")
+
+
+class TestOpenCatalogAndPlay:
+    """Test open_catalog_and_play function."""
+
+    def _mock_subprocess(self, monkeypatch):
+        """Mock subprocess.run for open_catalog_song."""
+        import subprocess
+        monkeypatch.setattr(subprocess, "run", lambda *args, **kwargs: type('R', (), {'returncode': 0, 'stdout': '', 'stderr': ''})())
+
+    def _mock_time(self, monkeypatch):
+        """Mock time.sleep to avoid delays."""
+        import time
+        monkeypatch.setattr(time, "sleep", lambda _: None)
+
+    def test_returns_tuple(self, monkeypatch):
+        """Should return (success, message) tuple for album URL."""
+        self._mock_subprocess(monkeypatch)
+        self._mock_time(monkeypatch)
+        monkeypatch.setattr(asc, "run_applescript", lambda script: (True, "playing"))
+        success, result = asc.open_catalog_and_play("https://music.apple.com/us/album/1234567890")
+        assert isinstance(success, bool)
+        assert isinstance(result, str)
+
+    def test_rejects_empty_url(self):
+        """Should reject empty URL."""
+        success, result = asc.open_catalog_and_play("")
+        assert success is False
+
+    def test_rejects_non_apple_url(self):
+        """Should reject non-Apple Music URLs."""
+        success, result = asc.open_catalog_and_play("https://spotify.com/track/123")
+        assert success is False
+
+    def test_rejects_song_url(self):
+        """Should reject /song/ URLs with helpful message."""
+        success, result = asc.open_catalog_and_play("https://music.apple.com/us/song/track-name/1234567890")
+        assert success is False
+        assert "not supported" in result.lower()
+        assert "?i=" in result
+
+    def test_accepts_music_scheme(self, monkeypatch):
+        """Should accept music:// scheme URLs."""
+        self._mock_subprocess(monkeypatch)
+        self._mock_time(monkeypatch)
+        monkeypatch.setattr(asc, "run_applescript", lambda script: (True, "playing"))
+        success, result = asc.open_catalog_and_play("music://music.apple.com/us/album/1234567890")
+        assert isinstance(success, bool)
+
+    def test_skips_click_if_already_playing(self, monkeypatch):
+        """Should return immediately if Music auto-starts playing."""
+        self._mock_subprocess(monkeypatch)
+        self._mock_time(monkeypatch)
+        monkeypatch.setattr(asc, "run_applescript", lambda script: (True, "playing"))
+        success, result = asc.open_catalog_and_play("https://music.apple.com/us/album/1234567890")
+        assert success is True
+        assert "auto-started" in result.lower()
+
+    def test_clicks_play_button(self, monkeypatch):
+        """Should find and click Play button when auto-play doesn't start."""
+        self._mock_subprocess(monkeypatch)
+        self._mock_time(monkeypatch)
+        call_count = [0]
+        def mock_run(script):
+            call_count[0] += 1
+            if call_count[0] == 1:
+                return (True, "stopped")
+            if call_count[0] == 2:
+                return (True, "")
+            return (True, "playing")
+        monkeypatch.setattr(asc, "run_applescript", mock_run)
+        success, result = asc.open_catalog_and_play("https://music.apple.com/us/album/1234567890")
+        assert success is True
+        assert "playing" in result.lower()
+
+    def test_shuffle(self, monkeypatch):
+        """Should click Shuffle button when shuffle=True."""
+        self._mock_subprocess(monkeypatch)
+        self._mock_time(monkeypatch)
+        scripts_called = []
+        call_count = [0]
+        def mock_run(script):
+            scripts_called.append(script)
+            call_count[0] += 1
+            if call_count[0] == 1:
+                return (True, "stopped")
+            if call_count[0] == 2:
+                return (True, "")
+            return (True, "playing")
+        monkeypatch.setattr(asc, "run_applescript", mock_run)
+        success, result = asc.open_catalog_and_play("https://music.apple.com/us/album/1234567890", shuffle=True)
+        assert success is True
+        assert any("Shuffle" in s for s in scripts_called)
+
+    def test_retry_exhaustion(self, monkeypatch):
+        """Should return graceful message after timeout."""
+        self._mock_subprocess(monkeypatch)
+        self._mock_time(monkeypatch)
+        monkeypatch.setattr(asc, "run_applescript", lambda script: (True, "stopped"))
+        success, result = asc.open_catalog_and_play("https://music.apple.com/us/album/1234567890", timeout=0.1)
+        assert success is True
+        assert "could not confirm" in result.lower()
+
+    def test_song_with_i_param(self, monkeypatch):
+        """Should attempt track-specific playback for ?i= URLs."""
+        self._mock_subprocess(monkeypatch)
+        self._mock_time(monkeypatch)
+        call_count = [0]
+        def mock_run(script):
+            call_count[0] += 1
+            if "player state" in script and call_count[0] <= 2:
+                return (True, "stopped")
+            if "activate" in script:
+                return (True, "")
+            if "Favorite" in script and "position" in script:
+                return (True, "500.0,400.0,Test Track")
+            if "size of window" in script:
+                return (True, "1000")
+            if "click checkbox" in script:
+                return (True, "Test Track")
+            if "player state" in script:
+                return (True, "playing")
+            return (True, "")
+        monkeypatch.setattr(asc, "run_applescript", mock_run)
+        monkeypatch.setattr(asc, "_jxa_mouse_move", lambda x, y: True)
+        success, result = asc.open_catalog_and_play("https://music.apple.com/us/album/name/123?i=456")
+        assert success is True
+        assert "test track" in result.lower()

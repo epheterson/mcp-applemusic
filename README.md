@@ -17,6 +17,7 @@
 | Add songs to library |   | ✓ |
 | Recommendations, charts, radio |   | ✓ |
 | Play tracks | ✓ |   |
+| Play by URL (album, playlist, song) | ✓ |   |
 | Playback control (pause/skip/seek) | ✓ |   |
 | Volume, shuffle, repeat | ✓ |   |
 | Star ratings (1-5) | ✓ |   |
@@ -248,14 +249,26 @@ discover(action="top_songs", artist="The Beatles")
 ```
 
 ### Playback (macOS only)
-| Tool | Description | Method | Platform |
-|------|-------------|--------|----------|
-| `play` | Play track, playlist, or album (with shuffle option) | API + AS | macOS |
-| `playback_control` | Play, pause, stop, next, previous, seek | AppleScript | macOS |
-| `get_now_playing` | Current track info and player state | AppleScript | macOS |
-| `playback_settings` | Get/set volume, shuffle, repeat | AppleScript | macOS |
+| Action | Description | Method |
+|--------|-------------|--------|
+| `playback(action="play", ...)` | Play track, playlist, album, or URL | API + AS |
+| `playback(action="control", ...)` | Play, pause, stop, next, previous, seek | AppleScript |
+| `playback(action="now_playing")` | Current track info and player state | AppleScript |
+| `playback(action="settings", ...)` | Get/set volume, shuffle, repeat | AppleScript |
+| `playback(action="airplay", ...)` | List or switch AirPlay devices | AppleScript |
 
-`play` accepts ONE of: `track`, `playlist`, or `album`. Use `shuffle=True` for shuffled playback. Response shows source: `[Library]`, `[Catalog]`, or `[Catalog→Library]`. Catalog items can be added first (`add_to_library=True`) or opened in Music (`reveal=True`).
+`play` accepts ONE of: `track`, `playlist`, `album`, or `url`. Use `shuffle=True` for shuffled playback. Response shows source: `[Library]`, `[Catalog]`, or `[Catalog→Library]`. Catalog items can be added first (`add_to_library=True`) or opened in Music (`reveal=True`).
+
+**URL playback** — pass any Apple Music URL to play it directly:
+```
+playback(action="play", url="https://music.apple.com/us/album/ok-computer/1097861387")
+playback(action="play", url="https://music.apple.com/us/album/cowboy-carter/1738363766?i=1738363961")
+playback(action="play", url="https://music.apple.com/us/playlist/todays-hits/pl.f4d106fed2bd41149aaacabb233eb5eb")
+playback(action="play", url="...", shuffle=True)
+```
+Supports albums, editorial playlists, personal playlists (`pl.u-` prefix), and specific songs via `?i=` parameter. Song URLs (`/song/id`) are automatically converted to album format when API is available. No API required for playback.
+
+> **Note:** URL playback uses UI scripting and simulated mouse events (CoreGraphics) to control Music.app. This requires a display — it won't work on headless setups. Music.app must be visible (not minimized), and System Events needs Accessibility permissions (System Settings → Privacy & Security → Accessibility). For specific song playback via `?i=`, the mouse cursor will briefly move to click the track row.
 
 ### Utilities
 

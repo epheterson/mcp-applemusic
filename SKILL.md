@@ -1,6 +1,6 @@
 ---
 name: apple-music
-version: 0.6.0
+version: 0.7.0
 description: Apple Music integration via AppleScript (macOS) or MusicKit API
 ---
 
@@ -13,6 +13,7 @@ Guide for integrating with Apple Music. Covers AppleScript (macOS), MusicKit API
 Invoke when users ask to:
 - Manage playlists (create, add/remove tracks, list)
 - Control playback (play, pause, skip, volume)
+- Play an Apple Music URL (album, playlist, or song)
 - Search catalog or library
 - Add songs to library
 - Access listening history or recommendations
@@ -36,6 +37,7 @@ This applies to both AppleScript and API approaches.
 | Setup required | None | Dev account + tokens |
 | Playlist management | Full | API-created only |
 | Playback control | Full | None |
+| Play by URL | Yes (UI scripting) | None |
 | Catalog search | No | Yes |
 | Library access | Instant | With tokens |
 | Cross-platform | No | Yes |
@@ -66,7 +68,7 @@ EOF
 
 | Category | Operations |
 |----------|------------|
-| **Playback** | play, pause, stop, resume, next track, previous track, fast forward, rewind |
+| **Playback** | play, pause, stop, resume, next track, previous track, fast forward, rewind, play URL |
 | **Player State** | player position, player state, sound volume, mute, shuffle enabled/mode, song repeat |
 | **Current Track** | name, artist, album, duration, time, rating, loved, disliked, genre, year, track number |
 | **Library** | search, list tracks, get track properties, set ratings |
@@ -165,6 +167,11 @@ tell application "Music"
     -- Play specific content
     play (first track of library playlist 1 whose name contains "Hey Jude")
     play user playlist "Road Trip"
+
+    -- Play by URL (via mcp-applemusic, not raw AppleScript)
+    -- playback(action="play", url="https://music.apple.com/us/album/ok-computer/1097861387")
+    -- playback(action="play", url="https://music.apple.com/us/album/name/id?i=songId")
+    -- Supports albums, playlists (including personal), and specific songs via ?i=
 
     -- Settings
     set player position to 60     -- seek to 1:00
@@ -290,8 +297,9 @@ script = f'tell application "Music" to play user playlist "{safe_name}"'
 
 ## Limitations
 
-- **No catalog access** - only library content
+- **No catalog search** - only library content (catalog search requires API)
 - **macOS only** - no Windows/Linux
+- **URL playback requires display** - uses UI scripting, won't work headless
 
 ---
 
@@ -580,5 +588,6 @@ On macOS, most features work immediately. For catalog features or Windows/Linux,
 | Manual | mcp-applemusic |
 |--------|----------------|
 | 4 API calls to add song | `playlist(action="add", auto_search=True)` |
+| Copy URL + open in Music | `playback(action="play", url="...")` |
 | AppleScript escaping | Automatic |
 | Token management | Automatic with warnings |

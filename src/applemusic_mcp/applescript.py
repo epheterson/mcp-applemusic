@@ -18,6 +18,7 @@ Security Notes:
 import subprocess
 import sys
 import shutil
+import time
 from typing import Optional
 
 
@@ -929,6 +930,310 @@ def open_catalog_song(song_url: str) -> tuple[bool, str]:
         return True, "Opened via browser"
     except subprocess.CalledProcessError:
         return False, f"Failed to open: {song_url}"
+
+
+def _check_playing() -> bool:
+    """Check if Music is currently playing."""
+    ok, state = run_applescript('tell application "Music" to get player state')
+    return ok and state.strip() == "playing"
+
+
+def _click_play_or_shuffle(shuffle: bool = False) -> tuple[bool, str]:
+    """Find and click the Play or Shuffle button across different Music.app page layouts.
+
+    Tries multiple known UI paths since albums, editorial playlists, and personal
+    playlists each have different accessibility hierarchies.
+
+    Args:
+        shuffle: If True, click Shuffle instead of Play
+
+    Returns:
+        Tuple of (success, message or error)
+    """
+    button_name = "Shuffle" if shuffle else "Play"
+    base = 'tell application "System Events" to tell process "Music"'
+    sa = "scroll area 2 of splitter group 1 of window \"Music\""
+
+    # Path 1: Album / editorial playlist layout (nested lists)
+    script1 = f'{base} to click button "{button_name}" of UI element 1 of list 1 of list 1 of {sa}'
+    # Path 2: Personal playlist layout (playlist header group)
+    script2 = f'{base} to click button "{button_name}" of group 1 of {sa}'
+
+    for script in [script1, script2]:
+        ok, _ = run_applescript(script)
+        if ok:
+            time.sleep(1)
+            if _check_playing():
+                mode = "shuffling" if shuffle else "playing"
+                return True, f"Playing ({mode} via UI click)"
+
+    return False, f"Could not find {button_name} button"
+
+
+def _ensure_music_frontmost() -> None:
+    """Bring Music.app to the foreground. Called before CoreGraphics events."""
+    run_applescript('tell application "Music" to activate')
+    time.sleep(0.3)
+
+
+def _jxa_mouse_move(x: float, y: float) -> bool:
+    """Move the mouse cursor via CoreGraphics (JXA). Triggers hover effects.
+
+    Uses osascript -l JavaScript to call CoreGraphics CGEventCreateMouseEvent,
+    which generates real mouse events that trigger hover-dependent UI elements
+    in Music.app (like the per-track play checkbox).
+
+    Returns True if the command succeeded.
+    """
+    script = f'''ObjC.import("CoreGraphics");
+var p = $.CGPointMake({x}, {y});
+var e = $.CGEventCreateMouseEvent($(), $.kCGEventMouseMoved, p, 0);
+$.CGEventPost($.kCGHIDEventTap, e);
+delay(0.5);
+"ok"'''
+    try:
+        result = subprocess.run(
+            ["osascript", "-l", "JavaScript", "-e", script],
+            capture_output=True, text=True, timeout=10,
+        )
+        return result.returncode == 0
+    except (subprocess.TimeoutExpired, Exception):
+        return False
+
+
+def _jxa_scroll_down(x: float, y: float, amount: int = 10) -> bool:
+    """Scroll down at coordinates via CoreGraphics (JXA).
+
+    Moves mouse to position first, then sends scroll wheel events.
+    Used to bring off-screen track rows into view.
+
+    Returns True if the command succeeded.
+    """
+    script = f'''ObjC.import("CoreGraphics");
+var p = $.CGPointMake({x}, {y});
+var m = $.CGEventCreateMouseEvent($(), $.kCGEventMouseMoved, p, 0);
+$.CGEventPost($.kCGHIDEventTap, m);
+delay(0.3);
+for (var i = 0; i < {amount}; i++) {{
+    var s = $.CGEventCreateScrollWheelEvent($(), 0, 1, -3);
+    $.CGEventPost($.kCGHIDEventTap, s);
+    delay(0.1);
+}}
+delay(0.5);
+"ok"'''
+    try:
+        result = subprocess.run(
+            ["osascript", "-l", "JavaScript", "-e", script],
+            capture_output=True, text=True, timeout=15,
+        )
+        return result.returncode == 0
+    except (subprocess.TimeoutExpired, Exception):
+        return False
+
+
+def _find_highlighted_track_position() -> Optional[tuple[float, float, str]]:
+    """Find the track row highlighted by ?i= parameter (has Favorite button).
+
+    Searches all track groups across disc sections for a group containing
+    a button with description "Favorite" — Music.app adds this to the
+    track highlighted by the ?i= URL parameter.
+
+    Returns (center_x, center_y, track_name) or None if not found.
+    """
+    ok, result = run_applescript('''
+tell application "System Events"
+    tell process "Music"
+        set sg to splitter group 1 of window "Music"
+        set sa to scroll area 2 of sg
+        repeat with subList in (every list of list 1 of sa)
+            repeat with g in (every group of subList)
+                try
+                    repeat with b in (every button of g)
+                        if description of b is "Favorite" then
+                            set {x, y} to position of g
+                            set {w, h} to size of g
+                            set cx to (x + w / 2)
+                            set cy to (y + h / 2)
+                            return (cx as text) & "," & (cy as text) & "," & description of g
+                        end if
+                    end repeat
+                end try
+            end repeat
+        end repeat
+        return "NOT_FOUND"
+    end tell
+end tell''')
+    if not ok or not result or result.strip() == "NOT_FOUND":
+        return None
+    parts = result.strip().split(",", 2)
+    if len(parts) < 3:
+        return None
+    try:
+        return float(parts[0]), float(parts[1]), parts[2]
+    except ValueError:
+        return None
+
+
+def _get_window_bottom() -> Optional[float]:
+    """Get the bottom y-coordinate of the Music window."""
+    ok, result = run_applescript('''
+tell application "System Events"
+    tell process "Music"
+        set {wx, wy} to position of window "Music"
+        set {ww, wh} to size of window "Music"
+        return ((wy + wh) as text)
+    end tell
+end tell''')
+    if ok and result:
+        try:
+            return float(result.strip())
+        except ValueError:
+            pass
+    return None
+
+
+def _play_specific_track() -> tuple[bool, str]:
+    """Play the track highlighted by ?i= URL parameter via hover + click.
+
+    Finds the highlighted track row (marked with Favorite button), scrolls
+    it into view if off-screen, hovers via CoreGraphics to reveal the
+    per-track play checkbox, and clicks it.
+
+    Requires Accessibility permissions for System Events.
+
+    Returns:
+        Tuple of (success, message or error)
+    """
+    # Ensure Music is frontmost before any CoreGraphics interaction
+    _ensure_music_frontmost()
+
+    # Find the highlighted track
+    pos = _find_highlighted_track_position()
+    if pos is None:
+        return False, "Could not find highlighted track row"
+    cx, cy, track_name = pos
+
+    # Scroll into view if off-screen
+    win_bottom = _get_window_bottom()
+    if win_bottom and cy > win_bottom - 30:
+        _ensure_music_frontmost()
+        _jxa_scroll_down(cx, win_bottom - 200, amount=10)
+        # Re-find position after scroll
+        pos = _find_highlighted_track_position()
+        if pos is None:
+            return False, "Lost track row after scrolling"
+        cx, cy, track_name = pos
+
+    # Ensure Music is still frontmost (user may have clicked away during scroll)
+    _ensure_music_frontmost()
+
+    # Hover to reveal the play checkbox
+    if not _jxa_mouse_move(cx, cy):
+        return False, "Failed to move mouse for hover"
+    time.sleep(0.5)
+
+    # Click the play checkbox that appears on hover
+    ok, result = run_applescript('''
+tell application "System Events"
+    tell process "Music"
+        set sg to splitter group 1 of window "Music"
+        set sa to scroll area 2 of sg
+        repeat with subList in (every list of list 1 of sa)
+            repeat with g in (every group of subList)
+                try
+                    repeat with b in (every button of g)
+                        if description of b is "Favorite" then
+                            click checkbox 1 of g
+                            return description of g
+                        end if
+                    end repeat
+                end try
+            end repeat
+        end repeat
+        return "NOT_FOUND"
+    end tell
+end tell''')
+    if ok and result and result.strip() != "NOT_FOUND":
+        time.sleep(1)
+        if _check_playing():
+            return True, f"Playing: {result.strip()}"
+
+    return False, f"Hover+click attempted on {track_name} but playback did not start"
+
+
+def open_catalog_and_play(url: str, shuffle: bool = False, timeout: float = 15.0) -> tuple[bool, str]:
+    """Open an Apple Music URL and attempt to start playback via UI scripting.
+
+    Supports albums, playlists (editorial and personal), and specific tracks
+    via ?i= parameter. Uses multiple UI automation strategies depending on
+    the URL type and page layout.
+
+    For albums/playlists: clicks the Play or Shuffle button.
+    For ?i= song URLs: hovers over the highlighted track row via CoreGraphics
+    to reveal the per-track play checkbox, then clicks it.
+
+    Uses adaptive polling — checks every second and attempts playback as soon
+    as the page loads, rather than waiting fixed delays. Fast networks get
+    fast response, slow networks get up to `timeout` seconds.
+
+    Requires Accessibility permissions for System Events.
+    Song URLs (/song/name/id) are not supported via deep link — the server
+    layer converts them to album URLs with ?i= via API when available.
+
+    Args:
+        url: Apple Music URL (https://music.apple.com/... or music://...)
+        shuffle: If True, click Shuffle instead of Play (albums/playlists only)
+        timeout: Maximum seconds to wait for content to load (default 15)
+
+    Returns:
+        Tuple of (success, message or error)
+    """
+    # Reject /song/ URLs — they show "Something went wrong" in Music.app
+    url_stripped = url.strip()
+    if "/song/" in url_stripped and "?i=" not in url_stripped:
+        return False, (
+            "Song URLs (/song/id) are not supported by Music.app via deep link. "
+            "Use an album URL with ?i= parameter instead: "
+            "/album/name/albumId?i=songId"
+        )
+
+    # Detect if this is a specific track request
+    has_track_param = "?i=" in url_stripped
+
+    # Reuse existing URL opening logic
+    open_ok, open_msg = open_catalog_song(url)
+    if not open_ok:
+        return False, open_msg
+
+    # Adaptive polling: check frequently, attempt playback as soon as page loads
+    # Initial wait for Music.app to start loading content
+    time.sleep(2)
+    deadline = time.time() + timeout
+    attempt = 0
+
+    while time.time() < deadline:
+        # Check if Music already started playing on its own
+        if _check_playing():
+            return True, "Playing (auto-started after opening URL)"
+
+        if has_track_param:
+            ok, msg = _play_specific_track()
+            if ok:
+                return True, msg
+        else:
+            ok, msg = _click_play_or_shuffle(shuffle)
+            if ok:
+                return True, msg
+
+        # Wait before retrying — longer gaps on early attempts (content loading),
+        # shorter gaps on later attempts (UI may just need another try)
+        attempt += 1
+        wait = 2.0 if attempt <= 2 else 1.0
+        time.sleep(wait)
+
+    if has_track_param:
+        return True, "Opened URL in Music. Could not auto-play the specific track — try clicking it manually."
+    return True, "Opened URL in Music. Auto-play attempted but could not confirm playback started — may need Accessibility permissions for System Events."
 
 
 # =============================================================================
