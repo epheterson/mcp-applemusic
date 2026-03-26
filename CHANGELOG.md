@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.0] - 2026-03-26
+
+### Added
+
+- **URL playback** — `playback(action="play", url="...")` plays any Apple Music URL directly. Supports albums, editorial playlists, personal playlists, and specific songs via `?i=` parameter. Uses UI scripting to auto-click the Play/Shuffle button across different page layouts.
+- **Specific song playback via `?i=`** — Album URLs with `?i=songId` find the highlighted track row, hover via CoreGraphics to reveal the per-track play checkbox, and click it. Auto-scrolls off-screen tracks into view.
+- **Song URL conversion** — `/song/` URLs are automatically converted to `/album/?i=` format via the Apple Music API when available. Without API, returns a helpful error with the correct URL format.
+- **Shuffle support for URL playback** — `playback(action="play", url="...", shuffle=True)` clicks the Shuffle button instead of Play.
+- Zero new dependencies — CoreGraphics mouse events generated via `osascript -l JavaScript` (JXA).
+
+### Notes
+
+- URL playback requires macOS with a display (not headless), Music.app visible (not minimized), and Accessibility permissions for System Events.
+- For `?i=` song playback, the mouse cursor will briefly move to click the track row.
+- Inspired by [PR #2](https://github.com/epheterson/mcp-applemusic/pull/2) from @hummusonrails.
+
 ## [0.6.1] - 2026-03-06
 
 ### Fixed

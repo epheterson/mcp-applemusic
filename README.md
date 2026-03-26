@@ -249,12 +249,13 @@ discover(action="top_songs", artist="The Beatles")
 ```
 
 ### Playback (macOS only)
-| Tool | Description | Method | Platform |
-|------|-------------|--------|----------|
-| `play` | Play track, playlist, or album (with shuffle option) | API + AS | macOS |
-| `playback_control` | Play, pause, stop, next, previous, seek | AppleScript | macOS |
-| `get_now_playing` | Current track info and player state | AppleScript | macOS |
-| `playback_settings` | Get/set volume, shuffle, repeat | AppleScript | macOS |
+| Action | Description | Method |
+|--------|-------------|--------|
+| `playback(action="play", ...)` | Play track, playlist, album, or URL | API + AS |
+| `playback(action="control", ...)` | Play, pause, stop, next, previous, seek | AppleScript |
+| `playback(action="now_playing")` | Current track info and player state | AppleScript |
+| `playback(action="settings", ...)` | Get/set volume, shuffle, repeat | AppleScript |
+| `playback(action="airplay", ...)` | List or switch AirPlay devices | AppleScript |
 
 `play` accepts ONE of: `track`, `playlist`, `album`, or `url`. Use `shuffle=True` for shuffled playback. Response shows source: `[Library]`, `[Catalog]`, or `[Catalog→Library]`. Catalog items can be added first (`add_to_library=True`) or opened in Music (`reveal=True`).
 
