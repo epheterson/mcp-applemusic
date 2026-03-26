@@ -4820,7 +4820,6 @@ if APPLESCRIPT_AVAILABLE:
         and returns an album URL with ?i=songId. Returns None if the API
         is unavailable or the lookup fails.
         """
-        import re
         match = re.search(r'/song/[^/]*/(\d+)', url)
         if not match:
             return None
