@@ -13,18 +13,18 @@
 | Love/dislike tracks | ✓ | ✓ |
 | CSV/JSON export | ✓ | ✓ |
 | Add tracks to playlists | ✓ | API-created |
-| Search catalog |   | ✓ |
-| Add songs to library |   | ✓ |
+| Search catalog | UI* | ✓ |
+| Add songs to library | UI* | ✓ |
 | Recommendations, charts, radio |   | ✓ |
-| Play tracks | ✓ |   |
-| Play by URL (album, playlist, song) | ✓ |   |
+| Play tracks | ✓ / UI* |   |
+| Play by URL (album, playlist, song) | UI* |   |
 | Playback control (pause/skip/seek) | ✓ |   |
 | Volume, shuffle, repeat | ✓ |   |
 | Star ratings (1-5) | ✓ |   |
 | Remove tracks from playlists | ✓ |   |
 | Delete playlists | ✓ |   |
 
-**macOS** uses AppleScript for full local control. **API** mode enables catalog features and works cross-platform.
+**macOS** uses AppleScript for full local control. **API** mode enables catalog features and works cross-platform. **UI*** = UI automation fallback (requires display + Accessibility permissions; Top Results only for search).
 
 ---
 
@@ -32,7 +32,7 @@
 
 **Requirements:** Python 3.10+, Apple Music app with subscription.
 
-**No Apple Developer account needed!** Most features work instantly via AppleScript.
+**No Apple Developer account needed!** Most features work instantly via AppleScript. Catalog features use the API when available, with UI automation fallback on macOS (requires display + Accessibility permissions).
 
 ```bash
 git clone https://github.com/epheterson/mcp-applemusic.git
@@ -157,8 +157,6 @@ Add to config.json:
 
 ## Tools
 
-**v0.5.0 Update:** All tools consolidated into 5 action-based dispatchers for reduced MCP overhead. See [CHANGELOG](CHANGELOG.md#050---2026-01-06) for migration guide.
-
 ### `playlist(action=...)`
 Playlist operations - list, manage tracks, create, copy, remove (macOS), delete (macOS), rename (macOS)
 
@@ -185,7 +183,7 @@ playlist(action="tracks", playlist="p.abc123", limit=50)
 **Unified `track` parameter** auto-detects: names, IDs (catalog/library/persistent), CSV, or JSON arrays. Add entire albums with `album` parameter.
 
 ### `library(action=...)`
-Library management - search, add, browse, rate, recently played/added, remove (macOS)
+Library management - search, add, browse, rate, recently played/added, remove (macOS), snapshot (macOS)
 
 | Action | Parameters | Description | Platform |
 |--------|-----------|-------------|----------|
@@ -196,6 +194,17 @@ Library management - search, add, browse, rate, recently played/added, remove (m
 | `recently_added` | `limit`, `format`, `export`, `full` | Recently added content | All |
 | `rate` | `rate_action`, `track`, `artist`, `stars` | Love/dislike/get/set ratings | All (stars: macOS) |
 | `remove` | `track`, `artist` | Remove track(s) from library | macOS |
+| `snapshot` | `query` | Library integrity checking (see below) | macOS |
+
+**Snapshot sub-commands** via `query`:
+
+| Query | Description |
+|-------|-------------|
+| _(empty)_ | Diff current state from baseline, or take initial baseline |
+| `new` | Reset baseline to current state |
+| `history` | View recorded changes over time |
+| `list` | List all saved snapshot/diff files |
+| `delete FILENAME` | Delete a specific diff file |
 
 **Examples:**
 ```python
@@ -257,18 +266,15 @@ discover(action="top_songs", artist="The Beatles")
 | `playback(action="settings", ...)` | Get/set volume, shuffle, repeat | AppleScript |
 | `playback(action="airplay", ...)` | List or switch AirPlay devices | AppleScript |
 
-`play` accepts ONE of: `track`, `playlist`, `album`, or `url`. Use `shuffle=True` for shuffled playback. Response shows source: `[Library]`, `[Catalog]`, or `[Catalog→Library]`. Catalog items can be added first (`add_to_library=True`) or opened in Music (`reveal=True`).
+`play` accepts ONE of: `track`, `playlist`, `album`, or `url`. Use `shuffle=True` for shuffled playback. Response shows source: `[Library]`, `[Catalog]`, `[Catalog→Library]`, or `[UI Search]` (when playing catalog tracks without API). Catalog items can be added first (`add_to_library=True`) or opened in Music (`reveal=True`).
 
-**URL playback** — pass any Apple Music URL to play it directly:
+**URL playback** — albums, playlists (including personal `pl.u-`), and songs via `?i=`:
 ```
 playback(action="play", url="https://music.apple.com/us/album/ok-computer/1097861387")
 playback(action="play", url="https://music.apple.com/us/album/cowboy-carter/1738363766?i=1738363961")
 playback(action="play", url="https://music.apple.com/us/playlist/todays-hits/pl.f4d106fed2bd41149aaacabb233eb5eb")
-playback(action="play", url="...", shuffle=True)
 ```
-Supports albums, editorial playlists, personal playlists (`pl.u-` prefix), and specific songs via `?i=` parameter. Song URLs (`/song/id`) are automatically converted to album format when API is available. No API required for playback.
-
-> **Note:** URL playback uses UI scripting and simulated mouse events (CoreGraphics) to control Music.app. This requires a display — it won't work on headless setups. Music.app must be visible (not minimized), and System Events needs Accessibility permissions (System Settings → Privacy & Security → Accessibility). For specific song playback via `?i=`, the mouse cursor will briefly move to click the track row.
+Uses UI scripting (requires display + Accessibility permissions). The mouse cursor may briefly move for `?i=` track selection.
 
 ### Utilities
 
@@ -280,6 +286,8 @@ Supports albums, editorial playlists, personal playlists (`pl.u-` prefix), and s
 | `reveal_in_music(track, artist)` | Show track in Music app | macOS |
 
 **Config actions:** `info`, `set-pref`, `list-storefronts`, `audit-log`, `clear-tracks`, `clear-exports`, `clear-audit-log`
+
+All modifying operations are logged — view with `config(action="audit-log")`.
 
 ### Output Format
 

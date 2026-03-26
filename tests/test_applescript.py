@@ -4,6 +4,7 @@ These tests only run on macOS where AppleScript is available.
 They test the actual Music app integration.
 """
 
+import os
 import pytest
 import sys
 
@@ -507,3 +508,221 @@ class TestOpenCatalogAndPlay:
         success, result = asc.open_catalog_and_play("https://music.apple.com/us/album/name/123?i=456")
         assert success is True
         assert "test track" in result.lower()
+
+
+class TestLibrarySnapshot:
+    """Test library_snapshot and library_diff functions."""
+
+    def _make_snapshot(self, track_count=100, playlists=None, playback=None):
+        """Build a snapshot dict for testing."""
+        if playlists is None:
+            playlists = {
+                "Chill": [
+                    {"name": "Song A", "artist": "Artist 1", "album": "Album 1"},
+                    {"name": "Song B", "artist": "Artist 2", "album": "Album 2"},
+                ],
+                "Workout": [
+                    {"name": "Song C", "artist": "Artist 3", "album": "Album 3"},
+                ],
+            }
+        if playback is None:
+            playback = {
+                "player_state": "stopped",
+                "volume": 50,
+                "shuffle": False,
+                "repeat": "off",
+                "current_track": None,
+                "current_artist": None,
+                "current_album": None,
+            }
+        return {
+            "track_count": track_count,
+            "playback": playback,
+            "playlists": playlists,
+        }
+
+    def test_snapshot_structure(self):
+        """Snapshot dict should have track_count, playback, and playlists keys."""
+        snap = self._make_snapshot()
+        assert "track_count" in snap
+        assert "playback" in snap
+        assert "playlists" in snap
+        assert isinstance(snap["track_count"], int)
+        assert isinstance(snap["playlists"], dict)
+        assert isinstance(snap["playback"], dict)
+
+    def test_clean_diff(self):
+        """Identical snapshots should produce a clean diff."""
+        snap = self._make_snapshot()
+        diff = asc.library_diff(snap, snap)
+        assert diff["is_clean"] is True
+        assert diff["track_count_change"] == 0
+        assert diff["playlists_added"] == []
+        assert diff["playlists_removed"] == []
+        assert diff["playlists_changed"] == {}
+
+    def test_detects_playlist_added(self):
+        """Diff should detect a new playlist."""
+        before = self._make_snapshot()
+        after_playlists = dict(before["playlists"])
+        after_playlists["New Playlist"] = [
+            {"name": "Song D", "artist": "Artist 4", "album": "Album 4"},
+        ]
+        after = self._make_snapshot(playlists=after_playlists)
+        diff = asc.library_diff(before, after)
+        assert diff["is_clean"] is False
+        assert "New Playlist" in diff["playlists_added"]
+
+    def test_detects_playlist_removed(self):
+        """Diff should detect a removed playlist."""
+        before = self._make_snapshot()
+        after_playlists = {"Chill": before["playlists"]["Chill"]}
+        after = self._make_snapshot(playlists=after_playlists)
+        diff = asc.library_diff(before, after)
+        assert diff["is_clean"] is False
+        assert "Workout" in diff["playlists_removed"]
+
+    def test_detects_playlist_track_changes(self):
+        """Diff should detect tracks added/removed within a playlist."""
+        before = self._make_snapshot()
+        after_playlists = dict(before["playlists"])
+        # Remove Song A, add Song D
+        after_playlists["Chill"] = [
+            {"name": "Song B", "artist": "Artist 2", "album": "Album 2"},
+            {"name": "Song D", "artist": "Artist 4", "album": "Album 4"},
+        ]
+        after = self._make_snapshot(playlists=after_playlists)
+        diff = asc.library_diff(before, after)
+        assert diff["is_clean"] is False
+        assert "Chill" in diff["playlists_changed"]
+        changes = diff["playlists_changed"]["Chill"]
+        assert len(changes["added"]) == 1
+        assert len(changes["removed"]) == 1
+
+    def test_detects_track_count_change(self):
+        """Diff should detect library track count changes."""
+        before = self._make_snapshot(track_count=100)
+        after = self._make_snapshot(track_count=105)
+        diff = asc.library_diff(before, after)
+        assert diff["is_clean"] is False
+        assert diff["track_count_change"] == 5
+
+    def test_playback_changes_tracked_separately(self):
+        """Playback state changes should not make is_clean False."""
+        before = self._make_snapshot()
+        after_playback = dict(before["playback"])
+        after_playback["player_state"] = "playing"
+        after_playback["current_track"] = "Some Track"
+        after = self._make_snapshot(playback=after_playback)
+        diff = asc.library_diff(before, after)
+        # Library is unchanged — is_clean should be True
+        assert diff["is_clean"] is True
+        # But playback changes should still be recorded
+        assert "player_state" in diff["playback_changes"]
+        assert diff["playback_changes"]["player_state"]["after"] == "playing"
+
+
+class TestUISearchParsing:
+    """Unit tests for UI search result parsing logic (no Music.app needed)."""
+
+    def test_parse_search_results_with_separator(self):
+        """Should parse type and artist from the Unicode middle-dot separator."""
+        # Simulate the raw output from AppleScript
+        raw = "1|||Creep|||Song\u2004\u00b7\u2004Radiohead\n2|||Radiohead|||Artist\n3|||OK Computer|||Album\u2004\u00b7\u2004Radiohead"
+
+        results = []
+        for line in raw.strip().split("\n"):
+            line = line.strip()
+            if not line or "|||" not in line:
+                continue
+            parts = line.split("|||")
+            if len(parts) >= 3:
+                name = parts[1].strip()
+                type_line = parts[2].strip()
+                result_type = ""
+                artist = ""
+                for sep in ["\u2004\u00b7\u2004", " \u00b7 ", " \u00b7 "]:
+                    if sep in type_line:
+                        result_type, artist = type_line.split(sep, 1)
+                        break
+                else:
+                    result_type = type_line
+                results.append({"name": name, "type": result_type, "artist": artist})
+
+        assert len(results) == 3
+        assert results[0]["name"] == "Creep"
+        assert results[0]["type"] == "Song"
+        assert results[0]["artist"] == "Radiohead"
+        assert results[1]["name"] == "Radiohead"
+        assert results[1]["type"] == "Artist"
+        assert results[1]["artist"] == ""
+        assert results[2]["name"] == "OK Computer"
+        assert results[2]["type"] == "Album"
+        assert results[2]["artist"] == "Radiohead"
+
+    def test_parse_empty_results(self):
+        """Should handle empty or NO_RESULTS gracefully."""
+        for raw in ["", "NO_RESULTS", "\n\n"]:
+            results = []
+            if raw and raw.strip() != "NO_RESULTS":
+                for line in raw.strip().split("\n"):
+                    if "|||" in line:
+                        results.append(line)
+            assert results == []
+
+    def test_parse_position_string(self):
+        """Should correctly parse position coordinates from AppleScript.
+
+        The actual AppleScript returns "x,y" format (two float values).
+        The code unpacks via: cx, cy = [float(v) for v in pos_str.strip().split(",")]
+        """
+        pos_str = "1883.0,686.0"
+        parts = [float(v) for v in pos_str.strip().split(",")]
+        assert len(parts) == 2
+        assert parts[0] == 1883.0
+        assert parts[1] == 686.0
+
+    def test_parse_position_rejects_extra_fields(self):
+        """Position string with extra commas should raise ValueError on unpack."""
+        pos_str = "500.0,400.0,extra"
+        with pytest.raises(ValueError):
+            cx, cy = [float(v) for v in pos_str.strip().split(",")]
+
+
+@pytest.mark.skipif(
+    not os.environ.get("TEST_UI"),
+    reason="UI tests require Music.app visible. Run with TEST_UI=1"
+)
+class TestUISearchIntegration:
+    """Integration tests for UI search.
+
+    These require Music.app to be visible and active with Accessibility
+    permissions. They will fail in CI or if Music.app is minimized.
+    Run manually: pytest tests/test_applescript.py::TestUISearchIntegration -v
+    """
+
+    def test_search_returns_results(self):
+        """Should find results for a well-known artist."""
+        asc.run_applescript('tell application "Music" to activate')
+        import time
+        time.sleep(2)
+        ok, results = asc.ui_search_catalog("Beatles")
+        asc.ui_clear_search()
+        assert ok is True
+        assert len(results) > 0
+        assert "name" in results[0]
+        assert "type" in results[0]
+
+    def test_search_clears_properly(self):
+        """Should clear search without errors."""
+        asc.run_applescript('tell application "Music" to activate')
+        import time
+        time.sleep(1)
+        asc.ui_search_catalog("test query")
+        asc.ui_clear_search()
+
+    def test_search_empty_query(self):
+        """Should reject empty queries."""
+        ok, results = asc.ui_search_catalog("")
+        assert ok is False
+        assert results == []

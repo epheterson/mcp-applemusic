@@ -2563,9 +2563,20 @@ def _playlist_add(
                     ids_list.append(catalog_id)
                     steps.append(f"Found in catalog: {display}")
                 else:
+                    # API catalog search failed — try UI fallback for add-to-playlist
+                    if APPLESCRIPT_AVAILABLE and resolved.applescript_name:
+                        search_q = f"{name} {track_artist}".strip() if track_artist else name
+                        ui_ok, ui_msg = asc.ui_add_to_playlist(resolved.applescript_name, search_q, track_artist)
+                        if ui_ok:
+                            steps.append(f"[UI] {ui_msg}")
+                            continue  # Process next track, don't return early
                     steps.append(f"Could not find '{name}' in library or catalog")
 
         if not ids_list:
+            # Check if UI fallback handled all tracks successfully
+            ui_successes = [s for s in steps if s.startswith("[UI]")]
+            if ui_successes:
+                return "\n".join(steps)
             return "Error: No tracks to add\n" + "\n".join(steps)
 
         library_ids = []
@@ -2914,7 +2925,7 @@ def library(
     rate_action: str = "",
     stars: int = 0,
 ) -> str:
-    """Your library. Actions: search, add, recently_played, recently_added, browse, rate, remove (macOS)."""
+    """Your library. Actions: search, add, recently_played, recently_added, browse, rate, remove (macOS), snapshot."""
     action = action.lower().strip().replace("-", "_")
 
     if action == "search":
@@ -2937,8 +2948,24 @@ def library(
         if not APPLESCRIPT_AVAILABLE:
             return "Error: remove action requires macOS"
         return _library_remove(track, artist)
+    elif action == "snapshot":
+        if not APPLESCRIPT_AVAILABLE:
+            return "Error: Snapshots require macOS with AppleScript"
+        sub = query.strip() if query else ""
+        sub_lower = sub.lower()
+        if sub_lower == "new":
+            return _library_snapshot_new()
+        elif sub_lower == "history":
+            return _library_history()
+        elif sub_lower == "list":
+            return _library_snapshot_list()
+        elif sub_lower.startswith("delete "):
+            filename = sub[7:].strip()
+            return _library_snapshot_delete(filename)
+        else:
+            return _library_snapshot_default()
     else:
-        return f"Unknown action: {action}. Use: search, add, recently_played, recently_added, browse, rate, remove"
+        return f"Unknown action: {action}. Use: search, add, recently_played, recently_added, browse, rate, remove, snapshot"
 
 
 def _library_search(
@@ -4433,7 +4460,25 @@ def catalog(
     action = action.lower().strip().replace("-", "_")
 
     if action == "search":
-        return _catalog_search(query, types, limit, format, export, full, clean_only)
+        # Try API first, fall back to UI search if no API token
+        try:
+            get_headers()  # Verify API access is available
+            return _catalog_search(query, types, limit, format, export, full, clean_only)
+        except (FileNotFoundError, ValueError):
+            if APPLESCRIPT_AVAILABLE and query:
+                ok, results = asc.ui_search_catalog(query)
+                if ok and results:
+                    asc.ui_clear_search()
+                    lines = [f"=== UI Search: {query} (no API — results from Music.app) ===", ""]
+                    for r in results:
+                        artist_str = f" by {r['artist']}" if r.get('artist') else ""
+                        type_str = f" ({r['type']})" if r.get('type') else ""
+                        lines.append(f"{r['index']}. {r['name']}{type_str}{artist_str}")
+                    lines.append("")
+                    lines.append("Note: UI search shows Top Results only. For full catalog search, set up API access.")
+                    return "\n".join(lines)
+                asc.ui_clear_search()
+            return "Error: API token required for catalog search. Set up API access or use UI search on macOS."
     elif action == "album_tracks":
         return _catalog_album_tracks(album, artist, limit, offset, format, export, full)
     elif action == "album_details":
@@ -4687,6 +4732,20 @@ def config(
             output.append(f"  Location: {log_path}")
             output.append(f"  View: config(action='audit-log')")
             output.append(f"  Clear: config(action='clear-audit-log')")
+            output.append("")
+
+            # Library Snapshots
+            snap_dir = _get_snapshot_dir()
+            baseline = sorted(snap_dir.glob("snapshot-*-baseline.json"))
+            diff_files = sorted(snap_dir.glob("diff-*.json"), reverse=True)
+            if baseline:
+                output.append(f"Library Baseline: {baseline[-1].name}")
+                output.append(f"  Diffs recorded: {len(diff_files)}")
+            else:
+                output.append("Library Baseline: None")
+            output.append(f"  Diff/take: library(action='snapshot')")
+            output.append(f"  Reset: library(action='snapshot', query='new')")
+            output.append(f"  History: library(action='snapshot', query='history')")
 
             return "\n".join(output)
 
@@ -4752,6 +4811,270 @@ def _config_auth_status() -> str:
             status.append(f"API Connection: ERROR - {str(e)}")
 
     return "\n".join(status)
+
+
+# =============================================================================
+# Library Snapshot Manager
+# =============================================================================
+# Stores one full baseline snapshot + lightweight diffs from baseline.
+# The baseline persists forever. Diffs are tiny (just the changes).
+# All accessed via library(action="snapshot|diff|history").
+
+_DIFF_MAX_KEEP = 50
+
+
+def _get_snapshot_dir() -> Path:
+    """Get the snapshot storage directory."""
+    snap_dir = Path.home() / ".cache" / "applemusic-mcp" / "snapshots"
+    snap_dir.mkdir(parents=True, exist_ok=True)
+    return snap_dir
+
+
+def _get_baseline() -> Optional[tuple[dict, Path]]:
+    """Load the baseline snapshot."""
+    snap_dir = _get_snapshot_dir()
+    baselines = list(snap_dir.glob("snapshot-*-baseline.json"))
+    if not baselines:
+        return None
+    path = sorted(baselines)[-1]  # most recent baseline
+    try:
+        return json.loads(path.read_text()), path
+    except (json.JSONDecodeError, OSError):
+        return None
+
+
+def _save_baseline(snapshot: dict) -> Path:
+    """Save a new baseline snapshot, removing any previous baselines."""
+    snap_dir = _get_snapshot_dir()
+
+    # Remove old baselines to prevent accumulation
+    for old in snap_dir.glob("snapshot-*-baseline.json"):
+        old.unlink()
+
+    ts = time.strftime("%Y%m%d-%H%M%S")
+    path = snap_dir / f"snapshot-{ts}-baseline.json"
+    path.write_text(json.dumps(snapshot, indent=2, default=str))
+    return path
+
+
+def _save_diff(diff: dict) -> Path:
+    """Save a diff from baseline. Rotates old diffs."""
+    snap_dir = _get_snapshot_dir()
+    ts = time.strftime("%Y%m%d-%H%M%S")
+    path = snap_dir / f"diff-{ts}.json"
+    path.write_text(json.dumps(diff, indent=2, default=str))
+
+    # Rotate: keep last _DIFF_MAX_KEEP diffs
+    diff_files = sorted(snap_dir.glob("diff-*.json"))
+    if len(diff_files) > _DIFF_MAX_KEEP:
+        for f in diff_files[:len(diff_files) - _DIFF_MAX_KEEP]:
+            f.unlink()
+
+    return path
+
+
+def _format_snapshot_summary(snapshot: dict) -> list[str]:
+    """Format a snapshot as human-readable lines."""
+    playlist_count = len(snapshot.get("playlists", {}))
+    total_tracks = sum(len(t) for t in snapshot.get("playlists", {}).values())
+    pb = snapshot.get("playback", {})
+
+    lines = [
+        f"Library: {snapshot.get('track_count', '?')} tracks",
+        f"Playlists: {playlist_count} ({total_tracks} total playlist tracks)",
+        f"Player: {pb.get('player_state', '?')}, vol {pb.get('volume', '?')}, "
+        f"shuffle {'on' if pb.get('shuffle') else 'off'}, repeat {pb.get('repeat', '?')}",
+    ]
+    if pb.get("current_track"):
+        lines.append(f"Now playing: {pb['current_track']} - {pb.get('current_artist', '?')}")
+    lines.append("")
+    for name, tracks in sorted(snapshot.get("playlists", {}).items()):
+        lines.append(f"  {name}: {len(tracks)} tracks")
+    return lines
+
+
+def _format_diff(diff: dict, reference: str = "baseline") -> list[str]:
+    """Format a diff as human-readable lines."""
+    if diff.get("is_clean"):
+        pb_note = ""
+        if diff.get("playback_changes"):
+            parts = [f"{k}: {v['before']} -> {v['after']}" for k, v in diff["playback_changes"].items()]
+            pb_note = f" (playback: {', '.join(parts)})"
+        return [f"No library changes since {reference}.{pb_note}"]
+
+    lines = []
+    if diff.get("track_count_change"):
+        sign = "+" if diff["track_count_change"] > 0 else ""
+        lines.append(f"Library tracks: {sign}{diff['track_count_change']}")
+    if diff.get("playback_changes"):
+        for k, v in diff["playback_changes"].items():
+            lines.append(f"  {k}: {v['before']} -> {v['after']}")
+    if diff.get("playlists_added"):
+        lines.append(f"Playlists added: {', '.join(diff['playlists_added'])}")
+    if diff.get("playlists_removed"):
+        lines.append(f"Playlists removed: {', '.join(diff['playlists_removed'])}")
+    if diff.get("playlists_changed"):
+        for name, changes in diff["playlists_changed"].items():
+            if changes.get("added"):
+                lines.append(f"  {name}: +{len(changes['added'])} tracks")
+                for t in changes["added"][:5]:
+                    lines.append(f"    + {t}")
+                if len(changes["added"]) > 5:
+                    lines.append(f"    ... and {len(changes['added']) - 5} more")
+            if changes.get("removed"):
+                lines.append(f"  {name}: -{len(changes['removed'])} tracks")
+                for t in changes["removed"][:5]:
+                    lines.append(f"    - {t}")
+                if len(changes["removed"]) > 5:
+                    lines.append(f"    ... and {len(changes['removed']) - 5} more")
+    return lines
+
+
+def _library_snapshot_default() -> str:
+    """Default snapshot action: diff from baseline, or take baseline if none exists."""
+    existing = _get_baseline()
+
+    if not existing:
+        # No baseline — take one
+        return _library_snapshot_new()
+
+    # Diff from baseline
+    baseline_data, baseline_path = existing
+
+    ok, current = asc.library_snapshot()
+    if not ok:
+        return f"Error: Failed to read current state: {current.get('error', 'unknown')}"
+
+    diff = asc.library_diff(baseline_data, current)
+
+    output = [f"=== Library Snapshot (vs {baseline_path.name}) ===", ""]
+    output.extend(_format_diff(diff, baseline_path.name))
+    output.append("")
+    output.extend(_format_snapshot_summary(current))
+    output.append("")
+    output.append("Reset baseline: library(action='snapshot', query='new')")
+    output.append("View history: library(action='snapshot', query='history')")
+    return "\n".join(output)
+
+
+def _library_snapshot_new() -> str:
+    """Take a new baseline snapshot."""
+    ok, snapshot = asc.library_snapshot()
+    if not ok:
+        return f"Error: Failed to take snapshot: {snapshot.get('error', 'unknown')}"
+
+    existing = _get_baseline()
+    if existing:
+        baseline_data, baseline_path = existing
+        diff = asc.library_diff(baseline_data, snapshot)
+        if not diff["is_clean"]:
+            diff["timestamp"] = time.strftime("%Y-%m-%dT%H:%M:%S")
+            diff["from_baseline"] = baseline_path.name
+            _save_diff(diff)
+
+    path = _save_baseline(snapshot)
+    output = [f"=== {'New' if existing else 'Initial'} Library Baseline ===",
+              f"Saved: {path.name}", ""]
+    output.extend(_format_snapshot_summary(snapshot))
+    return "\n".join(output)
+
+
+def _library_history() -> str:
+    """Show history of library changes (saved diffs from baseline)."""
+    snap_dir = _get_snapshot_dir()
+    baseline = _get_baseline()
+    diff_files = sorted(snap_dir.glob("diff-*.json"), reverse=True)
+
+    output = ["=== Library History ===", ""]
+
+    if baseline:
+        _, baseline_path = baseline
+        size = baseline_path.stat().st_size
+        size_str = f"{size / 1024:.0f}KB" if size >= 1024 else f"{size}B"
+        output.append(f"Baseline: {baseline_path.name} ({size_str})")
+    else:
+        output.append("Baseline: None — take one with library(action='snapshot')")
+
+    if not diff_files:
+        output.append("No changes recorded yet.")
+        return "\n".join(output)
+
+    output.append(f"Changes recorded: {len(diff_files)}")
+    output.append("")
+
+    for f in diff_files[:20]:
+        try:
+            diff = json.loads(f.read_text())
+            # Build one-line summary
+            parts = []
+            if diff.get("track_count_change"):
+                parts.append(f"tracks {'+' if diff['track_count_change'] > 0 else ''}{diff['track_count_change']}")
+            if diff.get("playlists_added"):
+                parts.append(f"+{len(diff['playlists_added'])} playlists")
+            if diff.get("playlists_removed"):
+                parts.append(f"-{len(diff['playlists_removed'])} playlists")
+            if diff.get("playlists_changed"):
+                parts.append(f"{len(diff['playlists_changed'])} playlists modified")
+            summary = ", ".join(parts) if parts else "no library changes"
+            ts = diff.get("timestamp", f.stem.replace("diff-", ""))
+            output.append(f"  {ts}: {summary}")
+        except (json.JSONDecodeError, OSError):
+            output.append(f"  {f.name}: (unreadable)")
+
+    return "\n".join(output)
+
+
+def _library_snapshot_list() -> str:
+    """List all saved snapshot and diff files."""
+    snap_dir = _get_snapshot_dir()
+    baselines = sorted(snap_dir.glob("snapshot-*-baseline.json"), reverse=True)
+    diffs = sorted(snap_dir.glob("diff-*.json"), reverse=True)
+
+    if not baselines and not diffs:
+        return "No snapshots saved yet. Take one: library(action='snapshot')"
+
+    def _size_str(path: Path) -> str:
+        size = path.stat().st_size
+        if size < 1024:
+            return f"{size}B"
+        elif size < 1024 * 1024:
+            return f"{size / 1024:.0f}KB"
+        return f"{size / (1024 * 1024):.1f}MB"
+
+    output = ["=== Snapshot Files ===", ""]
+    for b in baselines:
+        output.append(f"  {b.name} ({_size_str(b)}) [BASELINE]")
+    for d in diffs:
+        output.append(f"  {d.name} ({_size_str(d)})")
+
+    output.append("")
+    output.append(f"Location: {snap_dir}")
+    output.append("Delete: library(action='snapshot', query='delete FILENAME')")
+    return "\n".join(output)
+
+
+def _library_snapshot_delete(filename: str) -> str:
+    """Delete a specific snapshot or diff file."""
+    if not filename:
+        return "Error: provide a filename. See library(action='snapshot', query='list')"
+
+    # Sanitize: strip path separators to prevent directory traversal
+    safe_name = Path(filename).name
+    if not safe_name:
+        return f"Error: Invalid filename: {filename}"
+
+    snap_dir = _get_snapshot_dir()
+    path = snap_dir / safe_name
+    if not path.exists():
+        path = snap_dir / f"{safe_name}.json"
+    if not path.exists():
+        return f"Error: File not found: {filename}"
+
+    if "-baseline" in path.name:
+        return "Error: Cannot delete baseline. Use query='new' to replace it instead."
+
+    path.unlink()
+    return f"Deleted: {path.name}"
 
 
 # =============================================================================
@@ -4893,6 +5216,7 @@ if APPLESCRIPT_AVAILABLE:
         if playlist:
             success, result = asc.play_playlist(playlist, shuffle)
             if success:
+                audit_log.log_action("play_playlist", {"playlist": playlist, "shuffle": shuffle})
                 return result
             return f"Error: {result}"
 
@@ -4920,6 +5244,7 @@ if APPLESCRIPT_AVAILABLE:
                     success, result = asc.play_track(lib_track.get("name", ""), lib_artist)
                     if success:
                         shuffle_note = " (shuffled)" if shuffle else ""
+                        audit_log.log_action("play_album", {"album": lib_album, "artist": lib_artist})
                         return f"[Library] Playing: {lib_album} by {lib_artist}{shuffle_note}"
                     break
 
@@ -4964,6 +5289,7 @@ if APPLESCRIPT_AVAILABLE:
                                                 success, result = asc.play_track(lib_track2.get("name", ""), lib_track2.get("artist", ""))
                                                 if success:
                                                     shuffle_note = " (shuffled)" if shuffle else ""
+                                                    audit_log.log_action("play_album", {"album": album_name, "artist": album_artist})
                                                     return f"[Catalog→Library] Playing: {album_name} by {album_artist}{shuffle_note}"
                                                 break
                                 return f"[Catalog→Library] Added but sync pending: {album_name} by {album_artist}"
@@ -5035,6 +5361,7 @@ if APPLESCRIPT_AVAILABLE:
                                     if success:
                                         if reveal:
                                             asc.reveal_track(track_name, track_artist)
+                                        audit_log.log_action("play_track", {"track": track_name, "artist": track_artist})
                                         return f"[Catalog→Library] Playing: {track_name} by {track_artist}"
                                 return f"[Catalog→Library] Added but sync pending: {track_name} by {track_artist}"
                             return f"[Catalog] Failed to add: {add_msg}"
@@ -5075,6 +5402,7 @@ if APPLESCRIPT_AVAILABLE:
                 if success:
                     if reveal:
                         asc.reveal_track(lib_name, lib_artist)
+                    audit_log.log_action("play_track", {"track": lib_name, "artist": lib_artist})
                     return f"[Library] {result}"
                 break
 
@@ -5111,6 +5439,7 @@ if APPLESCRIPT_AVAILABLE:
                         if success:
                             if reveal:
                                 asc.reveal_track(song_name, song_artist)
+                            audit_log.log_action("play_track", {"track": song_name, "artist": song_artist})
                             return f"[Catalog→Library] Playing: {song_name} by {song_artist}"
                     return f"[Catalog→Library] Added but sync pending: {song_name} by {song_artist}"
                 return f"[Catalog] Failed to add: {add_msg}"
@@ -5130,6 +5459,14 @@ if APPLESCRIPT_AVAILABLE:
                 f"Use reveal=True to open in Music, or add_to_library=True to save & play."
             )
 
+        # API catalog search found nothing — try UI search as last resort
+        if APPLESCRIPT_AVAILABLE:
+            search_term = f"{track_name} {track_artist}".strip() if track_artist else track_name
+            ok, msg = asc.ui_play_result_by_query(search_term)
+            if ok:
+                audit_log.log_action("play_track", {"track": track_name, "artist": track_artist, "source": "ui_search"})
+                return f"[UI Search] {msg}"
+
         return f"Track not found in library or catalog: {track_name}"
 
     def _playback_control(action: str, seconds: float = 0) -> str:
@@ -5140,6 +5477,7 @@ if APPLESCRIPT_AVAILABLE:
         if action == "seek":
             success, result = asc.seek(seconds)
             if success:
+                audit_log.log_action("playback_control", {"control": action, "seconds": seconds if seconds else None})
                 return f"Seeked to {int(seconds // 60)}:{int(seconds % 60):02d}"
             return f"Error: {result}"
 
@@ -5156,6 +5494,7 @@ if APPLESCRIPT_AVAILABLE:
 
         success, result = action_map[action]()
         if success:
+            audit_log.log_action("playback_control", {"control": action, "seconds": None})
             return f"Playback: {action}"
         return f"Error: {result}"
 
@@ -5222,6 +5561,15 @@ if APPLESCRIPT_AVAILABLE:
 
         # If changes were made, return confirmation
         if changes:
+            audit_changes = {}
+            if volume >= 0:
+                audit_changes["volume"] = volume
+            if shuffle:
+                audit_changes["shuffle"] = shuffle
+            if repeat:
+                audit_changes["repeat"] = repeat
+            if audit_changes:
+                audit_log.log_action("playback_settings", audit_changes)
             return "Updated: " + ", ".join(changes)
 
         # Otherwise return current settings
@@ -5473,6 +5821,7 @@ if APPLESCRIPT_AVAILABLE:
         if device_name:
             success, result = asc.set_airplay_device(device_name)
             if success:
+                audit_log.log_action("airplay_switch", {"device": device_name})
                 return result
             return f"Error: {result}"
         else:

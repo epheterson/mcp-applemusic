@@ -1,6 +1,6 @@
 ---
 name: apple-music
-version: 0.7.0
+version: 0.8.0
 description: Apple Music integration via AppleScript (macOS) or MusicKit API
 ---
 
@@ -38,7 +38,7 @@ This applies to both AppleScript and API approaches.
 | Playlist management | Full | API-created only |
 | Playback control | Full | None |
 | Play by URL | Yes (UI scripting) | None |
-| Catalog search | No | Yes |
+| Catalog search | UI fallback (Top Results) | Yes (full) |
 | Library access | Instant | With tokens |
 | Cross-platform | No | Yes |
 

@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.0] - 2026-03-27
+
+### Added
+
+- **UI Catalog Free Tier** — catalog search, add-to-library, and play from search results all work without an API token via Music.app UI automation. Falls back automatically when API is unavailable.
+- **Library Snapshots** — `library(action="snapshot")` captures full library state (tracks, playlists, playback) as a baseline. Subsequent calls diff against it. Sub-commands via `query`: `new`, `history`, `list`, `delete`.
+- **Audit logging for playback** — all play, pause, skip, volume, shuffle, repeat, and AirPlay operations now logged to the audit log.
+- **UI add-to-playlist** — composite flow: search catalog via UI, add to library via hover+click, wait for iCloud sync, then add to playlist via existing AppleScript backend.
+
+### Notes
+
+- UI automation features require macOS with a display (not headless), Music.app visible, and Accessibility permissions for System Events.
+- Library snapshots store one full baseline + lightweight diffs. Diffs auto-rotate at 50.
+- Search results show Top Results only (not full catalog categories).
+
 ## [0.7.0] - 2026-03-26
 
 ### Added

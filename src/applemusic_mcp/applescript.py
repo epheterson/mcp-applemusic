@@ -932,6 +932,20 @@ def open_catalog_song(song_url: str) -> tuple[bool, str]:
         return False, f"Failed to open: {song_url}"
 
 
+# =============================================================================
+# UI Path Constants
+# =============================================================================
+# Centralized UI element paths for Music.app System Events automation.
+# These paths are used by multiple functions to interact with the Music UI.
+
+_SCROLL_AREA = 'scroll area 2 of splitter group 1 of window "Music"'
+
+_SEARCH_FIELD = (
+    'text field 1 of UI element 1 of row 1 of outline 1'
+    ' of scroll area 1 of splitter group 1 of window "Music"'
+)
+
+
 def _check_playing() -> bool:
     """Check if Music is currently playing."""
     ok, state = run_applescript('tell application "Music" to get player state')
@@ -952,7 +966,7 @@ def _click_play_or_shuffle(shuffle: bool = False) -> tuple[bool, str]:
     """
     button_name = "Shuffle" if shuffle else "Play"
     base = 'tell application "System Events" to tell process "Music"'
-    sa = "scroll area 2 of splitter group 1 of window \"Music\""
+    sa = _SCROLL_AREA
 
     # Path 1: Album / editorial playlist layout (nested lists)
     script1 = f'{base} to click button "{button_name}" of UI element 1 of list 1 of list 1 of {sa}'
@@ -971,9 +985,31 @@ def _click_play_or_shuffle(shuffle: bool = False) -> tuple[bool, str]:
 
 
 def _ensure_music_frontmost() -> None:
-    """Bring Music.app to the foreground. Called before CoreGraphics events."""
-    run_applescript('tell application "Music" to activate')
-    time.sleep(0.3)
+    """Bring Music.app to the foreground with a visible window.
+
+    Music.app can be running without a window (e.g. after closing the window
+    or via background playback). This ensures the main window is open via
+    the Window menu if no window is found.
+    """
+    run_applescript('''
+tell application "Music" to activate
+delay 0.5
+tell application "System Events"
+    tell process "Music"
+        set frontmost to true
+        delay 0.3
+        if (count of windows) is 0 then
+            try
+                click menu item "Music" of menu "Window" of menu bar 1
+            end try
+            delay 1
+            if (count of windows) is 0 then
+                keystroke "1" using command down
+                delay 1
+            end if
+        end if
+    end tell
+end tell''')
 
 
 def _jxa_mouse_move(x: float, y: float) -> bool:
@@ -1683,3 +1719,565 @@ def get_library_stats() -> tuple[bool, dict]:
             'volume': int(parts[5]) if parts[5].isdigit() else 0
         }
     return False, "Failed to parse library stats"
+
+
+# =============================================================================
+# UI Catalog Automation (no API required)
+# =============================================================================
+# These functions control Music.app through its UI (System Events + CoreGraphics)
+# to provide catalog search, add-to-library, and play functionality without
+# needing an Apple Developer account or API token.
+#
+# Requirements: macOS, Accessibility permissions for System Events,
+# Music.app visible (not minimized), display attached (not headless).
+
+
+def ui_search_catalog(query: str) -> tuple[bool, list[dict]]:
+    """Search the Apple Music catalog via Music.app's search field.
+
+    Types the query into the search field, submits it, and parses
+    the "Top Results" section from the results page.
+
+    Args:
+        query: Search query (e.g. "Radiohead Creep", "Taylor Swift")
+
+    Returns:
+        Tuple of (success, list of result dicts).
+        Each result dict has: name, type ("Song", "Album", "Artist", etc.),
+        artist (if applicable), and index (position in results).
+    """
+    if not query or not query.strip():
+        return False, []
+
+    # Focus and populate the search field
+    # Ensure Music has a visible window before interacting with search
+    _ensure_music_frontmost()
+
+    ok, _ = run_applescript(f'''
+tell application "System Events"
+    tell process "Music"
+        set searchField to {_SEARCH_FIELD}
+        set focused of searchField to true
+        delay 0.3
+        set value of searchField to "{_escape_for_applescript(query)}"
+        delay 0.5
+        key code 36
+    end tell
+end tell''')
+    if not ok:
+        return False, []
+
+    # Wait for results to load
+    time.sleep(4)
+
+    # Parse the Top Results section
+    ok, raw = run_applescript(f'''
+tell application "System Events"
+    tell process "Music"
+        set sa to {_SCROLL_AREA}
+        set resultList to list 1 of sa
+        try
+            set topResults to list 1 of resultList
+        on error
+            return "NO_RESULTS"
+        end try
+        set ec to every UI element of topResults
+        set r to ""
+        set idx to 0
+        repeat with e in ec
+            try
+                set c to class of e as text
+                if c is "UI element" then
+                    set d to description of e
+                    if d is not "Top Results" and d is not "group" then
+                        set idx to idx + 1
+                        -- Get the type line (second static text, e.g. "Song · Radiohead")
+                        set typeLine to ""
+                        set stTexts to every static text of e
+                        if (count of stTexts) > 1 then
+                            set typeLine to name of item 2 of stTexts
+                        end if
+                        set r to r & idx & "|||" & d & "|||" & typeLine & return
+                    end if
+                end if
+            end try
+        end repeat
+        return r
+    end tell
+end tell''')
+    if not ok or not raw or raw.strip() == "NO_RESULTS":
+        return False, []
+
+    results = []
+    for line in raw.strip().split("\n"):
+        line = line.strip()
+        if not line or "|||" not in line:
+            continue
+        parts = line.split("|||")
+        if len(parts) >= 3:
+            name = parts[1].strip()
+            type_line = parts[2].strip()
+            # Parse "Song · Radiohead" or "Album · Radiohead" etc.
+            # Apple uses U+2004 (three-per-em space) + U+00B7 (middle dot) + U+2004
+            result_type = ""
+            artist = ""
+            for sep in ["\u2004\u00b7\u2004", " \u00b7 ", " · "]:
+                if sep in type_line:
+                    result_type, artist = type_line.split(sep, 1)
+                    break
+            else:
+                result_type = type_line
+            results.append({
+                "name": name,
+                "type": result_type.strip(),
+                "artist": artist.strip(),
+                "index": int(parts[0]),
+            })
+
+    return True, results
+
+
+def ui_clear_search() -> None:
+    """Clear the Music.app search field and dismiss search."""
+    run_applescript(f'''
+tell application "System Events"
+    tell process "Music"
+        set searchField to {_SEARCH_FIELD}
+        set focused of searchField to true
+        delay 0.2
+        set value of searchField to ""
+        delay 0.2
+        key code 53
+    end tell
+end tell''')
+
+
+def ui_add_to_library(result_name: str) -> tuple[bool, str]:
+    """Add a catalog item to library via Music.app UI.
+
+    Must be called after ui_search_catalog() with results visible.
+    Hovers over the result to reveal the "Add to Library" button and clicks it.
+
+    Args:
+        result_name: Exact name of the result to add (as returned by ui_search_catalog)
+
+    Returns:
+        Tuple of (success, message)
+    """
+    safe_name = _escape_for_applescript(result_name)
+
+    # Find the result's position
+    ok, pos_str = run_applescript(f'''
+tell application "System Events"
+    tell process "Music"
+        set sa to {_SCROLL_AREA}
+        set resultList to list 1 of sa
+        try
+            set topResults to list 1 of resultList
+        on error
+            return "NO_RESULTS"
+        end try
+        repeat with e in (every UI element of topResults)
+            try
+                if description of e is "{safe_name}" then
+                    set {{x, y}} to position of e
+                    set {{w, h}} to size of e
+                    return ((x + w / 2) as text) & "," & ((y + h / 2) as text)
+                end if
+            end try
+        end repeat
+        return "NOT_FOUND"
+    end tell
+end tell''')
+    if not ok or not pos_str or pos_str.strip() in ("NOT_FOUND", "NO_RESULTS"):
+        return False, f"Could not find '{result_name}' in search results"
+
+    try:
+        cx, cy = [float(v) for v in pos_str.strip().split(",")]
+    except ValueError:
+        return False, f"Invalid position: {pos_str}"
+
+    # Hover to reveal the Add to Library button
+    _ensure_music_frontmost()
+    if not _jxa_mouse_move(cx, cy):
+        return False, "Failed to move mouse for hover"
+    time.sleep(1)
+
+    # Click the Add to Library button
+    ok, click_result = run_applescript(f'''
+tell application "System Events"
+    tell process "Music"
+        set sa to {_SCROLL_AREA}
+        set resultList to list 1 of sa
+        try
+            set topResults to list 1 of resultList
+        on error
+            return "NO_RESULTS"
+        end try
+        repeat with e in (every UI element of topResults)
+            try
+                if description of e is "{safe_name}" then
+                    -- Look for Add to Library button
+                    repeat with btn in (every button of e)
+                        if description of btn is "Add to Library" then
+                            click btn
+                            return "ADDED"
+                        end if
+                    end repeat
+                    return "NO_ADD_BUTTON"
+                end if
+            end try
+        end repeat
+        return "NOT_FOUND"
+    end tell
+end tell''')
+    if ok and click_result and click_result.strip() == "ADDED":
+        return True, f"Added '{result_name}' to library"
+
+    if click_result and "NO_ADD_BUTTON" in click_result:
+        return False, f"No 'Add to Library' button found — may already be in library, or hover didn't reveal it"
+
+    return False, f"Failed to add: {click_result}"
+
+
+def ui_play_result(result_name: str) -> tuple[bool, str]:
+    """Play a catalog item from search results via Music.app UI.
+
+    Must be called after ui_search_catalog() with results visible.
+    Hovers over the result to reveal the play checkbox and clicks it.
+
+    Args:
+        result_name: Exact name of the result to play (as returned by ui_search_catalog)
+
+    Returns:
+        Tuple of (success, message)
+    """
+    safe_name = _escape_for_applescript(result_name)
+
+    # Find position
+    ok, pos_str = run_applescript(f'''
+tell application "System Events"
+    tell process "Music"
+        set sa to {_SCROLL_AREA}
+        set resultList to list 1 of sa
+        try
+            set topResults to list 1 of resultList
+        on error
+            return "NOT_FOUND"
+        end try
+        repeat with e in (every UI element of topResults)
+            try
+                if description of e is "{safe_name}" then
+                    set {{x, y}} to position of e
+                    set {{w, h}} to size of e
+                    return ((x + w / 2) as text) & "," & ((y + h / 2) as text)
+                end if
+            end try
+        end repeat
+        return "NOT_FOUND"
+    end tell
+end tell''')
+    if not ok or not pos_str or pos_str.strip() == "NOT_FOUND":
+        return False, f"Could not find '{result_name}' in search results"
+
+    try:
+        cx, cy = [float(v) for v in pos_str.strip().split(",")]
+    except ValueError:
+        return False, f"Invalid position: {pos_str}"
+
+    # Hover to reveal play checkbox
+    _ensure_music_frontmost()
+    if not _jxa_mouse_move(cx, cy):
+        return False, "Failed to hover"
+    time.sleep(1)
+
+    # Click the play checkbox
+    ok, _ = run_applescript(f'''
+tell application "System Events"
+    tell process "Music"
+        set sa to {_SCROLL_AREA}
+        set resultList to list 1 of sa
+        try
+            set topResults to list 1 of resultList
+        on error
+            return "NOT_FOUND"
+        end try
+        repeat with e in (every UI element of topResults)
+            try
+                if description of e is "{safe_name}" then
+                    click checkbox 1 of e
+                    return "CLICKED"
+                end if
+            end try
+        end repeat
+        return "NOT_FOUND"
+    end tell
+end tell''')
+    time.sleep(2)
+    if _check_playing():
+        return True, f"Playing: {result_name}"
+    return False, f"Clicked play on '{result_name}' but playback didn't start"
+
+
+def ui_play_result_by_query(query: str) -> tuple[bool, str]:
+    """Search catalog via UI and play the first song result.
+
+    Convenience function that combines ui_search_catalog + ui_play_result.
+
+    Args:
+        query: Search query (e.g. "Radiohead Creep")
+
+    Returns:
+        Tuple of (success, message)
+    """
+    ok, results = ui_search_catalog(query)
+    if not ok or not results:
+        ui_clear_search()
+        return False, f"No results found for '{query}'"
+
+    # Find first song result
+    target = None
+    for r in results:
+        if r["type"] == "Song":
+            target = r
+            break
+    if target is None:
+        target = results[0]
+
+    ok, msg = ui_play_result(target["name"])
+    ui_clear_search()
+    return ok, msg
+
+
+def ui_add_to_playlist(playlist_name: str, query: str, artist: str = "") -> tuple[bool, str]:
+    """Add a catalog track to a playlist via UI automation (no API required).
+
+    Composite flow:
+    1. Search catalog via Music.app UI
+    2. Add the best matching song to library via hover+click
+    3. Wait for iCloud sync
+    4. Add to playlist via existing AppleScript backend
+
+    Args:
+        playlist_name: Target playlist name
+        query: Search query (e.g. "Artist Song")
+        artist: Optional artist filter for result matching
+
+    Returns:
+        Tuple of (success, message)
+    """
+    # Search
+    ok, results = ui_search_catalog(query)
+    if not ok or not results:
+        ui_clear_search()
+        return False, f"No results found for '{query}'"
+
+    # Find best song result
+    target = None
+    for r in results:
+        if r["type"] == "Song":
+            if artist and artist.lower() not in r.get("artist", "").lower():
+                continue
+            target = r
+            break
+
+    if target is None:
+        # Fall back to first result if no Song type match
+        target = results[0]
+
+    # Add to library
+    ok, msg = ui_add_to_library(target["name"])
+    if not ok:
+        ui_clear_search()
+        return False, f"Failed to add to library: {msg}"
+
+    ui_clear_search()
+
+    # Wait for iCloud sync
+    track_name = target["name"]
+    track_artist = target.get("artist", artist)
+    time.sleep(8)
+
+    # Verify it's in library
+    for attempt in range(3):
+        ok, lib_results = search_library(track_name.replace("\u0301", ""), "songs")
+        if ok and lib_results:
+            break
+        time.sleep(3)
+    else:
+        return False, f"Added to library but sync not confirmed for '{track_name}'"
+
+    # Add to playlist via existing backend
+    ok, result = add_track_to_playlist(playlist_name, track_name, track_artist)
+    if ok:
+        return True, f"Added {track_name} by {track_artist} to {playlist_name}"
+    return False, f"Added to library but failed to add to playlist: {result}"
+
+
+# =============================================================================
+# Library Snapshot & Diff
+# =============================================================================
+
+def library_snapshot() -> tuple[bool, dict]:
+    """Capture a full snapshot of the Music library for integrity checking.
+
+    Returns a dict with:
+        - track_count: total library tracks
+        - playback: dict with player state, volume, shuffle, repeat, current track
+        - playlists: dict mapping playlist name -> list of {name, artist, album}
+
+    This is intentionally thorough (captures full track lists) so diffs can
+    detect any accidental additions, removals, or reorders.
+    """
+    # Get total track count
+    ok, count_str = run_applescript(
+        'tell application "Music" to return (count of tracks of library playlist 1) as text'
+    )
+    if not ok:
+        return False, {"error": f"Failed to count tracks: {count_str}"}
+    try:
+        track_count = int(count_str.strip())
+    except ValueError:
+        return False, {"error": f"Invalid track count: {count_str}"}
+
+    # Get playback state
+    ok, pb_str = run_applescript('''
+tell application "Music"
+    set ps to player state as text
+    set v to (sound volume) as text
+    set sh to (shuffle enabled) as text
+    set rp to song repeat as text
+    set ct to ""
+    set ca to ""
+    set calb to ""
+    try
+        set ct to name of current track
+        set ca to artist of current track
+        set calb to album of current track
+    end try
+    return ps & return & v & return & sh & return & rp & return & ct & return & ca & return & calb
+end tell''')
+    playback_state = {}
+    if ok and pb_str:
+        lines = pb_str.strip().split("\n")
+        playback_state = {
+            "player_state": lines[0] if len(lines) > 0 else "unknown",
+            "volume": int(lines[1]) if len(lines) > 1 and lines[1].strip().isdigit() else 0,
+            "shuffle": lines[2].strip() == "true" if len(lines) > 2 else False,
+            "repeat": lines[3].strip() if len(lines) > 3 else "unknown",
+            "current_track": lines[4].strip() if len(lines) > 4 and lines[4].strip() else None,
+            "current_artist": lines[5].strip() if len(lines) > 5 and lines[5].strip() else None,
+            "current_album": lines[6].strip() if len(lines) > 6 and lines[6].strip() else None,
+        }
+
+    # Get all user playlists and their contents
+    ok, playlist_data = run_applescript('''
+tell application "Music"
+    set r to ""
+    repeat with p in user playlists
+        set pName to name of p
+        set pKind to smart of p
+        if pKind is false and pName is not "Music" and pName is not "Music Videos" then
+            set r to r & "PLAYLIST:" & pName & return
+            try
+                repeat with t in tracks of p
+                    set r to r & name of t & "|||" & artist of t & "|||" & album of t & return
+                end repeat
+            end try
+        end if
+    end repeat
+    return r
+end tell''')
+    if not ok:
+        return False, {"error": f"Failed to get playlists: {playlist_data}"}
+
+    playlists = {}
+    current_playlist = None
+    for line in playlist_data.strip().split("\n"):
+        line = line.strip()
+        if not line:
+            continue
+        if line.startswith("PLAYLIST:"):
+            current_playlist = line[9:]
+            playlists[current_playlist] = []
+        elif current_playlist is not None and "|||" in line:
+            parts = line.split("|||")
+            if len(parts) >= 3:
+                playlists[current_playlist].append({
+                    "name": parts[0],
+                    "artist": parts[1],
+                    "album": parts[2],
+                })
+
+    return True, {
+        "track_count": track_count,
+        "playback": playback_state,
+        "playlists": playlists,
+    }
+
+
+def library_diff(before: dict, after: dict) -> dict:
+    """Compare two library snapshots and return differences.
+
+    Args:
+        before: snapshot dict from library_snapshot()
+        after: snapshot dict from library_snapshot()
+
+    Returns:
+        Dict with:
+            - track_count_change: int (positive = added, negative = removed)
+            - playback_changes: dict of changed playback settings
+            - playlists_added: list of playlist names
+            - playlists_removed: list of playlist names
+            - playlists_changed: dict of {name: {added: [...], removed: [...]}}
+            - is_clean: True if no library changes detected (playback state changes are tracked separately)
+    """
+    # Compare playback state
+    before_pb = before.get("playback", {})
+    after_pb = after.get("playback", {})
+    playback_changes = {}
+    for key in ["player_state", "volume", "shuffle", "repeat", "current_track", "current_artist"]:
+        if before_pb.get(key) != after_pb.get(key):
+            playback_changes[key] = {"before": before_pb.get(key), "after": after_pb.get(key)}
+
+    result = {
+        "track_count_change": after.get("track_count", 0) - before.get("track_count", 0),
+        "playback_changes": playback_changes,
+        "playlists_added": [],
+        "playlists_removed": [],
+        "playlists_changed": {},
+        "is_clean": True,
+    }
+
+    before_pl = before.get("playlists", {})
+    after_pl = after.get("playlists", {})
+
+    # Find added/removed playlists
+    for name in after_pl:
+        if name not in before_pl:
+            result["playlists_added"].append(name)
+    for name in before_pl:
+        if name not in after_pl:
+            result["playlists_removed"].append(name)
+
+    # Compare track lists for playlists that exist in both
+    for name in before_pl:
+        if name in after_pl:
+            before_tracks = {f"{t['name']}|{t['artist']}" for t in before_pl[name]}
+            after_tracks = {f"{t['name']}|{t['artist']}" for t in after_pl[name]}
+            added = after_tracks - before_tracks
+            removed = before_tracks - after_tracks
+            if added or removed:
+                result["playlists_changed"][name] = {
+                    "added": list(added),
+                    "removed": list(removed),
+                }
+
+    # Determine if clean (library changes only — playback state changes don't count)
+    if (result["track_count_change"] != 0
+            or result["playlists_added"]
+            or result["playlists_removed"]
+            or result["playlists_changed"]):
+        result["is_clean"] = False
+
+    return result
