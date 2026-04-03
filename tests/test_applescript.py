@@ -167,6 +167,29 @@ class TestFolderOperations:
         success, msg = asc.delete_folder(test_name)
         assert success is True
 
+    def test_move_playlist_to_folder(self):
+        """Should move a playlist into a folder."""
+        folder_name = "_TEST_MOVE_FOLDER_"
+        playlist_name = "_TEST_MOVE_PL_"
+
+        success, _ = asc.create_folder(folder_name)
+        assert success is True
+        success, _ = asc.create_playlist(playlist_name)
+        assert success is True
+
+        # Move
+        success, msg = asc.move_to_folder(playlist_name, folder_name)
+        assert success is True
+
+        # Verify parent
+        success, parent = asc.get_playlist_parent(playlist_name)
+        assert success is True
+        assert parent == folder_name
+
+        # Cleanup
+        asc.delete_playlist(playlist_name)
+        asc.delete_folder(folder_name)
+
 
 class TestLibrarySearch:
     """Test library search functions."""

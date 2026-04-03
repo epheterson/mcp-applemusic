@@ -457,6 +457,70 @@ def create_folder(name: str) -> tuple[bool, str]:
     return run_applescript(script)
 
 
+def move_to_folder(item_name: str, folder_name: str) -> tuple[bool, str]:
+    """Move a playlist or folder into a folder.
+
+    Args:
+        item_name: Name of the playlist to move
+        folder_name: Name of the target folder
+
+    Returns:
+        Tuple of (success, message or error)
+    """
+    safe_item = _escape_for_applescript(item_name)
+    safe_folder = _escape_for_applescript(folder_name)
+    script = f'''
+    tell application "Music"
+        try
+            set targetFolder to first folder playlist whose name is "{safe_folder}"
+        on error
+            return "ERROR:Folder not found: {safe_folder}"
+        end try
+        try
+            set targetItem to first user playlist whose name is "{safe_item}"
+        on error
+            return "ERROR:Playlist not found: {safe_item}"
+        end try
+        move targetItem to targetFolder
+        return "Moved '" & name of targetItem & "' to folder '" & name of targetFolder & "'"
+    end tell
+    '''
+    success, output = run_applescript(script)
+    if output.startswith("ERROR:"):
+        return False, output[6:]
+    return success, output
+
+
+def get_playlist_parent(playlist_name: str) -> tuple[bool, str]:
+    """Get the name of the folder containing a playlist.
+
+    Args:
+        playlist_name: Name of the playlist
+
+    Returns:
+        Tuple of (success, parent folder name or error)
+    """
+    safe_name = _escape_for_applescript(playlist_name)
+    script = f'''
+    tell application "Music"
+        try
+            set targetPlaylist to first user playlist whose name is "{safe_name}"
+        on error
+            return "ERROR:Playlist not found"
+        end try
+        try
+            return name of parent of targetPlaylist
+        on error
+            return "ERROR:No parent folder"
+        end try
+    end tell
+    '''
+    success, output = run_applescript(script)
+    if output.startswith("ERROR:"):
+        return False, output[6:]
+    return success, output
+
+
 def delete_folder(folder_name: str) -> tuple[bool, str]:
     """Delete a folder playlist by name.
 
