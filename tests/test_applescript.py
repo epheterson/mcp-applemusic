@@ -167,6 +167,33 @@ class TestFolderOperations:
         success, msg = asc.delete_folder(test_name)
         assert success is True
 
+    def test_rename_folder(self):
+        """Should rename a folder via the generic rename_playlist function."""
+        test_name = "_TEST_RENAME_FOLDER_"
+        new_name = "_TEST_RENAME_FOLDER_NEW_"
+
+        success, _ = asc.create_folder(test_name)
+        assert success is True
+
+        # Rename using the generic function (should find folder playlists)
+        success, msg = asc.rename_playlist(test_name, new_name)
+        assert success is True
+        assert new_name in msg
+
+        # Cleanup
+        asc.delete_folder(new_name)
+
+    def test_delete_folder_via_generic_delete(self):
+        """Should delete a folder via the generic delete_playlist function."""
+        test_name = "_TEST_DEL_FOLDER_GENERIC_"
+
+        success, _ = asc.create_folder(test_name)
+        assert success is True
+
+        # Delete using the generic function (should find folder playlists)
+        success, msg = asc.delete_playlist(test_name)
+        assert success is True
+
     def test_move_playlist_to_folder(self):
         """Should move a playlist into a folder."""
         folder_name = "_TEST_MOVE_FOLDER_"

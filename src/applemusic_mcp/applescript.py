@@ -39,7 +39,8 @@ def _escape_for_applescript(s: str) -> str:
 def _find_playlist_applescript(safe_name: str) -> str:
     """Generate AppleScript code to find a playlist by name.
 
-    Tries exact match first, then falls back to partial match (contains).
+    Tries user playlists first (exact, then partial match), then falls
+    back to folder playlists (exact, then partial match).
 
     Args:
         safe_name: Already-escaped playlist name
@@ -49,14 +50,24 @@ def _find_playlist_applescript(safe_name: str) -> str:
     """
     return f'''
         try
-            -- Try exact match first
+            -- Try exact match on user playlists
             set targetPlaylist to first user playlist whose name is "{safe_name}"
         on error
             try
-                -- Fall back to partial match
+                -- Partial match on user playlists
                 set targetPlaylist to first user playlist whose name contains "{safe_name}"
             on error
-                return "ERROR:Playlist not found"
+                try
+                    -- Exact match on folder playlists
+                    set targetPlaylist to first folder playlist whose name is "{safe_name}"
+                on error
+                    try
+                        -- Partial match on folder playlists
+                        set targetPlaylist to first folder playlist whose name contains "{safe_name}"
+                    on error
+                        return "ERROR:Playlist not found"
+                    end try
+                end try
             end try
         end try'''
 
