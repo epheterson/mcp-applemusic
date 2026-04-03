@@ -2263,6 +2263,18 @@ def _playlist_create(name: str, description: str = "") -> str:
         return str(e)
 
 
+def _playlist_create_folder(name: str) -> str:
+    """Internal: Create a folder playlist via AppleScript."""
+    success, result = asc.create_folder(name)
+    if success:
+        audit_log.log_action(
+            "create_folder",
+            {"name": name, "folder_id": result, "method": "applescript"},
+        )
+        return f"Created folder '{name}' (ID: {result})"
+    return f"Error creating folder: {result}"
+
+
 def _playlist_add(
     playlist: str = "",
     track: str = "",
@@ -2863,7 +2875,7 @@ def playlist(
     verify: bool = True,
     auto_search: Optional[bool] = None,
 ) -> str:
-    """Playlist operations. Actions: list, tracks, search, create, add, copy, remove (macOS), delete (macOS), rename (macOS)."""
+    """Playlist operations. Actions: list, tracks, search, create, create_folder (macOS), add, copy, remove (macOS), delete (macOS), rename (macOS)."""
     action = action.lower().strip().replace("-", "_")
 
     if action == "list":
@@ -2898,8 +2910,14 @@ def playlist(
             return "Error: rename action requires macOS"
         playlist_name = name or playlist
         return _playlist_rename(playlist_name, new_name)
+    elif action == "create_folder":
+        if not APPLESCRIPT_AVAILABLE:
+            return "Error: create_folder action requires macOS"
+        if not name:
+            return "Error: name required for create_folder"
+        return _playlist_create_folder(name)
     else:
-        return f"Unknown action: {action}. Use: list, tracks, search, create, add, copy, remove, delete, rename"
+        return f"Unknown action: {action}. Use: list, tracks, search, create, add, copy, remove, delete, rename, create_folder"
 
 
 # ============ LIBRARY MANAGEMENT ============

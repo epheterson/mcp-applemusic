@@ -151,6 +151,23 @@ class TestPlaylistOperations:
         assert test_name not in names
 
 
+class TestFolderOperations:
+    """Test folder operations."""
+
+    def test_create_and_delete_folder(self):
+        """Should create and delete a folder playlist."""
+        test_name = "_TEST_FOLDER_DELETE_ME_"
+
+        # Create
+        success, folder_id = asc.create_folder(test_name)
+        assert success is True
+        assert len(folder_id) > 0
+
+        # Delete
+        success, msg = asc.delete_folder(test_name)
+        assert success is True
+
+
 class TestLibrarySearch:
     """Test library search functions."""
 

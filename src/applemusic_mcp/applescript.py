@@ -438,6 +438,53 @@ def create_playlist(name: str, description: str = "") -> tuple[bool, str]:
     return run_applescript(script)
 
 
+def create_folder(name: str) -> tuple[bool, str]:
+    """Create a new folder playlist.
+
+    Args:
+        name: Folder name
+
+    Returns:
+        Tuple of (success, folder_id or error)
+    """
+    safe_name = _escape_for_applescript(name)
+    script = f'''
+    tell application "Music"
+        set newFolder to make new folder playlist with properties {{name:"{safe_name}"}}
+        return persistent ID of newFolder
+    end tell
+    '''
+    return run_applescript(script)
+
+
+def delete_folder(folder_name: str) -> tuple[bool, str]:
+    """Delete a folder playlist by name.
+
+    Args:
+        folder_name: Name of the folder to delete
+
+    Returns:
+        Tuple of (success, message or error)
+    """
+    safe_name = _escape_for_applescript(folder_name)
+    script = f'''
+    tell application "Music"
+        try
+            set targetFolder to first folder playlist whose name is "{safe_name}"
+        on error
+            return "ERROR:Folder not found"
+        end try
+        set folderName to name of targetFolder
+        delete targetFolder
+        return "Deleted folder: " & folderName
+    end tell
+    '''
+    success, output = run_applescript(script)
+    if output.startswith("ERROR:"):
+        return False, output[6:]
+    return success, output
+
+
 def delete_playlist(playlist_name: str) -> tuple[bool, str]:
     """Delete a playlist by name.
 
