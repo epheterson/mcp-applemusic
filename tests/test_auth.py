@@ -63,6 +63,48 @@ class TestLoadConfig:
         with pytest.raises(json.JSONDecodeError):
             auth.load_config()
 
+    def test_falls_back_to_env_vars_when_config_missing(self, mock_config_dir, monkeypatch):
+        """Should load config from environment variables when config.json doesn't exist."""
+        monkeypatch.setenv("APPLE_MUSIC_TEAM_ID", "ENV_TEAM_ID")
+        monkeypatch.setenv("APPLE_MUSIC_KEY_ID", "ENV_KEY_ID")
+        monkeypatch.setenv("APPLE_MUSIC_PRIVATE_KEY_PATH", "~/keys/AuthKey.p8")
+
+        result = auth.load_config()
+
+        assert result["team_id"] == "ENV_TEAM_ID"
+        assert result["key_id"] == "ENV_KEY_ID"
+        assert result["private_key_path"] == "~/keys/AuthKey.p8"
+
+    def test_config_file_takes_precedence_over_env_vars(
+        self, mock_config_dir, sample_config, monkeypatch
+    ):
+        """Should prefer config.json over environment variables."""
+        config_file = mock_config_dir / "config.json"
+        with open(config_file, "w") as f:
+            json.dump(sample_config, f)
+
+        monkeypatch.setenv("APPLE_MUSIC_TEAM_ID", "ENV_TEAM_ID")
+        monkeypatch.setenv("APPLE_MUSIC_KEY_ID", "ENV_KEY_ID")
+        monkeypatch.setenv("APPLE_MUSIC_PRIVATE_KEY_PATH", "~/keys/AuthKey.p8")
+
+        result = auth.load_config()
+
+        assert result["team_id"] == "TEST_TEAM_ID"
+        assert result["key_id"] == "TEST_KEY_ID"
+
+    def test_raises_when_config_missing_and_env_vars_incomplete(self, mock_config_dir, monkeypatch):
+        """Should raise FileNotFoundError when config.json missing and env vars incomplete."""
+        monkeypatch.setenv("APPLE_MUSIC_TEAM_ID", "ENV_TEAM_ID")
+        # key_id and private_key_path not set
+
+        with pytest.raises(FileNotFoundError):
+            auth.load_config()
+
+    def test_raises_when_config_missing_and_no_env_vars(self, mock_config_dir):
+        """Should raise FileNotFoundError when neither config.json nor env vars exist."""
+        with pytest.raises(FileNotFoundError):
+            auth.load_config()
+
 
 class TestGetPrivateKeyPath:
     """Tests for get_private_key_path function."""

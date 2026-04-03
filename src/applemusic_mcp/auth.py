@@ -1,6 +1,7 @@
 """Authentication and token management for Apple Music API."""
 
 import json
+import os
 import time
 import webbrowser
 from http.server import HTTPServer, BaseHTTPRequestHandler
@@ -21,15 +22,29 @@ def get_config_dir() -> Path:
 
 
 def load_config() -> dict:
-    """Load configuration from config.json."""
+    """Load configuration from config.json or environment variables."""
     config_file = get_config_dir() / "config.json"
-    if not config_file.exists():
-        raise FileNotFoundError(
-            f"Config file not found: {config_file}\n"
-            "Create it with your Apple Developer credentials."
-        )
-    with open(config_file) as f:
-        return json.load(f)
+    if config_file.exists():
+        with open(config_file) as f:
+            return json.load(f)
+
+    team_id = os.environ.get("APPLE_MUSIC_TEAM_ID")
+    key_id = os.environ.get("APPLE_MUSIC_KEY_ID")
+    private_key_path = os.environ.get("APPLE_MUSIC_PRIVATE_KEY_PATH")
+
+    if team_id and key_id and private_key_path:
+        return {
+            "team_id": team_id,
+            "key_id": key_id,
+            "private_key_path": private_key_path,
+        }
+
+    raise FileNotFoundError(
+        f"Config file not found: {config_file}\n"
+        "Create it with your Apple Developer credentials,\n"
+        "or set APPLE_MUSIC_TEAM_ID, APPLE_MUSIC_KEY_ID, and "
+        "APPLE_MUSIC_PRIVATE_KEY_PATH environment variables."
+    )
 
 
 def get_user_preferences() -> dict:
