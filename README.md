@@ -86,6 +86,17 @@ Create `~/.config/applemusic-mcp/config.json`:
 }
 ```
 
+**Alternative: Environment Variables**
+
+Instead of a config file, you can set environment variables:
+```bash
+export APPLE_MUSIC_TEAM_ID="YOUR_TEAM_ID"
+export APPLE_MUSIC_KEY_ID="YOUR_KEY_ID"
+export APPLE_MUSIC_PRIVATE_KEY_PATH="~/.config/applemusic-mcp/AuthKey_XXXXXXXXXX.p8"
+```
+
+This is useful for MCP hosts that inject credentials via `env` blocks in their server configs. The config file takes precedence when both are present.
+
 ### 3. Generate Tokens
 
 ```bash
