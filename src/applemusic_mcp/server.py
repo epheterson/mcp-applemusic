@@ -2287,6 +2287,59 @@ def _playlist_move(playlist_name: str, folder_name: str) -> str:
     return f"Error moving playlist: {result}"
 
 
+def _playlist_create_in_folder(name: str, folder: str, description: str = "") -> str:
+    """Internal: Create a playlist inside a folder. Creates the folder if it doesn't exist."""
+    # Ensure folder exists
+    from . import applescript as asc_mod
+    success, folder_result = asc_mod.create_folder(folder)
+    if not success and "already exists" not in folder_result.lower():
+        # Try to find existing folder — create_folder may fail if it exists
+        pass  # Folder may already exist, move will find it
+
+    # Create the playlist
+    create_result = _playlist_create(name, description)
+    if "Error" in create_result:
+        return create_result
+
+    # Move it into the folder
+    move_result = _playlist_move(name, folder)
+    if "Error" in move_result:
+        return f"Created playlist '{name}' but failed to move to folder '{folder}': {move_result}"
+
+    return f"Created playlist '{name}' in folder '{folder}'"
+
+
+def _playlist_delete_folder(folder_name: str) -> str:
+    """Internal: Delete a folder via AppleScript."""
+    if not folder_name:
+        return "Error: folder name required"
+    success, result = asc.delete_folder(folder_name)
+    if success:
+        audit_log.log_action(
+            "delete_folder",
+            {"name": folder_name, "method": "applescript"},
+        )
+        return result
+    return f"Error: {result}"
+
+
+def _playlist_rename_folder(folder_name: str, new_name: str) -> str:
+    """Internal: Rename a folder via AppleScript."""
+    if not folder_name:
+        return "Error: folder name required"
+    if not new_name:
+        return "Error: new_name required"
+    # Use the generic rename which now falls back to folder playlists
+    success, result = asc.rename_playlist(folder_name, new_name)
+    if success:
+        audit_log.log_action(
+            "rename_folder",
+            {"old_name": folder_name, "new_name": new_name, "method": "applescript"},
+        )
+        return result
+    return f"Error: {result}"
+
+
 def _playlist_add(
     playlist: str = "",
     track: str = "",
@@ -2869,6 +2922,7 @@ def playlist(
     action: str = "list",
     name: str = "",
     playlist: str = "",
+    folder: str = "",
     query: str = "",
     track: str = "",
     album: str = "",
@@ -2887,7 +2941,7 @@ def playlist(
     verify: bool = True,
     auto_search: Optional[bool] = None,
 ) -> str:
-    """Playlist operations. Actions: list, tracks, search, create, create_folder (macOS), add, copy, move (macOS), remove (macOS), delete (macOS), rename (macOS)."""
+    """Playlist and folder operations. Actions: list, tracks, search, create, add, copy, move (macOS), remove (macOS), delete (macOS), rename (macOS)."""
     action = action.lower().strip().replace("-", "_")
 
     if action == "list":
@@ -2899,9 +2953,18 @@ def playlist(
             return "Error: query required for search"
         return _playlist_search(query, playlist)
     elif action == "create":
-        if not name:
-            return "Error: name required for create"
-        return _playlist_create(name, description)
+        if not APPLESCRIPT_AVAILABLE and folder:
+            return "Error: folder operations require macOS"
+        if folder and not name:
+            # folder only = create a folder
+            return _playlist_create_folder(folder)
+        elif folder and name:
+            # both = create playlist inside folder (create folder if needed)
+            return _playlist_create_in_folder(name, folder, description)
+        elif name:
+            return _playlist_create(name, description)
+        else:
+            return "Error: name and/or folder required for create"
     elif action == "add":
         return _playlist_add(playlist, track, album, artist, allow_duplicates, verify, auto_search)
     elif action == "copy":
@@ -2913,18 +2976,23 @@ def playlist(
     elif action == "delete":
         if not APPLESCRIPT_AVAILABLE:
             return "Error: delete action requires macOS"
+        if folder:
+            return _playlist_delete_folder(folder)
         playlist_name = name or playlist
         if not playlist_name:
-            return "Error: name or playlist required for delete"
+            return "Error: name, playlist, or folder required for delete"
         return _playlist_delete(playlist_name)
     elif action == "rename":
         if not APPLESCRIPT_AVAILABLE:
             return "Error: rename action requires macOS"
+        if folder:
+            return _playlist_rename_folder(folder, new_name)
         playlist_name = name or playlist
         return _playlist_rename(playlist_name, new_name)
     elif action == "create_folder":
+        # Backward compat — redirect to create(folder=...)
         if not APPLESCRIPT_AVAILABLE:
-            return "Error: create_folder action requires macOS"
+            return "Error: folder operations require macOS"
         if not name:
             return "Error: name required for create_folder"
         return _playlist_create_folder(name)
@@ -2933,11 +3001,12 @@ def playlist(
             return "Error: move action requires macOS"
         if not playlist:
             return "Error: playlist required for move"
-        if not name:
-            return "Error: name (target folder) required for move"
-        return _playlist_move(playlist, name)
+        folder_target = folder or name
+        if not folder_target:
+            return "Error: folder (target folder) required for move"
+        return _playlist_move(playlist, folder_target)
     else:
-        return f"Unknown action: {action}. Use: list, tracks, search, create, create_folder, add, copy, move (macOS), remove (macOS), delete (macOS), rename (macOS)"
+        return f"Unknown action: {action}. Use: list, tracks, search, create, add, copy, move (macOS), remove (macOS), delete (macOS), rename (macOS)"
 
 
 # ============ LIBRARY MANAGEMENT ============
@@ -4586,12 +4655,18 @@ def config(
             # Update preferences
             if "preferences" not in config:
                 config["preferences"] = {}
+            old_value = config.get("preferences", {}).get(preference)
             config["preferences"][preference] = pref_value
 
             # Save back
             config_file = get_auth_config_dir() / "config.json"
             with open(config_file, "w") as f:
                 json.dump(config, f, indent=2)
+
+            audit_log.log_action(
+                "set_preference",
+                {"preference": preference, "old_value": old_value, "new_value": pref_value},
+            )
 
             return f"✓ Updated: {preference} = {pref_value}\n\nUse config() to see current preferences."
 

@@ -168,23 +168,24 @@ Playlist and folder operations - list, manage tracks, create, copy, remove (macO
 | `list` | `format`, `export`, `full` | List all playlists | All |
 | `tracks` | `playlist`, `filter`, `limit`, `offset`, `format`, `export`, `full`, `fetch_explicit` | Get playlist tracks with filter/pagination | All (by-name: macOS) |
 | `search` | `query`, `playlist` | Search tracks in playlist | All |
-| `create` | `name`, `description` | Create new playlist | All |
-| `create_folder` | `name` | Create new folder | macOS |
+| `create` | `name`, `description`, `folder` | Create playlist and/or folder. `folder` alone creates a folder. Both creates playlist inside folder. | All (folders: macOS) |
 | `add` | `playlist`, `track`, `album`, `artist`, `allow_duplicates`, `verify`, `auto_search` | Smart add: auto-search catalog, skip duplicates | All (by-name: macOS) |
 | `copy` | `source`, `new_name` | Copy playlist to editable version | All (by-name: macOS) |
-| `move` | `playlist`, `name` | Move playlist into a folder | macOS |
+| `move` | `playlist`, `folder` | Move playlist into a folder | macOS |
 | `remove` | `playlist`, `track`, `artist` | Remove track(s) from playlist | macOS |
-| `delete` | `name` or `playlist` | Delete playlist or folder | macOS |
-| `rename` | `playlist`, `new_name` | Rename playlist or folder | macOS |
+| `delete` | `playlist` or `folder` | Delete a playlist or folder | macOS |
+| `rename` | `playlist` or `folder`, `new_name` | Rename a playlist or folder | macOS |
 
 **Examples:**
 ```python
 playlist(action="list")
 playlist(action="create", name="Road Trip", description="Summer vibes")
-playlist(action="create_folder", name="Summer Music")
-playlist(action="move", playlist="Road Trip", name="Summer Music")
+playlist(action="create", folder="Summer Music")                          # create folder
+playlist(action="create", name="Road Trip", folder="Summer Music")        # create playlist in folder
+playlist(action="move", playlist="Road Trip", folder="Summer Music")
+playlist(action="delete", folder="Summer Music")
+playlist(action="rename", folder="Summer Music", new_name="Summer 2026")
 playlist(action="add", playlist="Road Trip", track="Hey Jude", artist="Beatles")
-playlist(action="tracks", playlist="p.abc123", limit=50)
 ```
 
 **Unified `track` parameter** auto-detects: names, IDs (catalog/library/persistent), CSV, or JSON arrays. Add entire albums with `album` parameter.

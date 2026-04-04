@@ -9,9 +9,15 @@ Operations logged:
 - add_to_playlist: Adding tracks to a playlist
 - remove_from_playlist: Removing tracks from a playlist
 - create_playlist: Creating a new playlist
+- create_folder: Creating a new folder
 - delete_playlist: Deleting a playlist
+- delete_folder: Deleting a folder
+- rename_playlist: Renaming a playlist
+- rename_folder: Renaming a folder
+- move_to_folder: Moving a playlist into a folder
 - copy_playlist: Copying a playlist
 - rating: Rating changes (love/dislike/stars)
+- set_preference: Configuration preference changes
 """
 
 import json
@@ -22,12 +28,27 @@ from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
 
+MAX_LOG_SIZE = 10 * 1024 * 1024  # 10 MB
+
 
 def get_audit_log_path() -> Path:
     """Get the audit log file path."""
     log_dir = Path.home() / ".cache" / "applemusic-mcp"
     log_dir.mkdir(parents=True, exist_ok=True)
     return log_dir / "audit_log.jsonl"
+
+
+def _rotate_if_needed(log_path: Path) -> None:
+    """Rotate the audit log if it exceeds MAX_LOG_SIZE."""
+    try:
+        if log_path.exists() and log_path.stat().st_size > MAX_LOG_SIZE:
+            backup = log_path.with_suffix(".jsonl.1")
+            if backup.exists():
+                backup.unlink()
+            log_path.rename(backup)
+            logger.info(f"Rotated audit log ({MAX_LOG_SIZE // (1024*1024)}MB limit)")
+    except Exception as e:
+        logger.warning(f"Failed to rotate audit log: {e}")
 
 
 def log_action(
@@ -52,6 +73,7 @@ def log_action(
 
     try:
         log_path = get_audit_log_path()
+        _rotate_if_needed(log_path)
         with open(log_path, "a", encoding="utf-8") as f:
             f.write(json.dumps(entry) + "\n")
     except Exception as e:
@@ -174,6 +196,30 @@ def format_entries_for_display(entries: list[dict], limit: int = 20) -> str:
             value = details.get("value", "")
             lines.append(f"[{ts_display}] RATING: {rating_type} '{track}' {value}")
 
+        elif action == "create_folder":
+            name = details.get("name", "unknown")
+            lines.append(f"[{ts_display}] CREATE FOLDER: '{name}'")
+
+        elif action == "delete_folder":
+            name = details.get("name", "unknown")
+            lines.append(f"[{ts_display}] DELETE FOLDER: '{name}'")
+
+        elif action == "rename_folder":
+            old = details.get("old_name", "unknown")
+            new = details.get("new_name", "unknown")
+            lines.append(f"[{ts_display}] RENAME FOLDER: '{old}' -> '{new}'")
+
+        elif action == "move_to_folder":
+            playlist = details.get("playlist", "unknown")
+            folder = details.get("folder", "unknown")
+            lines.append(f"[{ts_display}] MOVE TO FOLDER: '{playlist}' -> '{folder}'")
+
+        elif action == "set_preference":
+            pref = details.get("preference", "unknown")
+            old_val = details.get("old_value")
+            new_val = details.get("new_value")
+            lines.append(f"[{ts_display}] SET PREFERENCE: {pref} = {new_val} (was: {old_val})")
+
         elif action == "playlist_query":
             playlist = details.get("playlist", "unknown")
             track_count = details.get("track_count", 0)
@@ -182,7 +228,7 @@ def format_entries_for_display(entries: list[dict], limit: int = 20) -> str:
             cache_misses = details.get("cache_misses", 0)
             api_calls = details.get("api_calls", 0)
             lines.append(f"[{ts_display}] PLAYLIST QUERY: '{playlist}' ({track_count} tracks)")
-            lines.append(f"    ⏱️ {duration}s | Cache: {cache_hits} hits, {cache_misses} misses | API: {api_calls} calls")
+            lines.append(f"    {duration}s | Cache: {cache_hits} hits, {cache_misses} misses | API: {api_calls} calls")
 
         else:
             lines.append(f"[{ts_display}] {action.upper()}: {json.dumps(details)}")

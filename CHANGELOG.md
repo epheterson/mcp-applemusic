@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.0] - 2026-04-04
+
+### Added
+
+- **Playlist folder management** — Create, delete, rename, and move playlists into folders via AppleScript. Contributed by @jamisonbryant in PR #4.
+- **Unified folder parameter** — `create(folder="...")` creates a folder. `create(name="...", folder="...")` creates a playlist inside a folder. `delete(folder="...")` and `rename(folder="...", new_name="...")` target folders explicitly. `move(playlist="...", folder="...")` moves a playlist into a folder.
+- **Audit log for preferences** — `config(action="set-pref")` changes are now logged.
+- **Audit log for folder operations** — create, delete, rename, and move folder operations logged.
+- **Audit log rotation** — Log file automatically rotates at 10 MB to prevent unbounded growth.
+
+### Changed
+
+- `create_folder` action still works for backward compatibility but `create(folder="...")` is the preferred form.
+- Playlist lookup (`_find_playlist_applescript`) now falls back from user playlists to folder playlists (exact then partial match).
+
 ## [0.8.1] - 2026-04-03
 
 ### Fixed
