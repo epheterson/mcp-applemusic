@@ -21,13 +21,10 @@ def get_config_dir() -> Path:
 
 
 def load_config() -> dict:
-    """Load configuration from config.json."""
+    """Load configuration from config.json, returning empty dict if not found."""
     config_file = get_config_dir() / "config.json"
     if not config_file.exists():
-        raise FileNotFoundError(
-            f"Config file not found: {config_file}\n"
-            "Create it with your Apple Developer credentials."
-        )
+        return {}
     with open(config_file) as f:
         return json.load(f)
 
