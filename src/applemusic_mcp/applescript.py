@@ -39,7 +39,8 @@ def _escape_for_applescript(s: str) -> str:
 def _find_playlist_applescript(safe_name: str) -> str:
     """Generate AppleScript code to find a playlist by name.
 
-    Tries exact match first, then falls back to partial match (contains).
+    Tries user playlists first (exact, then partial match), then falls
+    back to folder playlists (exact, then partial match).
 
     Args:
         safe_name: Already-escaped playlist name
@@ -49,14 +50,24 @@ def _find_playlist_applescript(safe_name: str) -> str:
     """
     return f'''
         try
-            -- Try exact match first
+            -- Try exact match on user playlists
             set targetPlaylist to first user playlist whose name is "{safe_name}"
         on error
             try
-                -- Fall back to partial match
+                -- Partial match on user playlists
                 set targetPlaylist to first user playlist whose name contains "{safe_name}"
             on error
-                return "ERROR:Playlist not found"
+                try
+                    -- Exact match on folder playlists
+                    set targetPlaylist to first folder playlist whose name is "{safe_name}"
+                on error
+                    try
+                        -- Partial match on folder playlists
+                        set targetPlaylist to first folder playlist whose name contains "{safe_name}"
+                    on error
+                        return "ERROR:Playlist not found"
+                    end try
+                end try
             end try
         end try'''
 
@@ -436,6 +447,109 @@ def create_playlist(name: str, description: str = "") -> tuple[bool, str]:
         end tell
         '''
     return run_applescript(script)
+
+
+def create_folder(name: str) -> tuple[bool, str]:
+    """Create a new folder playlist.
+
+    Args:
+        name: Folder name
+
+    Returns:
+        Tuple of (success, folder_id or error)
+    """
+    safe_name = _escape_for_applescript(name)
+    script = f'''
+    tell application "Music"
+        set newFolder to make new folder playlist with properties {{name:"{safe_name}"}}
+        return persistent ID of newFolder
+    end tell
+    '''
+    return run_applescript(script)
+
+
+def move_to_folder(item_name: str, folder_name: str) -> tuple[bool, str]:
+    """Move a playlist or folder into a folder.
+
+    Args:
+        item_name: Name of the playlist or folder to move
+        folder_name: Name of the target folder
+
+    Returns:
+        Tuple of (success, message or error)
+    """
+    safe_item = _escape_for_applescript(item_name)
+    safe_folder = _escape_for_applescript(folder_name)
+    script = f'''
+    tell application "Music"
+        try
+            set targetFolder to first folder playlist whose name is "{safe_folder}"
+        on error
+            return "ERROR:Folder not found"
+        end try
+{_find_playlist_applescript(safe_item)}
+        move targetPlaylist to targetFolder
+        return "Moved '" & name of targetPlaylist & "' to folder '" & name of targetFolder & "'"
+    end tell
+    '''
+    success, output = run_applescript(script)
+    if output.startswith("ERROR:"):
+        return False, output[6:]
+    return success, output
+
+
+def get_playlist_parent(playlist_name: str) -> tuple[bool, str]:
+    """Get the name of the folder containing a playlist or folder.
+
+    Args:
+        playlist_name: Name of the playlist or folder
+
+    Returns:
+        Tuple of (success, parent folder name or error)
+    """
+    safe_name = _escape_for_applescript(playlist_name)
+    script = f'''
+    tell application "Music"
+{_find_playlist_applescript(safe_name)}
+        try
+            return name of parent of targetPlaylist
+        on error
+            return "ERROR:No parent folder"
+        end try
+    end tell
+    '''
+    success, output = run_applescript(script)
+    if output.startswith("ERROR:"):
+        return False, output[6:]
+    return success, output
+
+
+def delete_folder(folder_name: str) -> tuple[bool, str]:
+    """Delete a folder playlist by name.
+
+    Args:
+        folder_name: Name of the folder to delete
+
+    Returns:
+        Tuple of (success, message or error)
+    """
+    safe_name = _escape_for_applescript(folder_name)
+    script = f'''
+    tell application "Music"
+        try
+            set targetFolder to first folder playlist whose name is "{safe_name}"
+        on error
+            return "ERROR:Folder not found"
+        end try
+        set folderName to name of targetFolder
+        delete targetFolder
+        return "Deleted folder: " & folderName
+    end tell
+    '''
+    success, output = run_applescript(script)
+    if output.startswith("ERROR:"):
+        return False, output[6:]
+    return success, output
 
 
 def delete_playlist(playlist_name: str) -> tuple[bool, str]:

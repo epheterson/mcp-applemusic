@@ -22,7 +22,10 @@
 | Volume, shuffle, repeat | ✓ |   |
 | Star ratings (1-5) | ✓ |   |
 | Remove tracks from playlists | ✓ |   |
-| Delete playlists | ✓ |   |
+| Delete playlists/folders | ✓ |   |
+| Create folders | ✓ |   |
+| Rename playlists/folders | ✓ |   |
+| Move playlists to folders | ✓ |   |
 
 **macOS** uses AppleScript for full local control. **API** mode enables catalog features and works cross-platform. **UI*** = UI automation fallback (requires display + Accessibility permissions; Top Results only for search).
 
@@ -158,7 +161,7 @@ Add to config.json:
 ## Tools
 
 ### `playlist(action=...)`
-Playlist operations - list, manage tracks, create, copy, remove (macOS), delete (macOS), rename (macOS)
+Playlist and folder operations - list, manage tracks, create, copy, remove (macOS), delete (macOS), rename (macOS), folder management (macOS)
 
 | Action | Parameters | Description | Platform |
 |--------|-----------|-------------|----------|
@@ -166,16 +169,20 @@ Playlist operations - list, manage tracks, create, copy, remove (macOS), delete 
 | `tracks` | `playlist`, `filter`, `limit`, `offset`, `format`, `export`, `full`, `fetch_explicit` | Get playlist tracks with filter/pagination | All (by-name: macOS) |
 | `search` | `query`, `playlist` | Search tracks in playlist | All |
 | `create` | `name`, `description` | Create new playlist | All |
+| `create_folder` | `name` | Create new folder | macOS |
 | `add` | `playlist`, `track`, `album`, `artist`, `allow_duplicates`, `verify`, `auto_search` | Smart add: auto-search catalog, skip duplicates | All (by-name: macOS) |
 | `copy` | `source`, `new_name` | Copy playlist to editable version | All (by-name: macOS) |
+| `move` | `playlist`, `name` | Move playlist into a folder | macOS |
 | `remove` | `playlist`, `track`, `artist` | Remove track(s) from playlist | macOS |
-| `delete` | `name` or `playlist` | Delete playlist | macOS |
-| `rename` | `playlist`, `new_name` | Rename playlist in-place | macOS |
+| `delete` | `name` or `playlist` | Delete playlist or folder | macOS |
+| `rename` | `playlist`, `new_name` | Rename playlist or folder | macOS |
 
 **Examples:**
 ```python
 playlist(action="list")
 playlist(action="create", name="Road Trip", description="Summer vibes")
+playlist(action="create_folder", name="Summer Music")
+playlist(action="move", playlist="Road Trip", name="Summer Music")
 playlist(action="add", playlist="Road Trip", track="Hey Jude", artist="Beatles")
 playlist(action="tracks", playlist="p.abc123", limit=50)
 ```

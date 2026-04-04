@@ -202,6 +202,82 @@ class TestRenamePlaylist:
         assert "Error" in result
 
 
+class TestCreateFolder:
+    """Tests for create_folder action (AppleScript path)."""
+
+    def test_creates_folder_successfully(self, monkeypatch):
+        """Should create folder via AppleScript."""
+        def mock_create_folder(name):
+            return (True, "ABCD1234")
+
+        monkeypatch.setattr(server.asc, "create_folder", mock_create_folder)
+        monkeypatch.setattr(server, "APPLESCRIPT_AVAILABLE", True)
+
+        result = server.playlist(action="create_folder", name="My Folder")
+
+        assert "My Folder" in result
+        assert "ABCD1234" in result
+
+    def test_requires_macos(self, monkeypatch):
+        """Should error when AppleScript not available."""
+        monkeypatch.setattr(server, "APPLESCRIPT_AVAILABLE", False)
+
+        result = server.playlist(action="create_folder", name="My Folder")
+
+        assert "Error" in result
+        assert "macOS" in result
+
+    def test_requires_name(self, monkeypatch):
+        """Should error when name not provided."""
+        monkeypatch.setattr(server, "APPLESCRIPT_AVAILABLE", True)
+
+        result = server.playlist(action="create_folder", name="")
+
+        assert "Error" in result
+
+
+class TestMoveToFolder:
+    """Tests for move action (AppleScript path)."""
+
+    def test_moves_playlist_successfully(self, monkeypatch):
+        """Should move playlist to folder via AppleScript."""
+        def mock_move_to_folder(item_name, folder_name):
+            return (True, f"Moved '{item_name}' to folder '{folder_name}'")
+
+        monkeypatch.setattr(server.asc, "move_to_folder", mock_move_to_folder)
+        monkeypatch.setattr(server, "APPLESCRIPT_AVAILABLE", True)
+
+        result = server.playlist(action="move", playlist="My Playlist", name="My Folder")
+
+        assert "My Playlist" in result
+        assert "My Folder" in result
+
+    def test_requires_macos(self, monkeypatch):
+        """Should error when AppleScript not available."""
+        monkeypatch.setattr(server, "APPLESCRIPT_AVAILABLE", False)
+
+        result = server.playlist(action="move", playlist="My Playlist", name="My Folder")
+
+        assert "Error" in result
+        assert "macOS" in result
+
+    def test_requires_playlist_name(self, monkeypatch):
+        """Should error when playlist name not provided."""
+        monkeypatch.setattr(server, "APPLESCRIPT_AVAILABLE", True)
+
+        result = server.playlist(action="move", playlist="", name="My Folder")
+
+        assert "Error" in result
+
+    def test_requires_folder_name(self, monkeypatch):
+        """Should error when folder name not provided."""
+        monkeypatch.setattr(server, "APPLESCRIPT_AVAILABLE", True)
+
+        result = server.playlist(action="move", playlist="My Playlist", name="")
+
+        assert "Error" in result
+
+
 class TestAddToPlaylist:
     """Tests for add_to_playlist function."""
 

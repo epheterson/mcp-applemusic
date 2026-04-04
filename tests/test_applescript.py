@@ -151,6 +151,73 @@ class TestPlaylistOperations:
         assert test_name not in names
 
 
+class TestFolderOperations:
+    """Test folder operations."""
+
+    def test_create_and_delete_folder(self):
+        """Should create and delete a folder playlist."""
+        test_name = "_TEST_FOLDER_DELETE_ME_"
+
+        # Create
+        success, folder_id = asc.create_folder(test_name)
+        assert success is True
+        assert len(folder_id) > 0
+
+        # Delete
+        success, msg = asc.delete_folder(test_name)
+        assert success is True
+
+    def test_rename_folder(self):
+        """Should rename a folder via the generic rename_playlist function."""
+        test_name = "_TEST_RENAME_FOLDER_"
+        new_name = "_TEST_RENAME_FOLDER_NEW_"
+
+        success, _ = asc.create_folder(test_name)
+        assert success is True
+
+        # Rename using the generic function (should find folder playlists)
+        success, msg = asc.rename_playlist(test_name, new_name)
+        assert success is True
+        assert new_name in msg
+
+        # Cleanup
+        asc.delete_folder(new_name)
+
+    def test_delete_folder_via_generic_delete(self):
+        """Should delete a folder via the generic delete_playlist function."""
+        test_name = "_TEST_DEL_FOLDER_GENERIC_"
+
+        success, _ = asc.create_folder(test_name)
+        assert success is True
+
+        # Delete using the generic function (should find folder playlists)
+        success, msg = asc.delete_playlist(test_name)
+        assert success is True
+
+    def test_move_playlist_to_folder(self):
+        """Should move a playlist into a folder."""
+        folder_name = "_TEST_MOVE_FOLDER_"
+        playlist_name = "_TEST_MOVE_PL_"
+
+        success, _ = asc.create_folder(folder_name)
+        assert success is True
+        success, _ = asc.create_playlist(playlist_name)
+        assert success is True
+
+        # Move
+        success, msg = asc.move_to_folder(playlist_name, folder_name)
+        assert success is True
+
+        # Verify parent
+        success, parent = asc.get_playlist_parent(playlist_name)
+        assert success is True
+        assert parent == folder_name
+
+        # Cleanup
+        asc.delete_playlist(playlist_name)
+        asc.delete_folder(folder_name)
+
+
 class TestLibrarySearch:
     """Test library search functions."""
 
