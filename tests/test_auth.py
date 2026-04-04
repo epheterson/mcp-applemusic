@@ -47,12 +47,10 @@ class TestLoadConfig:
         assert result["team_id"] == "TEST_TEAM_ID"
         assert result["key_id"] == "TEST_KEY_ID"
 
-    def test_raises_when_config_missing(self, mock_config_dir):
-        """Should raise FileNotFoundError when config doesn't exist."""
-        with pytest.raises(FileNotFoundError) as exc_info:
-            auth.load_config()
-
-        assert "Config file not found" in str(exc_info.value)
+    def test_returns_empty_dict_when_config_missing(self, mock_config_dir):
+        """Should return empty dict when config doesn't exist."""
+        result = auth.load_config()
+        assert result == {}
 
     def test_raises_on_invalid_json(self, mock_config_dir):
         """Should raise error on invalid JSON."""

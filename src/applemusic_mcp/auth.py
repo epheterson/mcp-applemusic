@@ -21,13 +21,10 @@ def get_config_dir() -> Path:
 
 
 def load_config() -> dict:
-    """Load configuration from config.json."""
+    """Load configuration from config.json, returning empty dict if not found."""
     config_file = get_config_dir() / "config.json"
     if not config_file.exists():
-        raise FileNotFoundError(
-            f"Config file not found: {config_file}\n"
-            "Create it with your Apple Developer credentials."
-        )
+        return {}
     with open(config_file) as f:
         return json.load(f)
 
@@ -70,6 +67,10 @@ def get_private_key_path(config: dict) -> Path:
 def generate_developer_token(expiry_days: int = 180) -> str:
     """Generate a developer token (JWT) valid for up to 180 days."""
     config = load_config()
+    if not config:
+        raise FileNotFoundError(
+            "No config.json found. Run: applemusic-mcp init"
+        )
     key_path = get_private_key_path(config)
 
     with open(key_path) as f:

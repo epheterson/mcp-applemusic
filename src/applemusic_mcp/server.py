@@ -4581,10 +4581,7 @@ def config(
 
             # Load current config
             from .auth import load_config, get_config_dir as get_auth_config_dir
-            try:
-                config = load_config()
-            except FileNotFoundError:
-                return "Error: config.json not found. Create it first with your API credentials."
+            config = load_config()
 
             # Update preferences
             if "preferences" not in config:
