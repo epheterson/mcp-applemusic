@@ -1712,6 +1712,183 @@ def set_rating(track_name: str, rating: int, artist: Optional[str] = None) -> tu
     return success, output
 
 
+def clear_rating(track_name: str, artist: Optional[str] = None) -> tuple[bool, str]:
+    """Clear a track's rating and love/dislike status.
+
+    Args:
+        track_name: Name of the track (partial match supported)
+        artist: Optional artist name to disambiguate
+
+    Returns:
+        Tuple of (success, message or error)
+    """
+    safe_track = _escape_for_applescript(track_name)
+
+    if artist:
+        safe_artist = _escape_for_applescript(artist)
+        track_query = f'first track of library playlist 1 whose name contains "{safe_track}" and artist contains "{safe_artist}"'
+    else:
+        track_query = f'first track of library playlist 1 whose name contains "{safe_track}"'
+
+    script = f'''
+    tell application "Music"
+        try
+            set targetTrack to {track_query}
+        on error
+            return "ERROR:Track not found"
+        end try
+        set rating of targetTrack to 0
+        set loved of targetTrack to false
+        set disliked of targetTrack to false
+        return "Cleared rating for: " & name of targetTrack
+    end tell
+    '''
+    success, output = run_applescript(script)
+    if output.startswith("ERROR:"):
+        return False, output[6:]
+    return success, output
+
+
+def get_track_stats(track_name: str, artist: Optional[str] = None) -> tuple[bool, dict | str]:
+    """Get play count, skip count, last played, and date added for a track.
+
+    Args:
+        track_name: Name of the track (partial match supported)
+        artist: Optional artist name to disambiguate
+
+    Returns:
+        Tuple of (success, dict of stats or error message)
+    """
+    safe_track = _escape_for_applescript(track_name)
+
+    if artist:
+        safe_artist = _escape_for_applescript(artist)
+        track_query = f'first track of library playlist 1 whose name contains "{safe_track}" and artist contains "{safe_artist}"'
+    else:
+        track_query = f'first track of library playlist 1 whose name contains "{safe_track}"'
+
+    script = f'''
+    tell application "Music"
+        try
+            set targetTrack to {track_query}
+        on error
+            return "ERROR:Track not found"
+        end try
+        set trackName to name of targetTrack
+        set trackArtist to artist of targetTrack
+        set pc to played count of targetTrack
+        set sc to skipped count of targetTrack
+        try
+            set lp to played date of targetTrack as string
+        on error
+            set lp to "never"
+        end try
+        try
+            set da to date added of targetTrack as string
+        on error
+            set da to "unknown"
+        end try
+        set r to rating of targetTrack
+        set lv to loved of targetTrack
+        return trackName & "|||" & trackArtist & "|||" & pc & "|||" & sc & "|||" & lp & "|||" & da & "|||" & r & "|||" & lv
+    end tell
+    '''
+    success, output = run_applescript(script)
+    if output.startswith("ERROR:"):
+        return False, output[6:]
+    if not success:
+        return False, output
+
+    parts = output.split("|||")
+    if len(parts) >= 8:
+        play_count = int(parts[2]) if parts[2].isdigit() else 0
+        skip_count = int(parts[3]) if parts[3].isdigit() else 0
+        rating_val = int(parts[6]) if parts[6].isdigit() else 0
+        return True, {
+            "name": parts[0],
+            "artist": parts[1],
+            "play_count": play_count,
+            "skip_count": skip_count,
+            "last_played": parts[4],
+            "date_added": parts[5],
+            "rating": rating_val,
+            "stars": rating_val // 20,
+            "loved": parts[7].lower() == "true",
+        }
+    return False, f"Unexpected response: {output}"
+
+
+def edit_track_metadata(
+    track_name: str,
+    artist: Optional[str] = None,
+    new_name: Optional[str] = None,
+    new_artist: Optional[str] = None,
+    new_album: Optional[str] = None,
+    new_genre: Optional[str] = None,
+    new_year: Optional[int] = None,
+    new_comment: Optional[str] = None,
+) -> tuple[bool, str]:
+    """Edit metadata fields of a library track.
+
+    Args:
+        track_name: Name of the track to edit (partial match supported)
+        artist: Optional artist name to disambiguate
+        new_name: New track name
+        new_artist: New artist name
+        new_album: New album name
+        new_genre: New genre
+        new_year: New year
+        new_comment: New comment
+
+    Returns:
+        Tuple of (success, message or error)
+    """
+    safe_track = _escape_for_applescript(track_name)
+
+    if artist:
+        safe_artist = _escape_for_applescript(artist)
+        track_query = f'first track of library playlist 1 whose name contains "{safe_track}" and artist contains "{safe_artist}"'
+    else:
+        track_query = f'first track of library playlist 1 whose name contains "{safe_track}"'
+
+    # Build the set statements
+    sets = []
+    if new_name is not None:
+        sets.append(f'set name of targetTrack to "{_escape_for_applescript(new_name)}"')
+    if new_artist is not None:
+        sets.append(f'set artist of targetTrack to "{_escape_for_applescript(new_artist)}"')
+    if new_album is not None:
+        sets.append(f'set album of targetTrack to "{_escape_for_applescript(new_album)}"')
+    if new_genre is not None:
+        sets.append(f'set genre of targetTrack to "{_escape_for_applescript(new_genre)}"')
+    if new_year is not None:
+        sets.append(f'set year of targetTrack to {new_year}')
+    if new_comment is not None:
+        sets.append(f'set comment of targetTrack to "{_escape_for_applescript(new_comment)}"')
+
+    if not sets:
+        return False, "No fields to update"
+
+    set_block = "\n        ".join(sets)
+
+    script = f'''
+    tell application "Music"
+        try
+            set targetTrack to {track_query}
+        on error
+            return "ERROR:Track not found"
+        end try
+        set oldName to name of targetTrack
+        {set_block}
+        return "Updated: " & oldName & " ({len(sets)} field(s))"
+    end tell
+    '''
+    success, output = run_applescript(script)
+    if output.startswith("ERROR:"):
+        return False, output[6:]
+    return success, output
+
+
 # =============================================================================
 # AirPlay
 # =============================================================================

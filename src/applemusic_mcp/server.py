@@ -3034,7 +3034,7 @@ def library(
     rate_action: str = "",
     stars: int = 0,
 ) -> str:
-    """Your library. Actions: search, add, recently_played, recently_added, browse, rate, remove (macOS), snapshot."""
+    """Your library. Actions: search, add, recently_played, recently_added, browse, rate, stats (macOS), edit (macOS), remove (macOS), snapshot."""
     action = action.lower().strip().replace("-", "_")
 
     if action == "search":
@@ -3051,8 +3051,16 @@ def library(
         return _library_browse(item_type, limit, offset, format, export, full, fetch_explicit, clean_only)
     elif action == "rate":
         if not rate_action:
-            return "Error: rate_action required (love, dislike, get, set)"
+            return "Error: rate_action required (love, dislike, clear, get, set)"
         return _library_rate(rate_action, track, artist, stars)
+    elif action == "stats":
+        if not APPLESCRIPT_AVAILABLE:
+            return "Error: stats action requires macOS"
+        return _library_stats(track, artist)
+    elif action == "edit":
+        if not APPLESCRIPT_AVAILABLE:
+            return "Error: edit action requires macOS"
+        return _library_edit(track, artist, query)
     elif action == "remove":
         if not APPLESCRIPT_AVAILABLE:
             return "Error: remove action requires macOS"
@@ -3074,7 +3082,7 @@ def library(
         else:
             return _library_snapshot_default()
     else:
-        return f"Unknown action: {action}. Use: search, add, recently_played, recently_added, browse, rate, remove, snapshot"
+        return f"Unknown action: {action}. Use: search, add, recently_played, recently_added, browse, rate, stats, edit, remove, snapshot"
 
 
 def _library_search(
@@ -4210,14 +4218,14 @@ def _library_rate(
     artist: str = "",
     stars: int = 0,
 ) -> str:
-    """Rate tracks. Actions: love, dislike, get, set. get/set require macOS."""
+    """Rate tracks. Actions: love, dislike, clear, get, set. get/set/clear require macOS."""
     action = action.lower().strip()
 
     if not track:
         return "Error: Provide track parameter"
 
-    if action not in ("love", "dislike", "get", "set"):
-        return f"Invalid action: {action}. Use: love, dislike, get, set"
+    if action not in ("love", "dislike", "get", "set", "clear"):
+        return f"Invalid action: {action}. Use: love, dislike, clear, get, set"
 
     # Resolve track input (only single track supported for rating)
     resolved = _resolve_track(track, artist)
@@ -4300,6 +4308,19 @@ def _library_rate(
                 {"track": track_desc, "type": "set_stars", "value": stars, "method": "applescript"},
             )
             return f"Set {track_name} to {'★' * stars}{'☆' * (5 - stars)}"
+        return f"Error: {result}"
+
+    if action == "clear":
+        if not APPLESCRIPT_AVAILABLE:
+            return "Error: Clear rating requires macOS"
+        success, result = asc.clear_rating(track_name, track_artist if track_artist else None)
+        if success:
+            track_desc = f"{track_name} - {track_artist}" if track_artist else track_name
+            audit_log.log_action(
+                "rating",
+                {"track": track_desc, "type": "clear", "method": "applescript"},
+            )
+            return result
         return f"Error: {result}"
 
     # Love/dislike by name - try AppleScript first
@@ -5797,6 +5818,75 @@ if APPLESCRIPT_AVAILABLE:
         )
         fuzzy_info = _format_fuzzy_match(resolved.fuzzy_match)
         return result + fuzzy_info
+
+    def _library_stats(track: str, artist: str = "") -> str:
+        """Get play count, skip count, last played, and date added for a track (macOS)."""
+        if not track:
+            return "Error: track required for stats"
+        success, result = asc.get_track_stats(track, artist if artist else None)
+        if not success:
+            return f"Error: {result}"
+        stats = result
+        lines = [
+            f"{stats['name']} — {stats['artist']}",
+            f"  Play count:  {stats['play_count']}",
+            f"  Skip count:  {stats['skip_count']}",
+            f"  Last played: {stats['last_played']}",
+            f"  Date added:  {stats['date_added']}",
+            f"  Rating:      {'★' * stats['stars']}{'☆' * (5 - stats['stars'])} ({stats['rating']}/100)",
+            f"  Loved:       {'Yes' if stats['loved'] else 'No'}",
+        ]
+        return "\n".join(lines)
+
+    def _library_edit(track: str, artist: str = "", fields: str = "") -> str:
+        """Edit track metadata fields (macOS). Pass fields as 'key=value' pairs in the query param."""
+        if not track:
+            return "Error: track required for edit"
+        if not fields:
+            return ("Error: fields required for edit. Pass field=value pairs in the query parameter.\n"
+                    "Editable fields: name, artist, album, genre, year, comment\n"
+                    "Example: library(action='edit', track='Hey Jude', query='artist=The Beatles, genre=Rock')")
+
+        # Parse key=value pairs
+        kwargs = {}
+        field_map = {
+            "name": "new_name",
+            "artist": "new_artist",
+            "album": "new_album",
+            "genre": "new_genre",
+            "year": "new_year",
+            "comment": "new_comment",
+        }
+
+        for pair in fields.split(","):
+            pair = pair.strip()
+            if "=" not in pair:
+                continue
+            key, val = pair.split("=", 1)
+            key = key.strip().lower()
+            val = val.strip()
+            if key in field_map:
+                if key == "year":
+                    try:
+                        kwargs[field_map[key]] = int(val)
+                    except ValueError:
+                        return f"Error: year must be a number, got '{val}'"
+                else:
+                    kwargs[field_map[key]] = val
+
+        if not kwargs:
+            return "Error: no valid fields parsed. Use: name, artist, album, genre, year, comment"
+
+        success, result = asc.edit_track_metadata(
+            track, artist=artist if artist else None, **kwargs
+        )
+        if success:
+            audit_log.log_action(
+                "edit_track",
+                {"track": track, "artist": artist, "fields": kwargs, "method": "applescript"},
+            )
+            return result
+        return f"Error: {result}"
 
     def _library_remove(
         track: str = "",

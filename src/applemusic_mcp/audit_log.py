@@ -223,6 +223,12 @@ def format_entries_for_display(entries: list[dict], limit: int = 20) -> str:
             new_val = details.get("new_value")
             lines.append(f"[{ts_display}] SET PREFERENCE: {pref} = {new_val} (was: {old_val})")
 
+        elif action == "edit_track":
+            track = details.get("track", "unknown")
+            fields = details.get("fields", {})
+            field_str = ", ".join(f"{k}={v}" for k, v in fields.items())
+            lines.append(f"[{ts_display}] EDIT TRACK: '{track}' ({field_str})")
+
         elif action == "playlist_query":
             playlist = details.get("playlist", "unknown")
             track_count = details.get("track_count", 0)
