@@ -2289,12 +2289,8 @@ def _playlist_move(playlist_name: str, folder_name: str) -> str:
 
 def _playlist_create_in_folder(name: str, folder: str, description: str = "") -> str:
     """Internal: Create a playlist inside a folder. Creates the folder if it doesn't exist."""
-    # Ensure folder exists
-    from . import applescript as asc_mod
-    success, folder_result = asc_mod.create_folder(folder)
-    if not success and "already exists" not in folder_result.lower():
-        # Try to find existing folder — create_folder may fail if it exists
-        pass  # Folder may already exist, move will find it
+    # Ensure folder exists (ignore errors — folder may already exist)
+    asc.create_folder(folder)
 
     # Create the playlist
     create_result = _playlist_create(name, description)
@@ -2304,7 +2300,9 @@ def _playlist_create_in_folder(name: str, folder: str, description: str = "") ->
     # Move it into the folder
     move_result = _playlist_move(name, folder)
     if "Error" in move_result:
-        return f"Created playlist '{name}' but failed to move to folder '{folder}': {move_result}"
+        # Rollback: delete the orphaned playlist
+        asc.delete_playlist(name)
+        return f"Error: Created playlist '{name}' but failed to move to folder '{folder}': {move_result}. Playlist was removed."
 
     return f"Created playlist '{name}' in folder '{folder}'"
 
@@ -2985,9 +2983,13 @@ def playlist(
     elif action == "rename":
         if not APPLESCRIPT_AVAILABLE:
             return "Error: rename action requires macOS"
+        if not new_name:
+            return "Error: new_name required for rename"
         if folder:
             return _playlist_rename_folder(folder, new_name)
         playlist_name = name or playlist
+        if not playlist_name:
+            return "Error: playlist, name, or folder required for rename"
         return _playlist_rename(playlist_name, new_name)
     elif action == "create_folder":
         # Backward compat — redirect to create(folder=...)

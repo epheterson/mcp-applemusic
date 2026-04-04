@@ -22,6 +22,7 @@ Operations logged:
 
 import json
 import logging
+import threading
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
@@ -29,6 +30,7 @@ from typing import Any, Optional
 logger = logging.getLogger(__name__)
 
 MAX_LOG_SIZE = 10 * 1024 * 1024  # 10 MB
+_log_lock = threading.Lock()
 
 
 def get_audit_log_path() -> Path:
@@ -73,9 +75,10 @@ def log_action(
 
     try:
         log_path = get_audit_log_path()
-        _rotate_if_needed(log_path)
-        with open(log_path, "a", encoding="utf-8") as f:
-            f.write(json.dumps(entry) + "\n")
+        with _log_lock:
+            _rotate_if_needed(log_path)
+            with open(log_path, "a", encoding="utf-8") as f:
+                f.write(json.dumps(entry) + "\n")
     except Exception as e:
         logger.warning(f"Failed to write audit log: {e}")
 
