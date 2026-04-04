@@ -472,7 +472,7 @@ def move_to_folder(item_name: str, folder_name: str) -> tuple[bool, str]:
     """Move a playlist or folder into a folder.
 
     Args:
-        item_name: Name of the playlist to move
+        item_name: Name of the playlist or folder to move
         folder_name: Name of the target folder
 
     Returns:
@@ -485,15 +485,11 @@ def move_to_folder(item_name: str, folder_name: str) -> tuple[bool, str]:
         try
             set targetFolder to first folder playlist whose name is "{safe_folder}"
         on error
-            return "ERROR:Folder not found: {safe_folder}"
+            return "ERROR:Folder not found"
         end try
-        try
-            set targetItem to first user playlist whose name is "{safe_item}"
-        on error
-            return "ERROR:Playlist not found: {safe_item}"
-        end try
-        move targetItem to targetFolder
-        return "Moved '" & name of targetItem & "' to folder '" & name of targetFolder & "'"
+{_find_playlist_applescript(safe_item)}
+        move targetPlaylist to targetFolder
+        return "Moved '" & name of targetPlaylist & "' to folder '" & name of targetFolder & "'"
     end tell
     '''
     success, output = run_applescript(script)
@@ -503,10 +499,10 @@ def move_to_folder(item_name: str, folder_name: str) -> tuple[bool, str]:
 
 
 def get_playlist_parent(playlist_name: str) -> tuple[bool, str]:
-    """Get the name of the folder containing a playlist.
+    """Get the name of the folder containing a playlist or folder.
 
     Args:
-        playlist_name: Name of the playlist
+        playlist_name: Name of the playlist or folder
 
     Returns:
         Tuple of (success, parent folder name or error)
@@ -514,11 +510,7 @@ def get_playlist_parent(playlist_name: str) -> tuple[bool, str]:
     safe_name = _escape_for_applescript(playlist_name)
     script = f'''
     tell application "Music"
-        try
-            set targetPlaylist to first user playlist whose name is "{safe_name}"
-        on error
-            return "ERROR:Playlist not found"
-        end try
+{_find_playlist_applescript(safe_name)}
         try
             return name of parent of targetPlaylist
         on error
