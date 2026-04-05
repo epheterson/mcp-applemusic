@@ -5,6 +5,27 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.1] - 2026-04-05
+
+### Added
+
+- **Slash-separated folder paths** — `create(folder="Summer/Chill/Deep")` creates nested folder hierarchies. Works with `move`, `delete`, and `create`. Intermediate folders created automatically.
+- **`path` action** — `playlist(action="path", playlist="Road Trip")` returns the full path like `Summer/Chill/Road Trip`. No args shows the full folder hierarchy (macOS).
+- **Move-out-of-folder** — `move(playlist="...", folder="")` moves a playlist back to the top level (macOS).
+- **API fallback for folder creation** — `create(folder="...")` works on non-macOS via `POST /v1/me/library/playlist-folders` (single-level only).
+- **Folder-into-folder nesting** — Moving folders into other folders works via the shared playlist lookup helper.
+- Audit log display for `move_to_root` entries.
+- `get_playlist_parent` renamed to `get_playlist_path` — returns full slash-separated path instead of just immediate parent.
+- Integration tests for nested folder creation, move-to-root, get-playlist-path, folder tree.
+
+### Fixed
+
+- **Security: AppleScript injection via newline characters** — `_escape_for_applescript()` now strips `\n`, `\r`, and `\t` from all user input. Previously, a newline in a playlist/folder name could break out of an AppleScript string literal. Affects all versions prior to 0.9.1.
+
+### Changed
+
+- **Snapshot format** — Playlists in snapshots now include folder path info (`{"folder": "...", "tracks": [...]}`). The `library_diff` function handles both old (list) and new (dict) formats for backward compatibility. Snapshots also track folder additions/removals.
+
 ## [0.9.0] - 2026-04-04
 
 ### Added
