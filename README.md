@@ -191,7 +191,7 @@ playlist(action="add", playlist="Road Trip", track="Hey Jude", artist="Beatles")
 **Unified `track` parameter** auto-detects: names, IDs (catalog/library/persistent), CSV, or JSON arrays. Add entire albums with `album` parameter.
 
 ### `library(action=...)`
-Library management - search, add, browse, rate, stats, edit, recently played/added, remove (macOS), snapshot (macOS)
+Library management - search, add, browse, rate, recently played/added, remove (macOS), snapshot (macOS)
 
 | Action | Parameters | Description | Platform |
 |--------|-----------|-------------|----------|
@@ -200,9 +200,7 @@ Library management - search, add, browse, rate, stats, edit, recently played/add
 | `browse` | `item_type`, `limit`, `offset`, `format`, `export`, `full`, `fetch_explicit`, `clean_only` | List songs/albums/artists/videos | All |
 | `recently_played` | `limit`, `format`, `export`, `full` | Recent listening history | All |
 | `recently_added` | `limit`, `format`, `export`, `full` | Recently added content | All |
-| `rate` | `rate_action`, `track`, `artist`, `stars` | Love/dislike/clear/get/set ratings | All (stars/clear: macOS) |
-| `stats` | `track`, `artist` | Play count, skip count, last played, date added | macOS |
-| `edit` | `track`, `artist`, `query` | Edit track metadata (name, artist, album, genre, year, comment) | macOS |
+| `rate` | `rate_action`, `track`, `artist`, `stars` | Love/dislike/get/set ratings | All (stars: macOS) |
 | `remove` | `track`, `artist` | Remove track(s) from library | macOS |
 | `snapshot` | `query` | Library integrity checking (see below) | macOS |
 
@@ -222,9 +220,6 @@ library(action="search", query="Beatles", types="songs", limit=25)
 library(action="add", album="Abbey Road", artist="Beatles")
 library(action="recently_played", limit=30)
 library(action="rate", rate_action="love", track="Hey Jude")
-library(action="rate", rate_action="clear", track="Hey Jude")
-library(action="stats", track="Hey Jude", artist="Beatles")
-library(action="edit", track="Hey Jude", query="genre=Rock, year=1968")
 ```
 
 ### `catalog(action=...)`

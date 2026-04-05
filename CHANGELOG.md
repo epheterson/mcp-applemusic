@@ -5,15 +5,6 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.9.1] - 2026-04-04
-
-### Added
-
-- **Track metadata editing** — `library(action="edit", track="...", query="artist=New Artist, genre=Rock")` edits name, artist, album, genre, year, and comment fields via AppleScript. All edits logged to audit log.
-- **Track stats** — `library(action="stats", track="...")` returns play count, skip count, last played date, date added, rating, and loved status.
-- **Clear rating** — `library(action="rate", rate_action="clear", track="...")` resets a track's star rating, loved, and disliked status to default.
-- Audit log display formatter for `edit_track` entries.
-
 ## [0.9.0] - 2026-04-04
 
 ### Added

@@ -1,6 +1,6 @@
 ---
 name: apple-music
-version: 0.9.1
+version: 0.9.0
 description: Apple Music integration via AppleScript, UI automation, or MusicKit API
 ---
 
