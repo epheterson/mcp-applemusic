@@ -23,10 +23,10 @@
 | Star ratings (1-5) | ✓ |   |
 | Remove tracks from playlists | ✓ |   |
 | Delete playlists/folders | ✓ |   |
-| Create folders (nested paths) | ✓ | single-level |
+| Create folders | ✓ (nested) | ✓ |
 | Rename playlists/folders | ✓ |   |
 | Move playlists/folders | ✓ |   |
-| Folder hierarchy (tree/path) | ✓ |   |
+| Folder hierarchy/paths | ✓ |   |
 
 **macOS** uses AppleScript for full local control. **API** mode enables catalog features and works cross-platform. **UI*** = UI automation fallback (requires display + Accessibility permissions; Top Results only for search).
 
