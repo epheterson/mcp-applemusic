@@ -23,7 +23,7 @@
 | Star ratings (1-5) | ✓ |   |
 | Remove tracks from playlists | ✓ |   |
 | Delete playlists/folders | ✓ |   |
-| Create folders | ✓ (nested) | ✓ |
+| Create folders | ✓ | top-level |
 | Rename playlists/folders | ✓ |   |
 | Move playlists/folders | ✓ |   |
 | Folder hierarchy/paths | ✓ |   |
