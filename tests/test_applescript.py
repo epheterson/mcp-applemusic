@@ -208,13 +208,91 @@ class TestFolderOperations:
         success, msg = asc.move_to_folder(playlist_name, folder_name)
         assert success is True
 
-        # Verify parent
-        success, parent = asc.get_playlist_parent(playlist_name)
+        # Verify path — should be "folder/playlist"
+        success, path = asc.get_playlist_path(playlist_name)
         assert success is True
-        assert parent == folder_name
+        assert path == f"{folder_name}/{playlist_name}"
 
         # Cleanup
         asc.delete_playlist(playlist_name)
+        asc.delete_folder(folder_name)
+
+    def test_create_nested_folder_path(self):
+        """Should create nested folders via slash-separated path."""
+        path = "_TEST_OUTER_/_TEST_INNER_"
+
+        success, folder_id = asc.create_folder_path(path)
+        assert success is True
+        assert len(folder_id) > 0
+
+        # Verify inner folder exists and is nested
+        success, resolved_path = asc.get_playlist_path("_TEST_INNER_")
+        assert success is True
+        assert "_TEST_OUTER_" in resolved_path
+
+        # Cleanup (inner first, then outer)
+        asc.delete_folder("_TEST_OUTER_/_TEST_INNER_")
+        asc.delete_folder("_TEST_OUTER_")
+
+    def test_move_to_root(self):
+        """Should move a playlist out of a folder to root."""
+        folder_name = "_TEST_ROOT_FOLDER_"
+        playlist_name = "_TEST_ROOT_PL_"
+
+        success, _ = asc.create_folder(folder_name)
+        assert success is True
+        success, _ = asc.create_playlist(playlist_name)
+        assert success is True
+
+        # Move into folder
+        success, _ = asc.move_to_folder(playlist_name, folder_name)
+        assert success is True
+
+        # Move back to root
+        success, msg = asc.move_to_root(playlist_name)
+        assert success is True
+
+        # Verify it's at root (path should just be the playlist name)
+        success, path = asc.get_playlist_path(playlist_name)
+        assert success is True
+        assert "/" not in path  # No folder prefix = at root
+
+        # Cleanup
+        asc.delete_playlist(playlist_name)
+        asc.delete_folder(folder_name)
+
+    def test_get_playlist_path(self):
+        """Should return full path for nested playlist."""
+        folder_name = "_TEST_PATH_FOLDER_"
+        playlist_name = "_TEST_PATH_PL_"
+
+        success, _ = asc.create_folder(folder_name)
+        assert success is True
+        success, _ = asc.create_playlist(playlist_name)
+        assert success is True
+        success, _ = asc.move_to_folder(playlist_name, folder_name)
+        assert success is True
+
+        success, path = asc.get_playlist_path(playlist_name)
+        assert success is True
+        assert path == f"{folder_name}/{playlist_name}"
+
+        # Cleanup
+        asc.delete_playlist(playlist_name)
+        asc.delete_folder(folder_name)
+
+    def test_get_folder_tree(self):
+        """Should return folder hierarchy text."""
+        folder_name = "_TEST_TREE_FOLDER_"
+
+        success, _ = asc.create_folder(folder_name)
+        assert success is True
+
+        success, tree = asc.get_folder_tree()
+        assert success is True
+        assert folder_name in tree
+
+        # Cleanup
         asc.delete_folder(folder_name)
 
 

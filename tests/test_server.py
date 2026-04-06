@@ -269,13 +269,14 @@ class TestMoveToFolder:
 
         assert "Error" in result
 
-    def test_requires_folder_name(self, monkeypatch):
-        """Should error when folder name not provided."""
+    def test_move_to_root_requires_confirmation(self, monkeypatch):
+        """Should explain limitation and require confirmation when no folder."""
         monkeypatch.setattr(server, "APPLESCRIPT_AVAILABLE", True)
 
         result = server.playlist(action="move", playlist="My Playlist", name="")
 
-        assert "Error" in result
+        assert "cannot move" in result.lower()
+        assert "allow_duplicates" in result
 
 
 class TestAddToPlaylist:

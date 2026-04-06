@@ -2263,16 +2263,71 @@ def _playlist_create(name: str, description: str = "") -> str:
         return str(e)
 
 
-def _playlist_create_folder(name: str) -> str:
-    """Internal: Create a folder playlist via AppleScript."""
-    success, result = asc.create_folder(name)
-    if success:
-        audit_log.log_action(
-            "create_folder",
-            {"name": name, "folder_id": result, "method": "applescript"},
+def _playlist_create_folder(path: str) -> str:
+    """Internal: Create a folder or folder path. Supports slash-separated paths.
+
+    e.g. "Summer/Chill/Deep" creates all three levels, nesting each.
+    """
+    if APPLESCRIPT_AVAILABLE:
+        if "/" in path:
+            # Multi-level path
+            success, result = asc.create_folder_path(path)
+        else:
+            success, result = asc.create_folder(path)
+        if success:
+            audit_log.log_action(
+                "create_folder",
+                {"path": path, "folder_id": result, "method": "applescript"},
+            )
+            return f"Created folder path '{path}' (ID: {result})"
+        return f"Error creating folder: {result}"
+
+    # API fallback: POST /v1/me/library/playlist-folders (single level only)
+    if "/" in path:
+        return "Error: Nested folder paths require macOS. API only supports single-level folders."
+    try:
+        headers = get_headers()
+        response = requests.post(
+            f"{BASE_URL}/me/library/playlist-folders",
+            headers={**headers, "Content-Type": "application/json"},
+            json={"attributes": {"name": path}},
+            timeout=REQUEST_TIMEOUT,
         )
-        return f"Created folder '{name}' (ID: {result})"
-    return f"Error creating folder: {result}"
+        if response.status_code in (200, 201):
+            data = response.json().get("data", [{}])
+            folder_id = data[0].get("id", "") if data else ""
+            audit_log.log_action(
+                "create_folder",
+                {"path": path, "folder_id": folder_id, "method": "api"},
+            )
+            return f"Created folder '{path}' (ID: {folder_id})"
+        return f"Error creating folder via API: HTTP {response.status_code}"
+    except FileNotFoundError:
+        return "Error: API credentials required for folder creation on non-macOS"
+    except requests.exceptions.RequestException as e:
+        return f"API Error: {str(e)}"
+
+
+def _playlist_tree() -> str:
+    """Internal: Show folder hierarchy."""
+    if not APPLESCRIPT_AVAILABLE:
+        return "Error: tree view requires macOS"
+    success, result = asc.get_folder_tree()
+    if success:
+        return result if result.strip() else "No folders found."
+    return f"Error: {result}"
+
+
+def _playlist_path(name: str) -> str:
+    """Internal: Get the full folder path of a playlist or folder."""
+    if not APPLESCRIPT_AVAILABLE:
+        return "Error: path lookup requires macOS"
+    if not name:
+        return "Error: playlist or folder name required"
+    success, result = asc.get_playlist_path(name)
+    if success:
+        return result
+    return f"Error: {result}"
 
 
 def _playlist_move(playlist_name: str, folder_name: str) -> str:
@@ -2287,10 +2342,25 @@ def _playlist_move(playlist_name: str, folder_name: str) -> str:
     return f"Error moving playlist: {result}"
 
 
+def _playlist_move_to_root(playlist_name: str) -> str:
+    """Internal: Move a playlist out of its folder to the top level."""
+    success, result = asc.move_to_root(playlist_name)
+    if success:
+        audit_log.log_action(
+            "move_to_root",
+            {"playlist": playlist_name, "method": "applescript"},
+        )
+        return result
+    return f"Error: {result}"
+
+
 def _playlist_create_in_folder(name: str, folder: str, description: str = "") -> str:
     """Internal: Create a playlist inside a folder. Creates the folder if it doesn't exist."""
     # Ensure folder exists (ignore errors — folder may already exist)
-    asc.create_folder(folder)
+    if "/" in folder:
+        asc.create_folder_path(folder)
+    else:
+        asc.create_folder(folder)
 
     # Create the playlist
     create_result = _playlist_create(name, description)
@@ -2939,7 +3009,7 @@ def playlist(
     verify: bool = True,
     auto_search: Optional[bool] = None,
 ) -> str:
-    """Playlist and folder operations. Actions: list, tracks, search, create, add, copy, move (macOS), remove (macOS), delete (macOS), rename (macOS)."""
+    """Playlist and folder operations. Actions: list, tracks, search, create, add, copy, move (macOS), path (macOS), remove (macOS), delete (macOS), rename (macOS). Folders support slash-separated paths (e.g. 'Summer/Chill/Deep')."""
     action = action.lower().strip().replace("-", "_")
 
     if action == "list":
@@ -2951,8 +3021,6 @@ def playlist(
             return "Error: query required for search"
         return _playlist_search(query, playlist)
     elif action == "create":
-        if not APPLESCRIPT_AVAILABLE and folder:
-            return "Error: folder operations require macOS"
         if folder and not name:
             # folder only = create a folder
             return _playlist_create_folder(folder)
@@ -3005,10 +3073,23 @@ def playlist(
             return "Error: playlist required for move"
         folder_target = folder or name
         if not folder_target:
-            return "Error: folder (target folder) required for move"
+            if allow_duplicates:
+                # User explicitly confirmed — recreate at root
+                return _playlist_move_to_root(playlist)
+            return ("Music.app cannot move playlists out of folders via AppleScript. "
+                    "Drag the playlist out of its folder in the Music app sidebar instead.\n\n"
+                    "If you need to do this programmatically, call again with "
+                    "allow_duplicates=True — this recreates the playlist at root "
+                    "with the same tracks, but the playlist ID will change.")
         return _playlist_move(playlist, folder_target)
+    elif action == "path":
+        target = playlist or folder
+        if target:
+            return _playlist_path(target)
+        else:
+            return _playlist_tree()
     else:
-        return f"Unknown action: {action}. Use: list, tracks, search, create, add, copy, move (macOS), remove (macOS), delete (macOS), rename (macOS)"
+        return f"Unknown action: {action}. Use: list, tracks, search, create, add, copy, move, path, remove (macOS), delete (macOS), rename (macOS)"
 
 
 # ============ LIBRARY MANAGEMENT ============

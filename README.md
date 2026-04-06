@@ -23,9 +23,10 @@
 | Star ratings (1-5) | ✓ |   |
 | Remove tracks from playlists | ✓ |   |
 | Delete playlists/folders | ✓ |   |
-| Create folders | ✓ |   |
+| Create folders | ✓ | top-level |
 | Rename playlists/folders | ✓ |   |
-| Move playlists to folders | ✓ |   |
+| Move playlists/folders | ✓ |   |
+| Folder hierarchy/paths | ✓ |   |
 
 **macOS** uses AppleScript for full local control. **API** mode enables catalog features and works cross-platform. **UI*** = UI automation fallback (requires display + Accessibility permissions; Top Results only for search).
 
@@ -144,6 +145,12 @@ Add to config.json:
 - "Remove the last 3 tracks from my workout playlist"
 - "Export my library to CSV"
 
+**Folder organization (macOS):**
+- "Create a folder called Genres and put subfolders for Rock, Jazz, and Electronic in it"
+- "Move my Road Trip playlist into the Summer folder"
+- "Show me my folder hierarchy"
+- "Where is my workout playlist?"
+
 **Discovery & playback (macOS):**
 - "What have I been listening to recently?"
 - "Play my workout playlist on shuffle"
@@ -168,23 +175,35 @@ Playlist and folder operations - list, manage tracks, create, copy, remove (macO
 | `list` | `format`, `export`, `full` | List all playlists | All |
 | `tracks` | `playlist`, `filter`, `limit`, `offset`, `format`, `export`, `full`, `fetch_explicit` | Get playlist tracks with filter/pagination | All (by-name: macOS) |
 | `search` | `query`, `playlist` | Search tracks in playlist | All |
-| `create` | `name`, `description`, `folder` | Create playlist and/or folder. `folder` alone creates a folder. Both creates playlist inside folder. | All (folders: macOS) |
+| `create` | `name`, `description`, `folder` | Create playlist and/or folder. `folder` supports slash paths (e.g. `Summer/Chill`). | All |
 | `add` | `playlist`, `track`, `album`, `artist`, `allow_duplicates`, `verify`, `auto_search` | Smart add: auto-search catalog, skip duplicates | All (by-name: macOS) |
 | `copy` | `source`, `new_name` | Copy playlist to editable version | All (by-name: macOS) |
-| `move` | `playlist`, `folder` | Move playlist into a folder | macOS |
+| `move` | `playlist`, `folder` | Move playlist/folder into a folder path. `folder=""` moves to root (recreates playlist*). | macOS |
 | `remove` | `playlist`, `track`, `artist` | Remove track(s) from playlist | macOS |
-| `delete` | `playlist` or `folder` | Delete a playlist or folder | macOS |
+| `delete` | `playlist` or `folder` | Delete a playlist or folder (supports slash paths) | macOS |
 | `rename` | `playlist` or `folder`, `new_name` | Rename a playlist or folder | macOS |
+| `path` | `playlist` or `folder` | Get full path of a playlist/folder. No args = show full hierarchy. | macOS |
+
+**Folder paths:** Use `/` for nesting: `create(folder="Music/Genres/Jazz")` creates all levels. Works with `move`, `delete`, and `create`.
+
+**Note:** The Apple Music API only supports creating single-level folders. Nested paths, move, delete, rename, tree, and path operations require macOS (AppleScript). Snapshots on macOS capture full folder hierarchy.
+
+*\*Move-to-root limitation: Music.app's AppleScript interface cannot move playlists out of folders. `folder=""` recreates the playlist at root with the same tracks — the playlist's persistent ID will change. Moving INTO folders preserves the ID.*
 
 **Examples:**
 ```python
 playlist(action="list")
 playlist(action="create", name="Road Trip", description="Summer vibes")
-playlist(action="create", folder="Summer Music")                          # create folder
-playlist(action="create", name="Road Trip", folder="Summer Music")        # create playlist in folder
-playlist(action="move", playlist="Road Trip", folder="Summer Music")
-playlist(action="delete", folder="Summer Music")
-playlist(action="rename", folder="Summer Music", new_name="Summer 2026")
+playlist(action="create", folder="Summer/Chill")                           # nested folders
+playlist(action="create", name="Road Trip", folder="Summer/Chill")         # playlist in nested folder
+playlist(action="move", playlist="Road Trip", folder="Summer/Chill")       # into nested folder
+playlist(action="move", playlist="Road Trip", folder="")                   # back to root
+playlist(action="move", playlist="Chill", folder="Archive")                # folder into folder
+playlist(action="path")                                                    # show full hierarchy
+playlist(action="path", playlist="Road Trip")                              # "Summer/Chill/Road Trip"
+playlist(action="path", folder="Chill")                                    # "Summer/Chill"
+playlist(action="delete", folder="Summer/Chill")                           # delete nested folder
+playlist(action="rename", folder="Summer", new_name="Summer 2026")
 playlist(action="add", playlist="Road Trip", track="Hey Jude", artist="Beatles")
 ```
 
@@ -200,9 +219,9 @@ Library management - search, add, browse, rate, recently played/added, remove (m
 | `browse` | `item_type`, `limit`, `offset`, `format`, `export`, `full`, `fetch_explicit`, `clean_only` | List songs/albums/artists/videos | All |
 | `recently_played` | `limit`, `format`, `export`, `full` | Recent listening history | All |
 | `recently_added` | `limit`, `format`, `export`, `full` | Recently added content | All |
-| `rate` | `rate_action`, `track`, `artist`, `stars` | Love/dislike/get/set ratings | All (stars: macOS) |
+| `rate` | `rate_action`, `track`, `artist`, `stars` | Love/dislike/clear/get/set ratings | All (stars/clear: macOS) |
 | `remove` | `track`, `artist` | Remove track(s) from library | macOS |
-| `snapshot` | `query` | Library integrity checking (see below) | macOS |
+| `snapshot` | `query` | Library integrity checking — captures tracks, playlists, and folder hierarchy | macOS |
 
 **Snapshot sub-commands** via `query`:
 

@@ -32,7 +32,16 @@ def _escape_for_applescript(s: str) -> str:
 
     Backslashes must be escaped first, then quotes, to prevent
     injection attacks and handle edge cases like 'Playlist\\Test'.
+
+    Also strips control characters (newlines, tabs, carriage returns)
+    which could break out of AppleScript string literals. osascript
+    accepts literal newlines inside quoted strings, so an unescaped
+    newline followed by '& do shell script "..."' is a real injection
+    vector — the shell command executes even if the overall expression
+    errors out.
     """
+    # Strip control characters that could break out of string literals
+    s = s.replace('\r\n', ' ').replace('\r', ' ').replace('\n', ' ').replace('\t', ' ')
     return s.replace('\\', '\\\\').replace('"', '\\"')
 
 
@@ -449,6 +458,177 @@ def create_playlist(name: str, description: str = "") -> tuple[bool, str]:
     return run_applescript(script)
 
 
+def _resolve_folder_path_applescript(path: str) -> str:
+    """Generate AppleScript to resolve a slash-separated folder path.
+
+    e.g. "Summer/Chill/Deep" resolves to the "Deep" folder inside "Chill" inside "Summer".
+    Sets `targetFolder` to the resolved folder playlist.
+
+    Args:
+        path: Slash-separated folder path
+
+    Returns:
+        AppleScript code block that sets targetFolder
+    """
+    parts = [p.strip() for p in path.split("/") if p.strip()]
+    if not parts:
+        return '        return "ERROR:Empty folder path"'
+
+    safe_parts = [_escape_for_applescript(p) for p in parts]
+
+    if len(safe_parts) == 1:
+        return f'''        try
+            set targetFolder to first folder playlist whose name is "{safe_parts[0]}"
+        on error
+            return "ERROR:Folder not found: {safe_parts[0]}"
+        end try'''
+
+    # Multi-level: walk down the tree
+    lines = []
+    lines.append(f'''        try
+            set targetFolder to first folder playlist whose name is "{safe_parts[0]}"
+        on error
+            return "ERROR:Folder not found: {safe_parts[0]}"
+        end try''')
+
+    for part in safe_parts[1:]:
+        lines.append(f'''        try
+            set targetFolder to first folder playlist of targetFolder whose name is "{part}"
+        on error
+            return "ERROR:Subfolder not found: {part}"
+        end try''')
+
+    return "\n".join(lines)
+
+
+def get_folder_tree() -> tuple[bool, str]:
+    """Get the folder hierarchy as indented text (up to 3 levels deep).
+
+    Note: Currently hardcoded to display root folders, their immediate
+    subfolders, and playlists within those subfolders. Deeper nesting
+    is not shown in the tree output (though it can be created and
+    navigated via slash paths).
+
+    Returns:
+        Tuple of (success, indented tree string)
+    """
+    script = '''
+    tell application "Music"
+        set output to ""
+        set allFolders to every folder playlist
+        set allPlaylists to every user playlist
+
+        -- Build tree: for each folder, list its children
+        repeat with f in allFolders
+            set fName to name of f
+            -- Check if this folder has a parent (is nested)
+            try
+                set pName to name of parent of f
+                -- Skip nested folders in top-level listing, they'll appear under parent
+            on error
+                -- Top-level folder
+                set output to output & "[" & fName & "]" & linefeed
+                -- List folder's direct children
+                repeat with p in allPlaylists
+                    try
+                        if name of parent of p is fName then
+                            set output to output & "  " & name of p & linefeed
+                        end if
+                    end try
+                end repeat
+                -- List nested folders
+                repeat with f2 in allFolders
+                    try
+                        if name of parent of f2 is fName then
+                            set output to output & "  [" & name of f2 & "]" & linefeed
+                            -- One more level deep
+                            repeat with p2 in allPlaylists
+                                try
+                                    if name of parent of p2 is name of f2 then
+                                        set output to output & "    " & name of p2 & linefeed
+                                    end if
+                                end try
+                            end repeat
+                        end if
+                    end try
+                end repeat
+            end try
+        end repeat
+
+        -- Top-level playlists (no parent folder)
+        repeat with p in allPlaylists
+            try
+                set pParent to parent of p
+                -- Has parent, skip (already listed under folder)
+            on error
+                -- Check it's not a folder itself
+                set isFolder to false
+                repeat with f in allFolders
+                    if name of f is name of p then
+                        set isFolder to true
+                        exit repeat
+                    end if
+                end repeat
+                if not isFolder then
+                    set output to output & name of p & linefeed
+                end if
+            end try
+        end repeat
+
+        return output
+    end tell
+    '''
+    return run_applescript(script)
+
+
+def create_folder_path(path: str) -> tuple[bool, str]:
+    """Create a folder path, creating intermediate folders as needed.
+
+    e.g. "Summer/Chill/Deep" creates Summer, then Chill inside it, then Deep inside that.
+
+    Args:
+        path: Slash-separated folder path
+
+    Returns:
+        Tuple of (success, leaf folder ID or error)
+    """
+    parts = [p.strip() for p in path.split("/") if p.strip()]
+    if not parts:
+        return False, "Empty folder path"
+
+    safe_parts = [_escape_for_applescript(p) for p in parts]
+
+    # Build AppleScript that creates each level
+    create_lines = []
+    for i, part in enumerate(safe_parts):
+        if i == 0:
+            # Top-level: create if not exists
+            create_lines.append(f'''
+        try
+            set folder{i} to first folder playlist whose name is "{part}"
+        on error
+            set folder{i} to make new folder playlist with properties {{name:"{part}"}}
+        end try''')
+        else:
+            # Nested: create inside parent if not exists
+            create_lines.append(f'''
+        try
+            set folder{i} to first folder playlist of folder{i-1} whose name is "{part}"
+        on error
+            set folder{i} to make new folder playlist with properties {{name:"{part}"}}
+            move folder{i} to folder{i-1}
+        end try''')
+
+    last_idx = len(safe_parts) - 1
+    script = f'''
+    tell application "Music"
+{"".join(create_lines)}
+        return persistent ID of folder{last_idx}
+    end tell
+    '''
+    return run_applescript(script)
+
+
 def create_folder(name: str) -> tuple[bool, str]:
     """Create a new folder playlist.
 
@@ -468,25 +648,20 @@ def create_folder(name: str) -> tuple[bool, str]:
     return run_applescript(script)
 
 
-def move_to_folder(item_name: str, folder_name: str) -> tuple[bool, str]:
+def move_to_folder(item_name: str, folder_path: str) -> tuple[bool, str]:
     """Move a playlist or folder into a folder.
 
     Args:
         item_name: Name of the playlist or folder to move
-        folder_name: Name of the target folder
+        folder_path: Target folder name or slash-separated path (e.g. "Summer/Chill")
 
     Returns:
         Tuple of (success, message or error)
     """
     safe_item = _escape_for_applescript(item_name)
-    safe_folder = _escape_for_applescript(folder_name)
     script = f'''
     tell application "Music"
-        try
-            set targetFolder to first folder playlist whose name is "{safe_folder}"
-        on error
-            return "ERROR:Folder not found"
-        end try
+{_resolve_folder_path_applescript(folder_path)}
 {_find_playlist_applescript(safe_item)}
         move targetPlaylist to targetFolder
         return "Moved '" & name of targetPlaylist & "' to folder '" & name of targetFolder & "'"
@@ -498,24 +673,39 @@ def move_to_folder(item_name: str, folder_name: str) -> tuple[bool, str]:
     return success, output
 
 
-def get_playlist_parent(playlist_name: str) -> tuple[bool, str]:
-    """Get the name of the folder containing a playlist or folder.
+def move_to_root(item_name: str) -> tuple[bool, str]:
+    """Move a playlist out of its parent folder to the top level.
+
+    Note: Music.app's AppleScript interface does not support moving playlists
+    out of folders. This recreates the playlist at root with the same tracks.
+    The playlist's persistent ID will change.
 
     Args:
-        playlist_name: Name of the playlist or folder
+        item_name: Name of the playlist to move to root
 
     Returns:
-        Tuple of (success, parent folder name or error)
+        Tuple of (success, message or error)
     """
-    safe_name = _escape_for_applescript(playlist_name)
+    safe_item = _escape_for_applescript(item_name)
     script = f'''
     tell application "Music"
-{_find_playlist_applescript(safe_name)}
+{_find_playlist_applescript(safe_item)}
         try
-            return name of parent of targetPlaylist
+            set pParent to parent of targetPlaylist
         on error
-            return "ERROR:No parent folder"
+            return "ERROR:Playlist is already at top level"
         end try
+        set origName to name of targetPlaylist
+        set tempName to origName & " _MOVING_"
+        set newPlaylist to make new user playlist with properties {{name:tempName}}
+        try
+            repeat with t in tracks of targetPlaylist
+                duplicate t to newPlaylist
+            end repeat
+        end try
+        delete targetPlaylist
+        set name of newPlaylist to origName
+        return "Moved '" & origName & "' to top level (playlist recreated)"
     end tell
     '''
     success, output = run_applescript(script)
@@ -524,23 +714,52 @@ def get_playlist_parent(playlist_name: str) -> tuple[bool, str]:
     return success, output
 
 
-def delete_folder(folder_name: str) -> tuple[bool, str]:
-    """Delete a folder playlist by name.
+def get_playlist_path(playlist_name: str) -> tuple[bool, str]:
+    """Get the full folder path of a playlist or folder.
 
     Args:
-        folder_name: Name of the folder to delete
+        playlist_name: Name of the playlist or folder
+
+    Returns:
+        Tuple of (success, slash-separated path or error)
+        e.g. "Summer/Chill/Road Trip" or just "Road Trip" if at root
+    """
+    safe_name = _escape_for_applescript(playlist_name)
+    script = f'''
+    tell application "Music"
+{_find_playlist_applescript(safe_name)}
+        set pathParts to {{name of targetPlaylist}}
+        set current to targetPlaylist
+        repeat
+            try
+                set current to parent of current
+                set beginning of pathParts to name of current
+            on error
+                exit repeat
+            end try
+        end repeat
+        set AppleScript's text item delimiters to "/"
+        return pathParts as text
+    end tell
+    '''
+    success, output = run_applescript(script)
+    if output.startswith("ERROR:"):
+        return False, output[6:]
+    return success, output
+
+
+def delete_folder(folder_path: str) -> tuple[bool, str]:
+    """Delete a folder by name or slash-separated path.
+
+    Args:
+        folder_path: Folder name or path (e.g. "Summer" or "Summer/Chill")
 
     Returns:
         Tuple of (success, message or error)
     """
-    safe_name = _escape_for_applescript(folder_name)
     script = f'''
     tell application "Music"
-        try
-            set targetFolder to first folder playlist whose name is "{safe_name}"
-        on error
-            return "ERROR:Folder not found"
-        end try
+{_resolve_folder_path_applescript(folder_path)}
         set folderName to name of targetFolder
         delete targetFolder
         return "Deleted folder: " & folderName
@@ -2284,7 +2503,7 @@ end tell''')
             "current_album": lines[6].strip() if len(lines) > 6 and lines[6].strip() else None,
         }
 
-    # Get all user playlists and their contents
+    # Get all user playlists and their contents, with folder paths
     ok, playlist_data = run_applescript('''
 tell application "Music"
     set r to ""
@@ -2292,7 +2511,26 @@ tell application "Music"
         set pName to name of p
         set pKind to smart of p
         if pKind is false and pName is not "Music" and pName is not "Music Videos" then
-            set r to r & "PLAYLIST:" & pName & return
+            -- Build folder path
+            set folderPath to ""
+            try
+                set current to p
+                set pathParts to {}
+                repeat
+                    try
+                        set current to parent of current
+                        set beginning of pathParts to name of current
+                    on error
+                        exit repeat
+                    end try
+                end repeat
+                if (count of pathParts) > 0 then
+                    set AppleScript's text item delimiters to "/"
+                    set folderPath to pathParts as text
+                    set AppleScript's text item delimiters to ""
+                end if
+            end try
+            set r to r & "PLAYLIST:" & pName & "|||FOLDER:" & folderPath & return
             try
                 repeat with t in tracks of p
                     set r to r & name of t & "|||" & artist of t & "|||" & album of t & return
@@ -2300,24 +2538,60 @@ tell application "Music"
             end try
         end if
     end repeat
+    -- Also list folder playlists
+    repeat with f in folder playlists
+        set fPath to ""
+        try
+            set current to f
+            set pathParts to {}
+            repeat
+                try
+                    set current to parent of current
+                    set beginning of pathParts to name of current
+                on error
+                    exit repeat
+                end try
+            end repeat
+            if (count of pathParts) > 0 then
+                set AppleScript's text item delimiters to "/"
+                set fPath to pathParts as text
+                set AppleScript's text item delimiters to ""
+            end if
+        end try
+        set r to r & "FOLDER:" & name of f & "|||PATH:" & fPath & return
+    end repeat
     return r
 end tell''')
     if not ok:
         return False, {"error": f"Failed to get playlists: {playlist_data}"}
 
     playlists = {}
+    folders = {}
     current_playlist = None
     for line in playlist_data.strip().split("\n"):
         line = line.strip()
         if not line:
             continue
         if line.startswith("PLAYLIST:"):
-            current_playlist = line[9:]
-            playlists[current_playlist] = []
+            # Format: PLAYLIST:name|||FOLDER:path
+            parts = line.split("|||FOLDER:")
+            pl_name = parts[0][9:]
+            folder_path = parts[1] if len(parts) > 1 else ""
+            full_path = f"{folder_path}/{pl_name}" if folder_path else pl_name
+            current_playlist = full_path
+            playlists[full_path] = {"folder": folder_path, "tracks": []}
+        elif line.startswith("FOLDER:"):
+            # Format: FOLDER:name|||PATH:parent_path
+            current_playlist = None  # Folder lines end any playlist track context
+            parts = line.split("|||PATH:")
+            f_name = parts[0][7:]
+            parent_path = parts[1] if len(parts) > 1 else ""
+            full_path = f"{parent_path}/{f_name}" if parent_path else f_name
+            folders[full_path] = {"name": f_name, "parent": parent_path}
         elif current_playlist is not None and "|||" in line:
             parts = line.split("|||")
             if len(parts) >= 3:
-                playlists[current_playlist].append({
+                playlists[current_playlist]["tracks"].append({
                     "name": parts[0],
                     "artist": parts[1],
                     "album": parts[2],
@@ -2327,6 +2601,7 @@ end tell''')
         "track_count": track_count,
         "playback": playback_state,
         "playlists": playlists,
+        "folders": folders,
     }
 
 
@@ -2375,10 +2650,18 @@ def library_diff(before: dict, after: dict) -> dict:
             result["playlists_removed"].append(name)
 
     # Compare track lists for playlists that exist in both
+    # Handle both old format (list) and new format (dict with "tracks" key)
+    def _get_tracks(pl_entry):
+        if isinstance(pl_entry, list):
+            return pl_entry
+        if isinstance(pl_entry, dict):
+            return pl_entry.get("tracks", [])
+        return []
+
     for name in before_pl:
         if name in after_pl:
-            before_tracks = {f"{t['name']}|{t['artist']}" for t in before_pl[name]}
-            after_tracks = {f"{t['name']}|{t['artist']}" for t in after_pl[name]}
+            before_tracks = {f"{t['name']}|{t['artist']}" for t in _get_tracks(before_pl[name])}
+            after_tracks = {f"{t['name']}|{t['artist']}" for t in _get_tracks(after_pl[name])}
             added = after_tracks - before_tracks
             removed = before_tracks - after_tracks
             if added or removed:
@@ -2387,11 +2670,19 @@ def library_diff(before: dict, after: dict) -> dict:
                     "removed": list(removed),
                 }
 
+    # Compare folders
+    before_folders = set(before.get("folders", {}).keys())
+    after_folders = set(after.get("folders", {}).keys())
+    result["folders_added"] = list(after_folders - before_folders)
+    result["folders_removed"] = list(before_folders - after_folders)
+
     # Determine if clean (library changes only — playback state changes don't count)
     if (result["track_count_change"] != 0
             or result["playlists_added"]
             or result["playlists_removed"]
-            or result["playlists_changed"]):
+            or result["playlists_changed"]
+            or result["folders_added"]
+            or result["folders_removed"]):
         result["is_clean"] = False
 
     return result

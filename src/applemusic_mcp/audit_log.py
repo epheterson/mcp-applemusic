@@ -212,6 +212,10 @@ def format_entries_for_display(entries: list[dict], limit: int = 20) -> str:
             new = details.get("new_name", "unknown")
             lines.append(f"[{ts_display}] RENAME FOLDER: '{old}' -> '{new}'")
 
+        elif action == "move_to_root":
+            playlist = details.get("playlist", "unknown")
+            lines.append(f"[{ts_display}] MOVE TO ROOT: '{playlist}'")
+
         elif action == "move_to_folder":
             playlist = details.get("playlist", "unknown")
             folder = details.get("folder", "unknown")
