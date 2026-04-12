@@ -35,6 +35,7 @@ MIN_CATALOG_ID_LENGTH = 9
 
 class EntityType(Enum):
     """Types of Apple Music entities."""
+
     TRACK = "track"
     ALBUM = "album"
     ARTIST = "artist"
@@ -44,34 +45,37 @@ class EntityType(Enum):
 
 class InputType(Enum):
     """How the input was interpreted."""
-    CATALOG_ID = "catalog_id"      # All digits, 9+ chars: "1440783617"
-    LIBRARY_ID = "library_id"      # Starts with "i.": "i.ABC123"
-    PLAYLIST_ID = "playlist_id"    # Starts with "p.": "p.ABC123"
-    ALBUM_ID = "album_id"          # Starts with "l.": "l.ABC123"
+
+    CATALOG_ID = "catalog_id"  # All digits, 9+ chars: "1440783617"
+    LIBRARY_ID = "library_id"  # Starts with "i.": "i.ABC123"
+    PLAYLIST_ID = "playlist_id"  # Starts with "p.": "p.ABC123"
+    ALBUM_ID = "album_id"  # Starts with "l.": "l.ABC123"
     PERSISTENT_ID = "persistent_id"  # 12+ hex chars: "ABC123DEF456"
-    NAME = "name"                  # Plain name to search for
-    JSON_OBJECT = "json_object"    # From JSON array
+    NAME = "name"  # Plain name to search for
+    JSON_OBJECT = "json_object"  # From JSON array
 
 
 @dataclass
 class ResolvedInput:
     """Result of resolving a user input to an entity reference."""
+
     input_type: InputType
-    value: str                     # The ID or name
-    artist: str = ""               # Artist hint for disambiguation
-    raw: str = ""                  # Original input string
-    error: str | None = None       # Error message if resolution failed
+    value: str  # The ID or name
+    artist: str = ""  # Artist hint for disambiguation
+    raw: str = ""  # Original input string
+    error: str | None = None  # Error message if resolution failed
 
 
 @dataclass
 class FuzzyMatchResult:
     """Result of a fuzzy match operation."""
-    matched_name: str              # The actual name that was matched
-    query: str                     # The original query
-    normalized_query: str          # The normalized query used for matching
-    normalized_match: str          # The normalized matched name
-    transformations: list[str]     # List of transformations applied
-    match_type: str                # "exact", "fuzzy", or "partial"
+
+    matched_name: str  # The actual name that was matched
+    query: str  # The original query
+    normalized_query: str  # The normalized query used for matching
+    normalized_match: str  # The normalized matched name
+    transformations: list[str]  # List of transformations applied
+    match_type: str  # "exact", "fuzzy", or "partial"
 
 
 @dataclass
@@ -86,11 +90,12 @@ class ResolvedPlaylist:
 
     Resolution should populate as many as possible so callers can choose.
     """
-    api_id: str | None = None              # API playlist ID (p.XXX) for REST calls
-    applescript_name: str | None = None    # Playlist name for AppleScript operations
-    persistent_id: str | None = None       # Hex ID from AppleScript (e.g., 583528883966122E)
-    raw_input: str = ""                    # Original input from user
-    error: str | None = None               # Error message if resolution failed
+
+    api_id: str | None = None  # API playlist ID (p.XXX) for REST calls
+    applescript_name: str | None = None  # Playlist name for AppleScript operations
+    persistent_id: str | None = None  # Hex ID from AppleScript (e.g., 583528883966122E)
+    raw_input: str = ""  # Original input from user
+    error: str | None = None  # Error message if resolution failed
     fuzzy_match: FuzzyMatchResult | None = None  # Fuzzy match details if applicable
 
 
@@ -99,7 +104,9 @@ def truncate(s: str, max_len: int) -> str:
     return s[:max_len] + "..." if len(s) > max_len else s
 
 
-def _deduplicate_by_id(items: list[dict], id_key: str = "id", keep_no_id: bool = False) -> list[dict]:
+def _deduplicate_by_id(
+    items: list[dict], id_key: str = "id", keep_no_id: bool = False
+) -> list[dict]:
     """Remove duplicate items based on ID field.
 
     Args:
@@ -193,35 +200,38 @@ def _normalize_with_tracking(name: str) -> tuple[list[str], list[str]]:
     name = name.lower().strip()
 
     # Step 2: Remove diacritics (café → cafe)
-    if any(unicodedata.category(c).startswith('M') for c in unicodedata.normalize('NFD', name)):
-        name = ''.join(c for c in unicodedata.normalize('NFD', name)
-                      if not unicodedata.category(c).startswith('M'))
+    if any(unicodedata.category(c).startswith("M") for c in unicodedata.normalize("NFD", name)):
+        name = "".join(
+            c
+            for c in unicodedata.normalize("NFD", name)
+            if not unicodedata.category(c).startswith("M")
+        )
         transformations.append("removed diacritics")
 
     # Step 3: Strip leading articles (The Beatles → Beatles)
-    for article in [r'\bthe\s+', r'\ban\s+', r'\ba\s+']:
+    for article in [r"\bthe\s+", r"\ban\s+", r"\ba\s+"]:
         if re.match(article, name):
-            name = re.sub(f'^{article}', '', name)
-            clean_article = article.replace(r'\b', '').replace(r'\s+', '').strip()
+            name = re.sub(f"^{article}", "", name)
+            clean_article = article.replace(r"\b", "").replace(r"\s+", "").strip()
             transformations.append(f"removed article '{clean_article}'")
             break
 
     # Step 4: Normalize "and" / "&"
-    if ' and ' in name:
-        variations = [name, name.replace(' and ', ' & ')]
+    if " and " in name:
+        variations = [name, name.replace(" and ", " & ")]
         transformations.append("'and' ↔ '&'")
-    elif ' & ' in name:
-        variations = [name, name.replace(' & ', ' and ')]
+    elif " & " in name:
+        variations = [name, name.replace(" & ", " and ")]
         transformations.append("'and' ↔ '&'")
     else:
         variations = [name]
 
     # Step 5: Normalize music-specific abbreviations
     abbrev_map = {
-        r'\bfeat\.?\s': 'ft ',
-        r'\bfeaturing\s': 'ft ',
-        r'\bft\.?\s': 'ft ',
-        r'\bw/\s': 'with ',
+        r"\bfeat\.?\s": "ft ",
+        r"\bfeaturing\s": "ft ",
+        r"\bft\.?\s": "ft ",
+        r"\bw/\s": "with ",
     }
     for pattern, replacement in abbrev_map.items():
         if re.search(pattern, name):
@@ -235,8 +245,8 @@ def _normalize_with_tracking(name: str) -> tuple[list[str], list[str]]:
         transformations.append("removed quotes/apostrophes")
 
     # Step 7: Normalize hyphens to spaces
-    if '-' in name:
-        name = name.replace('-', ' ')
+    if "-" in name:
+        name = name.replace("-", " ")
         transformations.append("hyphens → spaces")
 
     # Step 8: Remove emojis and special characters (keep only alphanumeric and spaces)
@@ -246,7 +256,7 @@ def _normalize_with_tracking(name: str) -> tuple[list[str], list[str]]:
         name = cleaned
 
     # Step 9: Collapse multiple spaces
-    if re.search(r'\s{2,}', name):
+    if re.search(r"\s{2,}", name):
         name = re.sub(r"\s+", " ", name).strip()
         transformations.append("normalized whitespace")
 
@@ -255,15 +265,18 @@ def _normalize_with_tracking(name: str) -> tuple[list[str], list[str]]:
     for variant in variations:
         # Apply all transformations to each variant
         v = variant
-        v = ''.join(c for c in unicodedata.normalize('NFD', v)
-                   if not unicodedata.category(c).startswith('M'))
-        for article in [r'\bthe\s+', r'\ban\s+', r'\ba\s+']:
-            v = re.sub(f'^{article}', '', v)
+        v = "".join(
+            c
+            for c in unicodedata.normalize("NFD", v)
+            if not unicodedata.category(c).startswith("M")
+        )
+        for article in [r"\bthe\s+", r"\ban\s+", r"\ba\s+"]:
+            v = re.sub(f"^{article}", "", v)
         for pattern, replacement in abbrev_map.items():
             v = re.sub(pattern, replacement, v)
         v = v.replace("'", "").replace("'", "").replace("`", "")
         v = v.replace('"', "").replace('"', "").replace('"', "")
-        v = v.replace('-', ' ')
+        v = v.replace("-", " ")
         v = re.sub(r"[^a-z0-9\s]", "", v)
         v = re.sub(r"\s+", " ", v).strip()
         all_variations.append(v)
@@ -332,7 +345,7 @@ def _fuzzy_match_entity(
                             normalized_query=query_variant,
                             normalized_match=candidate_variant,
                             transformations=transformations,
-                            match_type="fuzzy"
+                            match_type="fuzzy",
                         )
                         return candidate, fuzzy_result
                     # Check partial match after normalization (query contained in candidate)
@@ -343,7 +356,7 @@ def _fuzzy_match_entity(
                             normalized_query=query_variant,
                             normalized_match=candidate_variant,
                             transformations=transformations + ["partial normalized match"],
-                            match_type="fuzzy_partial"
+                            match_type="fuzzy_partial",
                         )
                         return candidate, fuzzy_result
 
@@ -355,7 +368,7 @@ def _fuzzy_match_entity(
             normalized_query=query_lower,
             normalized_match=partial_match_name.lower(),
             transformations=["partial substring match"],
-            match_type="partial"
+            match_type="partial",
         )
         return partial_match, fuzzy_result
 
@@ -421,17 +434,21 @@ def extract_track_data(track: dict, include_extras: bool = False) -> dict:
 
     if include_extras:
         previews = attrs.get("previews", [])
-        data.update({
-            "track_number": attrs.get("trackNumber", ""),
-            "disc_number": attrs.get("discNumber", ""),
-            "has_lyrics": attrs.get("hasLyrics", False),
-            "catalog_id": play_params.get("catalogId", ""),
-            "composer": attrs.get("composerName", ""),
-            "isrc": isrc,
-            "is_explicit": attrs.get("contentRating") == "explicit",
-            "preview_url": previews[0].get("url", "") if previews else "",
-            "artwork_url": attrs.get("artwork", {}).get("url", "").replace("{w}x{h}", "500x500"),
-        })
+        data.update(
+            {
+                "track_number": attrs.get("trackNumber", ""),
+                "disc_number": attrs.get("discNumber", ""),
+                "has_lyrics": attrs.get("hasLyrics", False),
+                "catalog_id": play_params.get("catalogId", ""),
+                "composer": attrs.get("composerName", ""),
+                "isrc": isrc,
+                "is_explicit": attrs.get("contentRating") == "explicit",
+                "preview_url": previews[0].get("url", "") if previews else "",
+                "artwork_url": attrs.get("artwork", {})
+                .get("url", "")
+                .replace("{w}x{h}", "500x500"),
+            }
+        )
 
     # Cache track metadata for later ID lookups (e.g., removal by catalog ID)
     if track_id and name:
@@ -462,8 +479,17 @@ def write_tracks_csv(track_data: list[dict], csv_path: Path, include_extras: boo
     """
     csv_fields = ["name", "duration", "artist", "album", "year", "genre", "explicit", "id"]
     if include_extras:
-        csv_fields += ["track_number", "disc_number", "has_lyrics", "catalog_id",
-                       "composer", "isrc", "is_explicit", "preview_url", "artwork_url"]
+        csv_fields += [
+            "track_number",
+            "disc_number",
+            "has_lyrics",
+            "catalog_id",
+            "composer",
+            "isrc",
+            "is_explicit",
+            "preview_url",
+            "artwork_url",
+        ]
 
     with open(csv_path, "w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=csv_fields, extrasaction="ignore")
@@ -573,8 +599,17 @@ def format_output(
             result_parts.append(json.dumps(items, indent=2))
         else:
             # Filter to standard fields only
-            standard_keys = {"name", "duration", "artist", "album", "year", "genre", "id",
-                           "track_count", "release_date"}
+            standard_keys = {
+                "name",
+                "duration",
+                "artist",
+                "album",
+                "year",
+                "genre",
+                "id",
+                "track_count",
+                "release_date",
+            }
             filtered = [{k: v for k, v in item.items() if k in standard_keys} for item in items]
             result_parts.append(json.dumps(filtered, indent=2))
     elif format == "csv":
@@ -583,8 +618,17 @@ def format_output(
         if items and "duration" in items[0]:
             csv_fields = ["name", "duration", "artist", "album", "year", "genre", "id"]
             if full:
-                csv_fields += ["track_number", "disc_number", "has_lyrics", "catalog_id",
-                               "composer", "isrc", "is_explicit", "preview_url", "artwork_url"]
+                csv_fields += [
+                    "track_number",
+                    "disc_number",
+                    "has_lyrics",
+                    "catalog_id",
+                    "composer",
+                    "isrc",
+                    "is_explicit",
+                    "preview_url",
+                    "artwork_url",
+                ]
         else:
             csv_fields = list(items[0].keys()) if items else []
         writer = csv.DictWriter(output, fieldnames=csv_fields, extrasaction="ignore")
@@ -609,7 +653,9 @@ def format_output(
             result_parts.append(f"=== {len(items)} items ===\n")
             for item in items[:200]:
                 if "artist" in item and "name" in item:
-                    result_parts.append(f"{item['name']} - {item.get('artist', '')} {item.get('id', '')}")
+                    result_parts.append(
+                        f"{item['name']} - {item.get('artist', '')} {item.get('id', '')}"
+                    )
                 elif "name" in item:
                     result_parts.append(f"{item['name']} {item.get('id', '')}")
     # format="none" - skip response body, only show export info
@@ -625,8 +671,17 @@ def format_output(
             if items and "duration" in items[0]:
                 csv_fields = ["name", "duration", "artist", "album", "year", "genre", "id"]
                 if full:
-                    csv_fields += ["track_number", "disc_number", "has_lyrics", "catalog_id",
-                                   "composer", "isrc", "is_explicit", "preview_url", "artwork_url"]
+                    csv_fields += [
+                        "track_number",
+                        "disc_number",
+                        "has_lyrics",
+                        "catalog_id",
+                        "composer",
+                        "isrc",
+                        "is_explicit",
+                        "preview_url",
+                        "artwork_url",
+                    ]
             else:
                 csv_fields = list(items[0].keys()) if items else []
 
@@ -637,9 +692,33 @@ def format_output(
         else:  # json
             file_path = cache_dir / f"{file_prefix}_{timestamp}.json"
             with open(file_path, "w", encoding="utf-8") as f:
-                json.dump(items if full else [{k: v for k, v in item.items()
-                         if k in {"name", "duration", "artist", "album", "year", "genre", "id",
-                                  "track_count", "release_date"}} for item in items], f, indent=2)
+                json.dump(
+                    (
+                        items
+                        if full
+                        else [
+                            {
+                                k: v
+                                for k, v in item.items()
+                                if k
+                                in {
+                                    "name",
+                                    "duration",
+                                    "artist",
+                                    "album",
+                                    "year",
+                                    "genre",
+                                    "id",
+                                    "track_count",
+                                    "release_date",
+                                }
+                            }
+                            for item in items
+                        ]
+                    ),
+                    f,
+                    indent=2,
+                )
 
         result_parts.append(f"Exported {len(items)} items: {file_path}")
         result_parts.append(f"Resource: exports://{file_path.name}")
@@ -664,6 +743,7 @@ def get_storefront() -> str:
     """Get storefront from preferences, defaulting to 'us'."""
     prefs = get_user_preferences()
     return prefs.get("storefront", DEFAULT_STOREFRONT)
+
 
 mcp = FastMCP("AppleMusicAPI")
 
@@ -832,7 +912,9 @@ def _detect_id_type(id_str: str) -> str:
         return "playlist"
     elif id_str.isdigit() and len(id_str) >= MIN_CATALOG_ID_LENGTH:
         return "catalog"
-    elif len(id_str) >= 12 and re.match(r'^[A-Fa-f0-9]+$', id_str) and re.search(r'[A-Fa-f]', id_str):
+    elif (
+        len(id_str) >= 12 and re.match(r"^[A-Fa-f0-9]+$", id_str) and re.search(r"[A-Fa-f]", id_str)
+    ):
         return "persistent"
     else:
         return "unknown"
@@ -916,10 +998,7 @@ def _resolve_playlist(playlist: str) -> ResolvedPlaylist:
     playlist = playlist.strip()
 
     if not playlist:
-        return ResolvedPlaylist(
-            raw_input=playlist,
-            error="Error: playlist parameter required"
-        )
+        return ResolvedPlaylist(raw_input=playlist, error="Error: playlist parameter required")
 
     # Real playlist IDs are "p." followed by alphanumeric chars only (no spaces/punctuation)
     # This correctly treats "p.s. I love you" as a name, not an ID
@@ -929,7 +1008,7 @@ def _resolve_playlist(playlist: str) -> ResolvedPlaylist:
         return ResolvedPlaylist(
             raw_input=playlist,
             api_id=playlist,
-            applescript_name=None  # Not available without lookup
+            applescript_name=None,  # Not available without lookup
         )
 
     # User provided a name - try to find API ID first (faster than AppleScript)
@@ -943,7 +1022,7 @@ def _resolve_playlist(playlist: str) -> ResolvedPlaylist:
             raw_input=playlist,
             api_id=api_id,
             applescript_name=matched_name,  # Use the actual matched name
-            fuzzy_match=fuzzy_match
+            fuzzy_match=fuzzy_match,
         )
 
     # Not found via API - try AppleScript-based fuzzy matching if available
@@ -954,21 +1033,21 @@ def _resolve_playlist(playlist: str) -> ResolvedPlaylist:
             def playlist_name_extractor(pl: dict) -> str:
                 return pl.get("name", "")
 
-            matched, fuzzy_result = _fuzzy_match_entity(playlist, playlists, playlist_name_extractor)
+            matched, fuzzy_result = _fuzzy_match_entity(
+                playlist, playlists, playlist_name_extractor
+            )
             if matched:
                 matched_name = matched.get("name", playlist)
                 return ResolvedPlaylist(
                     raw_input=playlist,
                     api_id=None,
                     applescript_name=matched_name,  # Use actual matched name
-                    fuzzy_match=fuzzy_result
+                    fuzzy_match=fuzzy_result,
                 )
 
     # Fall back to raw input for AppleScript
     return ResolvedPlaylist(
-        raw_input=playlist,
-        api_id=None,
-        applescript_name=playlist  # Use as-is for AppleScript
+        raw_input=playlist, api_id=None, applescript_name=playlist  # Use as-is for AppleScript
     )
 
 
@@ -1002,7 +1081,12 @@ def _detect_input_type(value: str) -> InputType:
         return InputType.CATALOG_ID
 
     # Persistent IDs from AppleScript are 12+ hex chars with no spaces, must contain at least one letter
-    if len(value) >= 12 and " " not in value and re.match(r'^[A-Fa-f0-9]+$', value) and re.search(r'[A-Fa-f]', value):
+    if (
+        len(value) >= 12
+        and " " not in value
+        and re.match(r"^[A-Fa-f0-9]+$", value)
+        and re.search(r"[A-Fa-f]", value)
+    ):
         return InputType.PERSISTENT_ID
 
     # Default to name
@@ -1037,12 +1121,7 @@ def _resolve_input(
     """
     value = value.strip()
     if not value:
-        return [ResolvedInput(
-            input_type=InputType.NAME,
-            value="",
-            raw=value,
-            error="Empty input"
-        )]
+        return [ResolvedInput(input_type=InputType.NAME, value="", raw=value, error="Empty input")]
 
     results = []
 
@@ -1051,63 +1130,72 @@ def _resolve_input(
         try:
             items = json.loads(value)
             if not isinstance(items, list):
-                return [ResolvedInput(
-                    input_type=InputType.NAME,
-                    value=value,
-                    raw=value,
-                    error="JSON must be an array"
-                )]
+                return [
+                    ResolvedInput(
+                        input_type=InputType.NAME,
+                        value=value,
+                        raw=value,
+                        error="JSON must be an array",
+                    )
+                ]
 
             for item in items:
                 if isinstance(item, dict):
                     name = item.get("name", "")
                     item_artist = item.get("artist", "") or artist
                     if not name:
-                        results.append(ResolvedInput(
-                            input_type=InputType.JSON_OBJECT,
-                            value="",
-                            artist=item_artist,
-                            raw=str(item),
-                            error="Object missing 'name' field"
-                        ))
+                        results.append(
+                            ResolvedInput(
+                                input_type=InputType.JSON_OBJECT,
+                                value="",
+                                artist=item_artist,
+                                raw=str(item),
+                                error="Object missing 'name' field",
+                            )
+                        )
                     else:
-                        results.append(ResolvedInput(
-                            input_type=InputType.JSON_OBJECT,
-                            value=name,
-                            artist=item_artist,
-                            raw=str(item)
-                        ))
+                        results.append(
+                            ResolvedInput(
+                                input_type=InputType.JSON_OBJECT,
+                                value=name,
+                                artist=item_artist,
+                                raw=str(item),
+                            )
+                        )
                 elif isinstance(item, str):
                     # JSON array of strings treated as names
                     input_type = _detect_input_type(item)
-                    results.append(ResolvedInput(
-                        input_type=input_type,
-                        value=item.strip(),
-                        artist=artist,
-                        raw=item
-                    ))
+                    results.append(
+                        ResolvedInput(
+                            input_type=input_type, value=item.strip(), artist=artist, raw=item
+                        )
+                    )
                 else:
-                    results.append(ResolvedInput(
-                        input_type=InputType.NAME,
-                        value=str(item),
-                        raw=str(item),
-                        error="Invalid item type in array"
-                    ))
+                    results.append(
+                        ResolvedInput(
+                            input_type=InputType.NAME,
+                            value=str(item),
+                            raw=str(item),
+                            error="Invalid item type in array",
+                        )
+                    )
 
-            return results if results else [ResolvedInput(
-                input_type=InputType.NAME,
-                value="",
-                raw=value,
-                error="Empty JSON array"
-            )]
+            return (
+                results
+                if results
+                else [
+                    ResolvedInput(
+                        input_type=InputType.NAME, value="", raw=value, error="Empty JSON array"
+                    )
+                ]
+            )
 
         except json.JSONDecodeError as e:
-            return [ResolvedInput(
-                input_type=InputType.NAME,
-                value=value,
-                raw=value,
-                error=f"Invalid JSON: {e}"
-            )]
+            return [
+                ResolvedInput(
+                    input_type=InputType.NAME, value=value, raw=value, error=f"Invalid JSON: {e}"
+                )
+            ]
 
     # 2. CSV detection (contains comma, not JSON)
     if "," in value:
@@ -1115,27 +1203,18 @@ def _resolve_input(
             item = item.strip()
             if item:
                 input_type = _detect_input_type(item)
-                results.append(ResolvedInput(
-                    input_type=input_type,
-                    value=item,
-                    artist=artist,
-                    raw=item
-                ))
-        return results if results else [ResolvedInput(
-            input_type=InputType.NAME,
-            value="",
-            raw=value,
-            error="Empty CSV"
-        )]
+                results.append(
+                    ResolvedInput(input_type=input_type, value=item, artist=artist, raw=item)
+                )
+        return (
+            results
+            if results
+            else [ResolvedInput(input_type=InputType.NAME, value="", raw=value, error="Empty CSV")]
+        )
 
     # 3. Single value - detect type
     input_type = _detect_input_type(value)
-    return [ResolvedInput(
-        input_type=input_type,
-        value=value,
-        artist=artist,
-        raw=value
-    )]
+    return [ResolvedInput(input_type=input_type, value=value, artist=artist, raw=value)]
 
 
 def _resolve_track(track: str, artist: str = "") -> list[ResolvedInput]:
@@ -1407,9 +1486,7 @@ def _search_library_songs(query: str, limit: int = 5) -> list[dict]:
     return []
 
 
-def _find_track_id(
-    name: str, artist: str = ""
-) -> tuple[str | None, str | None, str]:
+def _find_track_id(name: str, artist: str = "") -> tuple[str | None, str | None, str]:
     """Find a track by name, searching library first then catalog.
 
     This is the canonical way to find a track - always prefers library
@@ -1480,9 +1557,7 @@ def _find_track_id(
     return None, None, ""
 
 
-def _add_to_library_api(
-    catalog_ids: list[str], content_type: str = "songs"
-) -> tuple[bool, str]:
+def _add_to_library_api(catalog_ids: list[str], content_type: str = "songs") -> tuple[bool, str]:
     """Add content to library by catalog ID.
 
     Args:
@@ -1682,13 +1757,15 @@ def _playlist_list(
             if not as_playlists:
                 return "No playlists in library"
             for p in as_playlists:
-                playlist_data.append({
-                    "id": p.get("id", ""),
-                    "name": p.get("name", "Unknown"),
-                    "track_count": p.get("track_count", 0),
-                    "smart": p.get("smart", False),
-                    "can_edit": True,  # AS can edit any playlist
-                })
+                playlist_data.append(
+                    {
+                        "id": p.get("id", ""),
+                        "name": p.get("name", "Unknown"),
+                        "track_count": p.get("track_count", 0),
+                        "smart": p.get("smart", False),
+                        "can_edit": True,  # AS can edit any playlist
+                    }
+                )
             return format_output(playlist_data, format, export, full, "playlists")
         # AppleScript failed - fall through to API
 
@@ -1722,16 +1799,20 @@ def _playlist_list(
             attrs = playlist.get("attributes", {})
             desc = attrs.get("description", {})
 
-            playlist_data.append({
-                "id": playlist.get("id", ""),
-                "name": attrs.get("name", "Unknown"),
-                "can_edit": attrs.get("canEdit", False),
-                "is_public": attrs.get("isPublic", False),
-                "date_added": attrs.get("dateAdded", ""),
-                "last_modified": attrs.get("lastModifiedDate", ""),
-                "description": desc.get("standard", "") if isinstance(desc, dict) else str(desc),
-                "has_catalog": attrs.get("hasCatalog", False),
-            })
+            playlist_data.append(
+                {
+                    "id": playlist.get("id", ""),
+                    "name": attrs.get("name", "Unknown"),
+                    "can_edit": attrs.get("canEdit", False),
+                    "is_public": attrs.get("isPublic", False),
+                    "date_added": attrs.get("dateAdded", ""),
+                    "last_modified": attrs.get("lastModifiedDate", ""),
+                    "description": (
+                        desc.get("standard", "") if isinstance(desc, dict) else str(desc)
+                    ),
+                    "has_catalog": attrs.get("hasCatalog", False),
+                }
+            )
 
         # Add token warning if text format
         warning = get_token_expiration_warning()
@@ -1785,16 +1866,18 @@ def _playlist_tracks(
         # Format AppleScript results
         track_data = []
         for t in result:
-            track_data.append({
-                "name": t.get("name", "Unknown"),
-                "artist": t.get("artist", "Unknown"),
-                "album": t.get("album", ""),
-                "duration": t.get("duration", "0:00"),
-                "genre": t.get("genre", ""),
-                "year": t.get("year", ""),
-                "explicit": "Unknown",  # Will be enriched below if fetch_explicit=True
-                "id": t.get("id", ""),
-            })
+            track_data.append(
+                {
+                    "name": t.get("name", "Unknown"),
+                    "artist": t.get("artist", "Unknown"),
+                    "album": t.get("album", ""),
+                    "duration": t.get("duration", "0:00"),
+                    "genre": t.get("genre", ""),
+                    "year": t.get("year", ""),
+                    "explicit": "Unknown",  # Will be enriched below if fetch_explicit=True
+                    "id": t.get("id", ""),
+                }
+            )
 
         # Enrich with explicit status via API if requested
         # Uses TrackCache for ID-based caching (persistent, library, catalog IDs)
@@ -1835,7 +1918,10 @@ def _playlist_tracks(
                         # Find matching playlist by name
                         for pl in playlists:
                             pl_name = pl.get("attributes", {}).get("name", "")
-                            if pl_name.lower() == resolved.applescript_name.lower() or resolved.applescript_name.lower() in pl_name.lower():
+                            if (
+                                pl_name.lower() == resolved.applescript_name.lower()
+                                or resolved.applescript_name.lower() in pl_name.lower()
+                            ):
                                 api_playlist_id = pl.get("id")
                                 break
 
@@ -1880,7 +1966,9 @@ def _playlist_tracks(
                                 track_name = _normalize_for_match(attrs.get("name", ""))
                                 track_artist = _normalize_for_match(attrs.get("artistName", ""))
                                 track_album = _normalize_for_match(attrs.get("albumName", ""))
-                                explicit = "Yes" if attrs.get("contentRating") == "explicit" else "No"
+                                explicit = (
+                                    "Yes" if attrs.get("contentRating") == "explicit" else "No"
+                                )
 
                                 api_data = {
                                     "library_id": library_id,
@@ -1899,7 +1987,9 @@ def _playlist_tracks(
                                     api_track_map_partial[partial_key] = api_data
 
                                 # Name-only map (only use if name is unique)
-                                api_track_name_counts[track_name] = api_track_name_counts.get(track_name, 0) + 1
+                                api_track_name_counts[track_name] = (
+                                    api_track_name_counts.get(track_name, 0) + 1
+                                )
                                 api_track_map_name[track_name] = api_data
 
                             # Match AppleScript tracks to API tracks and cache
@@ -1954,7 +2044,8 @@ def _playlist_tracks(
         if filter:
             filter_lower = filter.lower()
             track_data = [
-                t for t in track_data
+                t
+                for t in track_data
                 if filter_lower in t["name"].lower() or filter_lower in t["artist"].lower()
             ]
 
@@ -1964,8 +2055,15 @@ def _playlist_tracks(
             return error
 
         safe_name = "".join(c if c.isalnum() else "_" for c in resolved.applescript_name)
-        result = format_output(track_data, format, export, full, f"playlist_{safe_name}",
-                           total_count=total_count, offset=offset)
+        result = format_output(
+            track_data,
+            format,
+            export,
+            full,
+            f"playlist_{safe_name}",
+            total_count=total_count,
+            offset=offset,
+        )
 
         # Add timing and stats
         elapsed = time.time() - start_time
@@ -1982,7 +2080,7 @@ def _playlist_tracks(
                     "cache_hits": query_stats["cache_hits"],
                     "cache_misses": query_stats["cache_misses"],
                     "api_calls": query_stats["api_calls"],
-                }
+                },
             )
 
         fuzzy_info = _format_fuzzy_match(resolved.fuzzy_match)
@@ -2033,9 +2131,16 @@ def _playlist_tracks(
             # In optimized path, we don't know total count - use fetched count
             total_count = len(all_tracks)
 
-            safe_id = resolved.api_id.replace('.', '_')
-            result = format_output(track_data, format, export, full, f"playlist_{safe_id}",
-                               total_count=total_count, offset=offset)
+            safe_id = resolved.api_id.replace(".", "_")
+            result = format_output(
+                track_data,
+                format,
+                export,
+                full,
+                f"playlist_{safe_id}",
+                total_count=total_count,
+                offset=offset,
+            )
 
             # Add stats line
             elapsed = time.time() - start_time
@@ -2072,7 +2177,8 @@ def _playlist_tracks(
         if filter:
             filter_lower = filter.lower()
             track_data = [
-                t for t in track_data
+                t
+                for t in track_data
                 if filter_lower in t["name"].lower() or filter_lower in t["artist"].lower()
             ]
 
@@ -2081,9 +2187,16 @@ def _playlist_tracks(
         if error:
             return error
 
-        safe_id = resolved.api_id.replace('.', '_')
-        result = format_output(track_data, format, export, full, f"playlist_{safe_id}",
-                           total_count=total_count, offset=offset)
+        safe_id = resolved.api_id.replace(".", "_")
+        result = format_output(
+            track_data,
+            format,
+            export,
+            full,
+            f"playlist_{safe_id}",
+            total_count=total_count,
+            offset=offset,
+        )
 
         # Add stats line
         elapsed = time.time() - start_time
@@ -2134,9 +2247,11 @@ def _playlist_search(
             artist = t.get("artist", "")
             album = t.get("album", "")
             track_id = t.get("id", "")
-            if (query_lower in name.lower() or
-                query_lower in artist.lower() or
-                query_lower in album.lower()):
+            if (
+                query_lower in name.lower()
+                or query_lower in artist.lower()
+                or query_lower in album.lower()
+            ):
                 matches.append({"name": name, "artist": artist, "id": track_id})
 
     fuzzy_info = _format_fuzzy_match(resolved.fuzzy_match)
@@ -2205,9 +2320,7 @@ def _get_playlist_track_names(playlist_id: str) -> tuple[bool, list[dict] | str]
         return False, str(e)
 
 
-def _find_track_in_list(
-    tracks: list[dict], track_name: str, artist: str = ""
-) -> list[str]:
+def _find_track_in_list(tracks: list[dict], track_name: str, artist: str = "") -> list[str]:
     """Find matching tracks in a list by name/artist."""
     track_lower = track_name.lower()
     artist_lower = artist.lower() if artist else ""
@@ -2233,7 +2346,7 @@ def _playlist_create(name: str, description: str = "") -> str:
             audit_log.log_action(
                 "create_playlist",
                 {"name": name, "playlist_id": result, "method": "applescript"},
-                undo_info={"playlist_name": name, "playlist_id": result}
+                undo_info={"playlist_name": name, "playlist_id": result},
             )
             return f"Created playlist '{name}' (ID: {result})"
 
@@ -2244,7 +2357,10 @@ def _playlist_create(name: str, description: str = "") -> str:
         body = {"attributes": {"name": name, "description": description}}
 
         response = requests.post(
-            f"{BASE_URL}/me/library/playlists", headers=headers, json=body, timeout=REQUEST_TIMEOUT,
+            f"{BASE_URL}/me/library/playlists",
+            headers=headers,
+            json=body,
+            timeout=REQUEST_TIMEOUT,
         )
         response.raise_for_status()
         data = response.json()
@@ -2253,7 +2369,7 @@ def _playlist_create(name: str, description: str = "") -> str:
         audit_log.log_action(
             "create_playlist",
             {"name": name, "playlist_id": playlist_id, "method": "api"},
-            undo_info={"playlist_name": name, "playlist_id": playlist_id}
+            undo_info={"playlist_name": name, "playlist_id": playlist_id},
         )
         return f"Created playlist '{name}' (ID: {playlist_id})"
 
@@ -2436,7 +2552,11 @@ def _playlist_add(
         for r in resolved_tracks:
             if r.error:
                 return f"Error parsing track input: {r.error}"
-            if r.input_type in (InputType.CATALOG_ID, InputType.LIBRARY_ID, InputType.PERSISTENT_ID):
+            if r.input_type in (
+                InputType.CATALOG_ID,
+                InputType.LIBRARY_ID,
+                InputType.PERSISTENT_ID,
+            ):
                 ids_list.append(r.value)
             elif r.input_type in (InputType.NAME, InputType.JSON_OBJECT):
                 names_list.append({"name": r.value, "artist": r.artist})
@@ -2450,7 +2570,7 @@ def _playlist_add(
         resolved = ResolvedPlaylist(
             raw_input=playlist_str,
             api_id=playlist_str,
-            applescript_name=None  # Not available for ID-only input
+            applescript_name=None,  # Not available for ID-only input
         )
     else:
         # Resolve playlist with fuzzy matching
@@ -2466,7 +2586,7 @@ def _playlist_add(
                 raw_input=resolved.raw_input,
                 api_id=None,
                 applescript_name=resolved.applescript_name,
-                fuzzy_match=resolved.fuzzy_match
+                fuzzy_match=resolved.fuzzy_match,
             )
 
     # Resolve album input - get all tracks from album(s)
@@ -2504,7 +2624,9 @@ def _playlist_add(
                         timeout=REQUEST_TIMEOUT,
                     )
                     if response.status_code == 200:
-                        albums = response.json().get("results", {}).get("albums", {}).get("data", [])
+                        albums = (
+                            response.json().get("results", {}).get("albums", {}).get("data", [])
+                        )
                         # Find best match
                         found_album = None
                         for alb in albums:
@@ -2532,7 +2654,9 @@ def _playlist_add(
                             )
                             if track_response.status_code == 200:
                                 album_tracks = track_response.json().get("data", [])
-                                steps.append(f"Album '{album_name}': found {len(album_tracks)} tracks")
+                                steps.append(
+                                    f"Album '{album_name}': found {len(album_tracks)} tracks"
+                                )
                         else:
                             steps.append(f"Album '{r.value}': not found in catalog")
                     else:
@@ -2607,11 +2731,18 @@ def _playlist_add(
                     # Add to library first
                     steps.append(f"Adding catalog ID {track_id} to library...")
                     params = {"ids[songs]": track_id}
-                    requests.post(f"{BASE_URL}/me/library", headers=headers, params=params, timeout=REQUEST_TIMEOUT)
+                    requests.post(
+                        f"{BASE_URL}/me/library",
+                        headers=headers,
+                        params=params,
+                        timeout=REQUEST_TIMEOUT,
+                    )
 
                     # Get catalog info
                     response = requests.get(
-                        f"{BASE_URL}/catalog/{get_storefront()}/songs/{track_id}", headers=headers, timeout=REQUEST_TIMEOUT,
+                        f"{BASE_URL}/catalog/{get_storefront()}/songs/{track_id}",
+                        headers=headers,
+                        timeout=REQUEST_TIMEOUT,
                     )
                     if response.status_code != 200:
                         errors.append(f"Could not get info for {track_id}")
@@ -2625,7 +2756,9 @@ def _playlist_add(
                 else:
                     # Library ID - look up info
                     response = requests.get(
-                        f"{BASE_URL}/me/library/songs/{track_id}", headers=headers, timeout=REQUEST_TIMEOUT,
+                        f"{BASE_URL}/me/library/songs/{track_id}",
+                        headers=headers,
+                        timeout=REQUEST_TIMEOUT,
                     )
                     if response.status_code != 200:
                         errors.append(f"Could not get info for {track_id}")
@@ -2668,13 +2801,17 @@ def _playlist_add(
             audit_log.log_action(
                 "add_to_playlist",
                 {"playlist": resolved.applescript_name, "tracks": added, "method": "applescript"},
-                undo_info={"playlist_name": resolved.applescript_name, "tracks": added}
+                undo_info={"playlist_name": resolved.applescript_name, "tracks": added},
             )
 
         # Build result
         fuzzy_info = _format_fuzzy_match(resolved.fuzzy_match)
         if added and not errors:
-            return f"Added {len(added)} track(s) to '{resolved.applescript_name}':\n" + "\n".join(f"  + {t}" for t in added) + fuzzy_info
+            return (
+                f"Added {len(added)} track(s) to '{resolved.applescript_name}':\n"
+                + "\n".join(f"  + {t}" for t in added)
+                + fuzzy_info
+            )
         elif added and errors:
             msg = f"Added {len(added)} track(s), {len(errors)} failed:\n"
             msg += "\n".join(f"  + {t}" for t in added)
@@ -2684,7 +2821,9 @@ def _playlist_add(
             return msg + fuzzy_info
         elif errors:
             msg = "Errors:\n" + "\n".join(f"  - {e}" for e in errors)
-            if auto_search is False or (auto_search is None and not get_user_preferences().get("auto_search")):
+            if auto_search is False or (
+                auto_search is None and not get_user_preferences().get("auto_search")
+            ):
                 msg += "\n\n💡 Tip: Enable auto_search to automatically find and add tracks from catalog"
             return msg + fuzzy_info
         else:
@@ -2711,7 +2850,9 @@ def _playlist_add(
                     # API catalog search failed — try UI fallback for add-to-playlist
                     if APPLESCRIPT_AVAILABLE and resolved.applescript_name:
                         search_q = f"{name} {track_artist}".strip() if track_artist else name
-                        ui_ok, ui_msg = asc.ui_add_to_playlist(resolved.applescript_name, search_q, track_artist)
+                        ui_ok, ui_msg = asc.ui_add_to_playlist(
+                            resolved.applescript_name, search_q, track_artist
+                        )
                         if ui_ok:
                             steps.append(f"[UI] {ui_msg}")
                             continue  # Process next track, don't return early
@@ -2736,7 +2877,10 @@ def _playlist_add(
                 # Add to library
                 params = {"ids[songs]": track_id}
                 response = requests.post(
-                    f"{BASE_URL}/me/library", headers=headers, params=params, timeout=REQUEST_TIMEOUT,
+                    f"{BASE_URL}/me/library",
+                    headers=headers,
+                    params=params,
+                    timeout=REQUEST_TIMEOUT,
                 )
                 if response.status_code not in (200, 202):
                     steps.append(f"  Warning: library add returned {response.status_code}")
@@ -2768,11 +2912,18 @@ def _playlist_add(
                             )
                             if lib_response.status_code == 200:
                                 lib_data = lib_response.json()
-                                songs = lib_data.get("results", {}).get("library-songs", {}).get("data", [])
+                                songs = (
+                                    lib_data.get("results", {})
+                                    .get("library-songs", {})
+                                    .get("data", [])
+                                )
                                 for song in songs:
                                     song_attrs = song.get("attributes", {})
-                                    if (song_attrs.get("name", "").lower() == name.lower() and
-                                        artist_name.lower() in song_attrs.get("artistName", "").lower()):
+                                    if (
+                                        song_attrs.get("name", "").lower() == name.lower()
+                                        and artist_name.lower()
+                                        in song_attrs.get("artistName", "").lower()
+                                    ):
                                         found_id = song["id"]
                                         break
                                 if found_id:
@@ -2781,7 +2932,9 @@ def _playlist_add(
                             library_ids.append(found_id)
                             steps.append(f"  Found in library: {name} (ID: {found_id})")
                         else:
-                            steps.append(f"  Warning: could not find '{name}' in library after adding")
+                            steps.append(
+                                f"  Warning: could not find '{name}' in library after adding"
+                            )
                 else:
                     steps.append(f"  Warning: could not get catalog info for {track_id}")
             else:
@@ -2834,9 +2987,15 @@ def _playlist_add(
         if response.status_code == 204:
             steps.append(f"Added {len(library_ids)} track(s) to playlist")
         elif response.status_code == 403:
-            return "Error: Cannot edit this playlist (not API-created). Use playlist_name on macOS.\n" + "\n".join(steps)
+            return (
+                "Error: Cannot edit this playlist (not API-created). Use playlist_name on macOS.\n"
+                + "\n".join(steps)
+            )
         elif response.status_code == 500:
-            return "Error: Cannot edit this playlist (not API-created). Use playlist_name on macOS.\n" + "\n".join(steps)
+            return (
+                "Error: Cannot edit this playlist (not API-created). Use playlist_name on macOS.\n"
+                + "\n".join(steps)
+            )
         else:
             response.raise_for_status()
 
@@ -2850,7 +3009,7 @@ def _playlist_add(
         audit_log.log_action(
             "add_to_playlist",
             {"playlist": resolved.api_id, "tracks": added_tracks, "method": "api"},
-            undo_info={"playlist_id": resolved.api_id, "library_ids": library_ids}
+            undo_info={"playlist_id": resolved.api_id, "library_ids": library_ids},
         )
         return "\n".join(steps)
 
@@ -2860,10 +3019,7 @@ def _playlist_add(
         return f"Error: {str(e)}\n" + "\n".join(steps)
 
 
-def _playlist_copy(
-    source: str = "",
-    new_name: str = ""
-) -> str:
+def _playlist_copy(source: str = "", new_name: str = "") -> str:
     """Internal: Copy playlist."""
     # Validate inputs
     if not new_name:
@@ -2904,7 +3060,9 @@ def _playlist_copy(
                 track_name = track.get("name", "")
                 artist = track.get("artist", "")
                 if track_name:
-                    success, _ = asc.add_track_to_playlist(new_name, track_name, artist if artist else None)
+                    success, _ = asc.add_track_to_playlist(
+                        new_name, track_name, artist if artist else None
+                    )
                     if success:
                         added += 1
                     else:
@@ -2916,15 +3074,26 @@ def _playlist_copy(
                     failed_list += f", ... (+{len(failed) - 5} more)"
                 audit_log.log_action(
                     "copy_playlist",
-                    {"source": resolved.applescript_name, "destination": new_name, "track_count": added, "failed_count": len(failed), "method": "applescript"},
-                    undo_info={"playlist_name": new_name, "playlist_id": new_playlist_id}
+                    {
+                        "source": resolved.applescript_name,
+                        "destination": new_name,
+                        "track_count": added,
+                        "failed_count": len(failed),
+                        "method": "applescript",
+                    },
+                    undo_info={"playlist_name": new_name, "playlist_id": new_playlist_id},
                 )
                 fuzzy_info = _format_fuzzy_match(resolved.fuzzy_match)
                 return f"Created '{new_name}' (ID: {new_playlist_id}) with {added}/{len(source_tracks)} tracks. Failed: {failed_list}{fuzzy_info}"
             audit_log.log_action(
                 "copy_playlist",
-                {"source": resolved.applescript_name, "destination": new_name, "track_count": added, "method": "applescript"},
-                undo_info={"playlist_name": new_name, "playlist_id": new_playlist_id}
+                {
+                    "source": resolved.applescript_name,
+                    "destination": new_name,
+                    "track_count": added,
+                    "method": "applescript",
+                },
+                undo_info={"playlist_name": new_name, "playlist_id": new_playlist_id},
             )
             fuzzy_info = _format_fuzzy_match(resolved.fuzzy_match)
             return f"Created '{new_name}' (ID: {new_playlist_id}) with {added} tracks (macOS){fuzzy_info}"
@@ -2954,7 +3123,10 @@ def _playlist_copy(
         # Create new playlist
         body = {"attributes": {"name": new_name}}
         response = requests.post(
-            f"{BASE_URL}/me/library/playlists", headers=headers, json=body, timeout=REQUEST_TIMEOUT,
+            f"{BASE_URL}/me/library/playlists",
+            headers=headers,
+            json=body,
+            timeout=REQUEST_TIMEOUT,
         )
         response.raise_for_status()
         new_id = response.json()["data"][0]["id"]
@@ -2973,8 +3145,13 @@ def _playlist_copy(
 
         audit_log.log_action(
             "copy_playlist",
-            {"source": resolved.api_id, "destination": new_name, "track_count": len(all_tracks), "method": "api"},
-            undo_info={"playlist_name": new_name, "playlist_id": new_id}
+            {
+                "source": resolved.api_id,
+                "destination": new_name,
+                "track_count": len(all_tracks),
+                "method": "api",
+            },
+            undo_info={"playlist_name": new_name, "playlist_id": new_id},
         )
         fuzzy_info = _format_fuzzy_match(resolved.fuzzy_match)
         return f"Created '{new_name}' (ID: {new_id}) with {len(all_tracks)} tracks{fuzzy_info}"
@@ -3015,7 +3192,9 @@ def playlist(
     if action == "list":
         return _playlist_list(format, export, full)
     elif action == "tracks":
-        return _playlist_tracks(playlist, filter, limit, offset, format, export, full, fetch_explicit)
+        return _playlist_tracks(
+            playlist, filter, limit, offset, format, export, full, fetch_explicit
+        )
     elif action == "search":
         if not query:
             return "Error: query required for search"
@@ -3076,11 +3255,13 @@ def playlist(
             if allow_duplicates:
                 # User explicitly confirmed — recreate at root
                 return _playlist_move_to_root(playlist)
-            return ("Music.app cannot move playlists out of folders via AppleScript. "
-                    "Drag the playlist out of its folder in the Music app sidebar instead.\n\n"
-                    "If you need to do this programmatically, call again with "
-                    "allow_duplicates=True — this recreates the playlist at root "
-                    "with the same tracks, but the playlist ID will change.")
+            return (
+                "Music.app cannot move playlists out of folders via AppleScript. "
+                "Drag the playlist out of its folder in the Music app sidebar instead.\n\n"
+                "If you need to do this programmatically, call again with "
+                "allow_duplicates=True — this recreates the playlist at root "
+                "with the same tracks, but the playlist ID will change."
+            )
         return _playlist_move(playlist, folder_target)
     elif action == "path":
         target = playlist or folder
@@ -3121,7 +3302,9 @@ def library(
     if action == "search":
         if not query:
             return "Error: query is required for search action"
-        return _library_search(query, types, limit, format, export, full, fetch_explicit, clean_only)
+        return _library_search(
+            query, types, limit, format, export, full, fetch_explicit, clean_only
+        )
     elif action == "add":
         return _library_add(track, album, artist)
     elif action == "recently_played":
@@ -3129,7 +3312,9 @@ def library(
     elif action == "recently_added":
         return _library_recently_added(limit, format, export, full)
     elif action == "browse":
-        return _library_browse(item_type, limit, offset, format, export, full, fetch_explicit, clean_only)
+        return _library_browse(
+            item_type, limit, offset, format, export, full, fetch_explicit, clean_only
+        )
     elif action == "rate":
         if not rate_action:
             return "Error: rate_action required (love, dislike, get, set)"
@@ -3259,8 +3444,8 @@ def _library_add(
         catalog_id = song.get("id")
         success, msg = _add_to_library_api([catalog_id], "songs")
         if success:
-            result_name = attrs.get('name', name)
-            result_artist = attrs.get('artistName', 'Unknown')
+            result_name = attrs.get("name", name)
+            result_artist = attrs.get("artistName", "Unknown")
             added_msg = f"{result_name} by {result_artist}"
             if fuzzy_result:
                 added_msg += f" (fuzzy: '{fuzzy_result.query}' → '{fuzzy_result.matched_name}')"
@@ -3278,8 +3463,8 @@ def _library_add(
         catalog_id = album.get("id")
         success, msg = _add_to_library_api([catalog_id], "albums")
         if success:
-            result_name = attrs.get('name', name)
-            result_artist = attrs.get('artistName', 'Unknown')
+            result_name = attrs.get("name", name)
+            result_artist = attrs.get("artistName", "Unknown")
             added_msg = f"Album: {result_name} by {result_artist}"
             if fuzzy_result:
                 added_msg += f" (fuzzy: '{fuzzy_result.query}' → '{fuzzy_result.matched_name}')"
@@ -3445,7 +3630,9 @@ def _catalog_search(
         all_data = {"songs": [], "albums": [], "artists": [], "playlists": [], "music-videos": []}
 
         if "songs" in results:
-            all_data["songs"] = [extract_track_data(s, full) for s in results["songs"].get("data", [])]
+            all_data["songs"] = [
+                extract_track_data(s, full) for s in results["songs"].get("data", [])
+            ]
             # Deduplicate by track ID (API can return duplicates)
             all_data["songs"] = _deduplicate_by_id(all_data["songs"])
             # Filter out explicit content if clean_only is True
@@ -3455,42 +3642,59 @@ def _catalog_search(
         if "albums" in results:
             for album in results["albums"].get("data", []):
                 attrs = album.get("attributes", {})
-                all_data["albums"].append({
-                    "id": album.get("id"), "name": attrs.get("name"),
-                    "artist": attrs.get("artistName"), "track_count": attrs.get("trackCount", 0),
-                    "year": attrs.get("releaseDate", "")[:4],
-                })
+                all_data["albums"].append(
+                    {
+                        "id": album.get("id"),
+                        "name": attrs.get("name"),
+                        "artist": attrs.get("artistName"),
+                        "track_count": attrs.get("trackCount", 0),
+                        "year": attrs.get("releaseDate", "")[:4],
+                    }
+                )
 
         if "artists" in results:
             for artist in results["artists"].get("data", []):
                 attrs = artist.get("attributes", {})
-                all_data["artists"].append({
-                    "id": artist.get("id"), "name": attrs.get("name"),
-                    "genres": attrs.get("genreNames", []),
-                })
+                all_data["artists"].append(
+                    {
+                        "id": artist.get("id"),
+                        "name": attrs.get("name"),
+                        "genres": attrs.get("genreNames", []),
+                    }
+                )
 
         if "playlists" in results:
             for pl in results["playlists"].get("data", []):
                 attrs = pl.get("attributes", {})
-                all_data["playlists"].append({
-                    "id": pl.get("id"), "name": attrs.get("name"),
-                    "curator": attrs.get("curatorName", ""),
-                })
+                all_data["playlists"].append(
+                    {
+                        "id": pl.get("id"),
+                        "name": attrs.get("name"),
+                        "curator": attrs.get("curatorName", ""),
+                    }
+                )
 
         if "music-videos" in results:
             for video in results["music-videos"].get("data", []):
                 attrs = video.get("attributes", {})
-                all_data["music-videos"].append({
-                    "id": video.get("id"),
-                    "name": attrs.get("name", ""),
-                    "artist": attrs.get("artistName", ""),
-                    "duration": format_duration(attrs.get("durationInMillis", 0)),
-                })
+                all_data["music-videos"].append(
+                    {
+                        "id": video.get("id"),
+                        "name": attrs.get("name", ""),
+                        "artist": attrs.get("artistName", ""),
+                        "duration": format_duration(attrs.get("durationInMillis", 0)),
+                    }
+                )
 
         # Handle export (songs only)
         export_msg = ""
         if export not in ("", "none") and all_data["songs"]:
-            export_msg = "\n" + format_output(all_data["songs"], "text", export, full, f"catalog_{query[:20]}").split("\n")[-1]
+            export_msg = (
+                "\n"
+                + format_output(
+                    all_data["songs"], "text", export, full, f"catalog_{query[:20]}"
+                ).split("\n")[-1]
+            )
 
         # JSON format - return all data
         if format == "json":
@@ -3502,12 +3706,16 @@ def _catalog_search(
             output.append(f"=== {len(all_data['songs'])} Songs ===")
             for s in all_data["songs"]:
                 explicit_marker = " [Explicit]" if s.get("explicit") == "Yes" else ""
-                output.append(f"{s['name']} - {s['artist']} ({s['duration']}) {s['album']} [{s['year']}]{explicit_marker} {s['id']}")
+                output.append(
+                    f"{s['name']} - {s['artist']} ({s['duration']}) {s['album']} [{s['year']}]{explicit_marker} {s['id']}"
+                )
 
         if all_data["albums"]:
             output.append(f"\n=== {len(all_data['albums'])} Albums ===")
             for a in all_data["albums"]:
-                output.append(f"  {a['name']} - {a['artist']} ({a['track_count']} tracks) [{a['year']}] {a['id']}")
+                output.append(
+                    f"  {a['name']} - {a['artist']} ({a['track_count']} tracks) [{a['year']}] {a['id']}"
+                )
 
         if all_data["artists"]:
             output.append(f"\n=== {len(all_data['artists'])} Artists ===")
@@ -3630,8 +3838,15 @@ def _catalog_album_tracks(
         if error:
             return error
 
-        return format_output(track_data, format, export, full, f"album_{album_id.replace('.', '_')}",
-                           total_count=total_count, offset=offset)
+        return format_output(
+            track_data,
+            format,
+            export,
+            full,
+            f"album_{album_id.replace('.', '_')}",
+            total_count=total_count,
+            offset=offset,
+        )
 
     except requests.exceptions.RequestException as e:
         return f"API Error: {str(e)}"
@@ -3777,16 +3992,18 @@ def _library_browse(
                 return f"No {item_type} in library"
             data = []
             for s in as_songs:
-                data.append({
-                    "name": s.get("name", ""),
-                    "artist": s.get("artist", ""),
-                    "album": s.get("album", ""),
-                    "duration": s.get("duration", ""),
-                    "genre": s.get("genre", ""),
-                    "year": s.get("year", ""),
-                    "id": s.get("id", ""),
-                    "explicit": "Unknown",
-                })
+                data.append(
+                    {
+                        "name": s.get("name", ""),
+                        "artist": s.get("artist", ""),
+                        "album": s.get("album", ""),
+                        "duration": s.get("duration", ""),
+                        "genre": s.get("genre", ""),
+                        "year": s.get("year", ""),
+                        "id": s.get("id", ""),
+                        "explicit": "Unknown",
+                    }
+                )
 
             # Enrich with explicit status if requested
             if fetch_explicit or clean_only:
@@ -3807,8 +4024,9 @@ def _library_browse(
             if error:
                 return error
 
-            return format_output(data, format, export, full, "songs",
-                               total_count=total_count, offset=offset)
+            return format_output(
+                data, format, export, full, "songs", total_count=total_count, offset=offset
+            )
         # AppleScript failed - fall through to API
 
     # Fall back to API
@@ -3830,7 +4048,7 @@ def _library_browse(
         api_offset = 0
         fetch_all = limit == 0
         # Need to fetch enough for both offset and limit
-        max_to_fetch = (offset + limit) if not fetch_all else float('inf')
+        max_to_fetch = (offset + limit) if not fetch_all else float("inf")
 
         # Paginate
         while len(all_items) < max_to_fetch:
@@ -3864,19 +4082,30 @@ def _library_browse(
             for album in all_items:
                 attrs = album.get("attributes", {})
                 genres = attrs.get("genreNames", [])
-                data.append({
-                    "id": album.get("id", ""),
-                    "name": attrs.get("name", ""),
-                    "artist": attrs.get("artistName", ""),
-                    "track_count": attrs.get("trackCount", 0),
-                    "genre": genres[0] if genres else "",
-                    "release_date": attrs.get("releaseDate", ""),
-                })
+                data.append(
+                    {
+                        "id": album.get("id", ""),
+                        "name": attrs.get("name", ""),
+                        "artist": attrs.get("artistName", ""),
+                        "track_count": attrs.get("trackCount", 0),
+                        "genre": genres[0] if genres else "",
+                        "release_date": attrs.get("releaseDate", ""),
+                    }
+                )
         elif item_type == "artists":
-            data = [{"id": a.get("id", ""), "name": a.get("attributes", {}).get("name", "")} for a in all_items]
+            data = [
+                {"id": a.get("id", ""), "name": a.get("attributes", {}).get("name", "")}
+                for a in all_items
+            ]
         else:  # videos
-            data = [{"id": v.get("id", ""), "name": v.get("attributes", {}).get("name", ""),
-                     "artist": v.get("attributes", {}).get("artistName", "")} for v in all_items]
+            data = [
+                {
+                    "id": v.get("id", ""),
+                    "name": v.get("attributes", {}).get("name", ""),
+                    "artist": v.get("attributes", {}).get("artistName", ""),
+                }
+                for v in all_items
+            ]
 
         # Filter explicit content if clean_only (songs only, API already has explicit status)
         if item_type == "songs" and clean_only:
@@ -3887,8 +4116,15 @@ def _library_browse(
         if error:
             return error
 
-        return format_output(data, format, export, full, f"library_{item_type}",
-                           total_count=total_count, offset=offset)
+        return format_output(
+            data,
+            format,
+            export,
+            full,
+            f"library_{item_type}",
+            total_count=total_count,
+            offset=offset,
+        )
 
     except requests.exceptions.RequestException as e:
         return f"API Error: {str(e)}"
@@ -3921,14 +4157,16 @@ def _discover_recommendations(limit: int, format: str, export: str, full: bool) 
 
             for item in contents[:8]:
                 item_attrs = item.get("attributes", {})
-                all_items.append({
-                    "category": title,
-                    "name": item_attrs.get("name", "Unknown"),
-                    "artist": item_attrs.get("artistName", ""),
-                    "type": item.get("type", "").replace("library-", ""),
-                    "id": item.get("id"),
-                    "year": item_attrs.get("releaseDate", "")[:4],
-                })
+                all_items.append(
+                    {
+                        "category": title,
+                        "name": item_attrs.get("name", "Unknown"),
+                        "artist": item_attrs.get("artistName", ""),
+                        "type": item.get("type", "").replace("library-", ""),
+                        "id": item.get("id"),
+                        "year": item_attrs.get("releaseDate", "")[:4],
+                    }
+                )
 
         # Apply user's limit to final results
         if limit > 0:
@@ -3963,17 +4201,21 @@ def _discover_heavy_rotation(format: str, export: str, full: bool) -> str:
             attrs = item.get("attributes", {})
             genres = attrs.get("genreNames", [])
 
-            item_data.append({
-                "id": item.get("id", ""),
-                "name": attrs.get("name", ""),
-                "artist": attrs.get("artistName", ""),
-                "type": item.get("type", "").replace("library-", "").replace("-", " "),
-                "track_count": attrs.get("trackCount", ""),
-                "genre": genres[0] if genres else "",
-                "release_date": attrs.get("releaseDate", ""),
-                "date_added": attrs.get("dateAdded", ""),
-                "artwork_url": attrs.get("artwork", {}).get("url", "").replace("{w}x{h}", "500x500"),
-            })
+            item_data.append(
+                {
+                    "id": item.get("id", ""),
+                    "name": attrs.get("name", ""),
+                    "artist": attrs.get("artistName", ""),
+                    "type": item.get("type", "").replace("library-", "").replace("-", " "),
+                    "track_count": attrs.get("trackCount", ""),
+                    "genre": genres[0] if genres else "",
+                    "release_date": attrs.get("releaseDate", ""),
+                    "date_added": attrs.get("dateAdded", ""),
+                    "artwork_url": attrs.get("artwork", {})
+                    .get("url", "")
+                    .replace("{w}x{h}", "500x500"),
+                }
+            )
 
         return format_output(item_data, format, export, full, "heavy_rotation")
 
@@ -4018,17 +4260,21 @@ def _library_recently_added(limit: int, format: str, export: str, full: bool) ->
             attrs = item.get("attributes", {})
             genres = attrs.get("genreNames", [])
 
-            item_data.append({
-                "id": item.get("id", ""),
-                "name": attrs.get("name", ""),
-                "artist": attrs.get("artistName", ""),
-                "type": item.get("type", "").replace("library-", ""),
-                "track_count": attrs.get("trackCount", ""),
-                "genre": genres[0] if genres else "",
-                "release_date": attrs.get("releaseDate", ""),
-                "date_added": attrs.get("dateAdded", ""),
-                "artwork_url": attrs.get("artwork", {}).get("url", "").replace("{w}x{h}", "500x500"),
-            })
+            item_data.append(
+                {
+                    "id": item.get("id", ""),
+                    "name": attrs.get("name", ""),
+                    "artist": attrs.get("artistName", ""),
+                    "type": item.get("type", "").replace("library-", ""),
+                    "track_count": attrs.get("trackCount", ""),
+                    "genre": genres[0] if genres else "",
+                    "release_date": attrs.get("releaseDate", ""),
+                    "date_added": attrs.get("dateAdded", ""),
+                    "artwork_url": attrs.get("artwork", {})
+                    .get("url", "")
+                    .replace("{w}x{h}", "500x500"),
+                }
+            )
 
         return format_output(item_data, format, export, full, "recently_added")
 
@@ -4139,7 +4385,9 @@ def _discover_top_songs(artist: str, storefront: str = "") -> str:
             )
             if response.status_code == 200:
                 data = response.json().get("data", [])
-                artist_actual_name = data[0].get("attributes", {}).get("name", artist) if data else artist
+                artist_actual_name = (
+                    data[0].get("attributes", {}).get("name", artist) if data else artist
+                )
             else:
                 artist_actual_name = artist
         else:
@@ -4175,7 +4423,9 @@ def _discover_top_songs(artist: str, storefront: str = "") -> str:
             name = attrs.get("name", "Unknown")
             album = attrs.get("albumName", "")
             song_id = song.get("id")
-            output.append(f"{i}. {name}" + (f" ({album})" if album else "") + f" [catalog ID: {song_id}]")
+            output.append(
+                f"{i}. {name}" + (f" ({album})" if album else "") + f" [catalog ID: {song_id}]"
+            )
 
         return "\n".join(output) if len(output) > 1 else "No top songs found"
 
@@ -4205,7 +4455,9 @@ def _discover_similar_artists(artist: str, storefront: str = "") -> str:
             )
             if response.status_code == 200:
                 data = response.json().get("data", [])
-                artist_actual_name = data[0].get("attributes", {}).get("name", artist) if data else artist
+                artist_actual_name = (
+                    data[0].get("attributes", {}).get("name", artist) if data else artist
+                )
             else:
                 artist_actual_name = artist
         else:
@@ -4357,7 +4609,9 @@ def _library_rate(
         track_artist = r.artist or artist
 
     elif r.input_type == InputType.LIBRARY_ID:
-        return f"Error: Library ID {r.value} not supported for rating - use track name or catalog ID"
+        return (
+            f"Error: Library ID {r.value} not supported for rating - use track name or catalog ID"
+        )
 
     # Now we have track_name, handle each action
     if action == "get":
@@ -4373,7 +4627,9 @@ def _library_rate(
         if not APPLESCRIPT_AVAILABLE:
             return "Error: Star ratings require macOS"
         rating_val = max(0, min(5, stars)) * 20
-        success, result = asc.set_rating(track_name, rating_val, track_artist if track_artist else None)
+        success, result = asc.set_rating(
+            track_name, rating_val, track_artist if track_artist else None
+        )
         if success:
             track_desc = f"{track_name} - {track_artist}" if track_artist else track_name
             audit_log.log_action(
@@ -4409,7 +4665,11 @@ def _library_rate(
                 if success:
                     audit_log.log_action(
                         "rating",
-                        {"track": f"{song_name} by {song_artist}", "type": action, "method": "api_fallback"},
+                        {
+                            "track": f"{song_name} by {song_artist}",
+                            "type": action,
+                            "method": "api_fallback",
+                        },
                     )
                     return f"{action.capitalize()}d: {song_name} by {song_artist}"
                 return f"Error: {msg}"
@@ -4661,11 +4921,13 @@ def catalog(
                     asc.ui_clear_search()
                     lines = [f"=== UI Search: {query} (no API — results from Music.app) ===", ""]
                     for r in results:
-                        artist_str = f" by {r['artist']}" if r.get('artist') else ""
-                        type_str = f" ({r['type']})" if r.get('type') else ""
+                        artist_str = f" by {r['artist']}" if r.get("artist") else ""
+                        type_str = f" ({r['type']})" if r.get("type") else ""
                         lines.append(f"{r['index']}. {r['name']}{type_str}{artist_str}")
                     lines.append("")
-                    lines.append("Note: UI search shows Top Results only. For full catalog search, set up API access.")
+                    lines.append(
+                        "Note: UI search shows Top Results only. For full catalog search, set up API access."
+                    )
                     return "\n".join(lines)
                 asc.ui_clear_search()
             return "Error: API token required for catalog search. Set up API access or use UI search on macOS."
@@ -4733,6 +4995,7 @@ def config(
 
             # Load current config
             from .auth import load_config, get_config_dir as get_auth_config_dir
+
             config = load_config()
 
             # Update preferences
@@ -4774,7 +5037,9 @@ def config(
 
                 output.append("")
                 output.append(f"Current: {get_storefront()}")
-                output.append("Set via: config(action='set-pref', preference='storefront', string_value='xx')")
+                output.append(
+                    "Set via: config(action='set-pref', preference='storefront', string_value='xx')"
+                )
                 return "\n".join(output)
             except Exception as e:
                 return f"Error listing storefronts: {e}"
@@ -4845,7 +5110,9 @@ def config(
             # User Preferences
             prefs = get_user_preferences()
             output.append("Preferences (set via config(action='set-pref', ...)):")
-            output.append(f"  storefront: {prefs['storefront']} (list: config(action='list-storefronts'))")
+            output.append(
+                f"  storefront: {prefs['storefront']} (list: config(action='list-storefronts'))"
+            )
             output.append(f"  fetch_explicit: {prefs['fetch_explicit']}")
             output.append(f"  reveal_on_library_miss: {prefs['reveal_on_library_miss']}")
             output.append(f"  clean_only: {prefs['clean_only']}")
@@ -4878,9 +5145,15 @@ def config(
                 export_files = [f for f in export_files if f.name != "track_cache.json"]
 
                 if export_files:
-                    export_files = sorted(export_files, key=lambda f: f.stat().st_mtime, reverse=True)
+                    export_files = sorted(
+                        export_files, key=lambda f: f.stat().st_mtime, reverse=True
+                    )
                     total_size = sum(f.stat().st_size for f in export_files)
-                    total_str = f"{total_size / 1024:.0f}KB" if total_size < 1024 * 1024 else f"{total_size / (1024 * 1024):.1f}MB"
+                    total_str = (
+                        f"{total_size / 1024:.0f}KB"
+                        if total_size < 1024 * 1024
+                        else f"{total_size / (1024 * 1024):.1f}MB"
+                    )
                     output.append(f"Export Files: {len(export_files)} files, {total_str}")
 
                     now = time.time()
@@ -4895,7 +5168,9 @@ def config(
                         else:
                             size_str = f"{file_size / (1024 * 1024):.1f}MB"
 
-                        age_str = f"{age_days * 24:.0f}h ago" if age_days < 1 else f"{age_days:.0f}d ago"
+                        age_str = (
+                            f"{age_days * 24:.0f}h ago" if age_days < 1 else f"{age_days:.0f}d ago"
+                        )
                         output.append(f"  {f.name} ({size_str}, {age_str})")
 
                     if len(export_files) > 10:
@@ -4973,7 +5248,9 @@ def _config_auth_status() -> str:
             if days_left < 0:
                 status.append("Developer Token: EXPIRED - Run: applemusic-mcp generate-token")
             elif days_left < 30:
-                status.append(f"Developer Token: ⚠️ EXPIRES IN {int(days_left)} DAYS - Run: applemusic-mcp generate-token")
+                status.append(
+                    f"Developer Token: ⚠️ EXPIRES IN {int(days_left)} DAYS - Run: applemusic-mcp generate-token"
+                )
             else:
                 status.append(f"Developer Token: OK ({int(days_left)} days remaining)")
         except Exception:
@@ -4992,12 +5269,17 @@ def _config_auth_status() -> str:
         try:
             headers = get_headers()
             response = requests.get(
-                f"{BASE_URL}/me/library/playlists", headers=headers, params={"limit": 1}, timeout=REQUEST_TIMEOUT,
+                f"{BASE_URL}/me/library/playlists",
+                headers=headers,
+                params={"limit": 1},
+                timeout=REQUEST_TIMEOUT,
             )
             if response.status_code == 200:
                 status.append("API Connection: OK")
             elif response.status_code == 401:
-                status.append("API Connection: UNAUTHORIZED - Token may be expired. Run: applemusic-mcp authorize")
+                status.append(
+                    "API Connection: UNAUTHORIZED - Token may be expired. Run: applemusic-mcp authorize"
+                )
             else:
                 status.append(f"API Connection: FAILED ({response.status_code})")
         except Exception as e:
@@ -5060,7 +5342,7 @@ def _save_diff(diff: dict) -> Path:
     # Rotate: keep last _DIFF_MAX_KEEP diffs
     diff_files = sorted(snap_dir.glob("diff-*.json"))
     if len(diff_files) > _DIFF_MAX_KEEP:
-        for f in diff_files[:len(diff_files) - _DIFF_MAX_KEEP]:
+        for f in diff_files[: len(diff_files) - _DIFF_MAX_KEEP]:
             f.unlink()
 
     return path
@@ -5091,7 +5373,9 @@ def _format_diff(diff: dict, reference: str = "baseline") -> list[str]:
     if diff.get("is_clean"):
         pb_note = ""
         if diff.get("playback_changes"):
-            parts = [f"{k}: {v['before']} -> {v['after']}" for k, v in diff["playback_changes"].items()]
+            parts = [
+                f"{k}: {v['before']} -> {v['after']}" for k, v in diff["playback_changes"].items()
+            ]
             pb_note = f" (playback: {', '.join(parts)})"
         return [f"No library changes since {reference}.{pb_note}"]
 
@@ -5166,8 +5450,11 @@ def _library_snapshot_new() -> str:
             _save_diff(diff)
 
     path = _save_baseline(snapshot)
-    output = [f"=== {'New' if existing else 'Initial'} Library Baseline ===",
-              f"Saved: {path.name}", ""]
+    output = [
+        f"=== {'New' if existing else 'Initial'} Library Baseline ===",
+        f"Saved: {path.name}",
+        "",
+    ]
     output.extend(_format_snapshot_summary(snapshot))
     return "\n".join(output)
 
@@ -5201,7 +5488,9 @@ def _library_history() -> str:
             # Build one-line summary
             parts = []
             if diff.get("track_count_change"):
-                parts.append(f"tracks {'+' if diff['track_count_change'] > 0 else ''}{diff['track_count_change']}")
+                parts.append(
+                    f"tracks {'+' if diff['track_count_change'] > 0 else ''}{diff['track_count_change']}"
+                )
             if diff.get("playlists_added"):
                 parts.append(f"+{len(diff['playlists_added'])} playlists")
             if diff.get("playlists_removed"):
@@ -5310,7 +5599,9 @@ if APPLESCRIPT_AVAILABLE:
         action = action.lower().strip().replace("-", "_")
 
         if action == "play":
-            return _playback_play(track, playlist, album, artist, shuffle, reveal, add_to_library, url)
+            return _playback_play(
+                track, playlist, album, artist, shuffle, reveal, add_to_library, url
+            )
         elif action == "control":
             if not control:
                 return "Error: control param required. Use: play, pause, stop, next, previous, seek"
@@ -5336,7 +5627,7 @@ if APPLESCRIPT_AVAILABLE:
         and returns an album URL with ?i=songId. Returns None if the API
         is unavailable or the lookup fails.
         """
-        match = re.search(r'/song/[^/]*/(\d+)', url)
+        match = re.search(r"/song/[^/]*/(\d+)", url)
         if not match:
             return None
         song_id = match.group(1)
@@ -5363,7 +5654,7 @@ if APPLESCRIPT_AVAILABLE:
             album_name = data[0].get("attributes", {}).get("albumName", "album")
             if album_id:
                 # Construct album URL with ?i= for the specific song
-                album_slug = re.sub(r'[^a-z0-9]+', '-', album_name.lower()).strip('-')
+                album_slug = re.sub(r"[^a-z0-9]+", "-", album_name.lower()).strip("-")
                 return f"https://music.apple.com/{sf}/album/{album_slug}/{album_id}?i={song_id}"
         except Exception:
             pass
@@ -5437,7 +5728,9 @@ if APPLESCRIPT_AVAILABLE:
                     success, result = asc.play_track(lib_track.get("name", ""), lib_artist)
                     if success:
                         shuffle_note = " (shuffled)" if shuffle else ""
-                        audit_log.log_action("play_album", {"album": lib_album, "artist": lib_artist})
+                        audit_log.log_action(
+                            "play_album", {"album": lib_album, "artist": lib_artist}
+                        )
                         return f"[Library] Playing: {lib_album} by {lib_artist}{shuffle_note}"
                     break
 
@@ -5473,16 +5766,30 @@ if APPLESCRIPT_AVAILABLE:
                                 for attempt in range(PLAY_TRACK_MAX_ATTEMPTS):
                                     if attempt > 0:
                                         time.sleep(PLAY_TRACK_RETRY_DELAY)
-                                    search_ok2, lib_results2 = asc.search_library(album_name, "albums")
+                                    search_ok2, lib_results2 = asc.search_library(
+                                        album_name, "albums"
+                                    )
                                     if search_ok2 and lib_results2:
                                         for lib_track2 in lib_results2:
-                                            if album_name.lower() in lib_track2.get("album", "").lower():
+                                            if (
+                                                album_name.lower()
+                                                in lib_track2.get("album", "").lower()
+                                            ):
                                                 if shuffle:
                                                     asc.set_shuffle(True)
-                                                success, result = asc.play_track(lib_track2.get("name", ""), lib_track2.get("artist", ""))
+                                                success, result = asc.play_track(
+                                                    lib_track2.get("name", ""),
+                                                    lib_track2.get("artist", ""),
+                                                )
                                                 if success:
                                                     shuffle_note = " (shuffled)" if shuffle else ""
-                                                    audit_log.log_action("play_album", {"album": album_name, "artist": album_artist})
+                                                    audit_log.log_action(
+                                                        "play_album",
+                                                        {
+                                                            "album": album_name,
+                                                            "artist": album_artist,
+                                                        },
+                                                    )
                                                     return f"[Catalog→Library] Playing: {album_name} by {album_artist}{shuffle_note}"
                                                 break
                                 return f"[Catalog→Library] Added but sync pending: {album_name} by {album_artist}"
@@ -5492,7 +5799,9 @@ if APPLESCRIPT_AVAILABLE:
                         if reveal and album_url:
                             success, msg = asc.open_catalog_song(album_url)
                             if success:
-                                return f"[Catalog] Opened: {album_name} by {album_artist} (click play)"
+                                return (
+                                    f"[Catalog] Opened: {album_name} by {album_artist} (click play)"
+                                )
                             return f"[Catalog] {msg}"
 
                         # Neither flag set - explain options
@@ -5554,7 +5863,10 @@ if APPLESCRIPT_AVAILABLE:
                                     if success:
                                         if reveal:
                                             asc.reveal_track(track_name, track_artist)
-                                        audit_log.log_action("play_track", {"track": track_name, "artist": track_artist})
+                                        audit_log.log_action(
+                                            "play_track",
+                                            {"track": track_name, "artist": track_artist},
+                                        )
                                         return f"[Catalog→Library] Playing: {track_name} by {track_artist}"
                                 return f"[Catalog→Library] Added but sync pending: {track_name} by {track_artist}"
                             return f"[Catalog] Failed to add: {add_msg}"
@@ -5613,7 +5925,11 @@ if APPLESCRIPT_AVAILABLE:
             if track_name.lower() not in song_name.lower():
                 continue
             # Check artist in artistName OR song name (for "feat. X" cases)
-            if track_artist and track_artist.lower() not in song_artist.lower() and track_artist.lower() not in song_name.lower():
+            if (
+                track_artist
+                and track_artist.lower() not in song_artist.lower()
+                and track_artist.lower() not in song_name.lower()
+            ):
                 continue
 
             catalog_id = song.get("id")
@@ -5632,7 +5948,9 @@ if APPLESCRIPT_AVAILABLE:
                         if success:
                             if reveal:
                                 asc.reveal_track(song_name, song_artist)
-                            audit_log.log_action("play_track", {"track": song_name, "artist": song_artist})
+                            audit_log.log_action(
+                                "play_track", {"track": song_name, "artist": song_artist}
+                            )
                             return f"[Catalog→Library] Playing: {song_name} by {song_artist}"
                     return f"[Catalog→Library] Added but sync pending: {song_name} by {song_artist}"
                 return f"[Catalog] Failed to add: {add_msg}"
@@ -5657,7 +5975,10 @@ if APPLESCRIPT_AVAILABLE:
             search_term = f"{track_name} {track_artist}".strip() if track_artist else track_name
             ok, msg = asc.ui_play_result_by_query(search_term)
             if ok:
-                audit_log.log_action("play_track", {"track": track_name, "artist": track_artist, "source": "ui_search"})
+                audit_log.log_action(
+                    "play_track",
+                    {"track": track_name, "artist": track_artist, "source": "ui_search"},
+                )
                 return f"[UI Search] {msg}"
 
         return f"Track not found in library or catalog: {track_name}"
@@ -5670,7 +5991,9 @@ if APPLESCRIPT_AVAILABLE:
         if action == "seek":
             success, result = asc.seek(seconds)
             if success:
-                audit_log.log_action("playback_control", {"control": action, "seconds": seconds if seconds else None})
+                audit_log.log_action(
+                    "playback_control", {"control": action, "seconds": seconds if seconds else None}
+                )
                 return f"Seeked to {int(seconds // 60)}:{int(seconds % 60):02d}"
             return f"Error: {result}"
 
@@ -5683,7 +6006,9 @@ if APPLESCRIPT_AVAILABLE:
             "previous": asc.previous_track,
         }
         if action not in action_map:
-            return f"Invalid action: {action}. Use: play, pause, playpause, stop, next, previous, seek"
+            return (
+                f"Invalid action: {action}. Use: play, pause, playpause, stop, next, previous, seek"
+            )
 
         success, result = action_map[action]()
         if success:
@@ -5809,8 +6134,7 @@ if APPLESCRIPT_AVAILABLE:
             if r.input_type == InputType.PERSISTENT_ID:
                 # Remove by persistent ID
                 success, result = asc.remove_track_from_playlist(
-                    resolved.applescript_name,
-                    track_id=r.value
+                    resolved.applescript_name, track_id=r.value
                 )
                 if success:
                     results.append(result)
@@ -5825,7 +6149,7 @@ if APPLESCRIPT_AVAILABLE:
                     success, result = asc.remove_track_from_playlist(
                         resolved.applescript_name,
                         track_name=info["name"],
-                        artist=info.get("artist") or None
+                        artist=info.get("artist") or None,
                     )
                     if success:
                         results.append(result)
@@ -5842,7 +6166,7 @@ if APPLESCRIPT_AVAILABLE:
                     success, result = asc.remove_track_from_playlist(
                         resolved.applescript_name,
                         track_name=info["name"],
-                        artist=info.get("artist") or None
+                        artist=info.get("artist") or None,
                     )
                     if success:
                         results.append(result)
@@ -5854,9 +6178,7 @@ if APPLESCRIPT_AVAILABLE:
             elif r.input_type in (InputType.NAME, InputType.JSON_OBJECT):
                 # Remove by name
                 success, result = asc.remove_track_from_playlist(
-                    resolved.applescript_name,
-                    track_name=r.value,
-                    artist=r.artist or None
+                    resolved.applescript_name, track_name=r.value, artist=r.artist or None
                 )
                 if success:
                     results.append(result)
@@ -5868,13 +6190,11 @@ if APPLESCRIPT_AVAILABLE:
             audit_log.log_action(
                 "remove_from_playlist",
                 {"playlist": resolved.applescript_name, "tracks": results},
-                undo_info={"playlist_name": resolved.applescript_name, "tracks": results}
+                undo_info={"playlist_name": resolved.applescript_name, "tracks": results},
             )
 
         result = _build_track_results(
-            results, errors,
-            success_verb="removed",
-            error_verb="failed to remove"
+            results, errors, success_verb="removed", error_verb="failed to remove"
         )
         fuzzy_info = _format_fuzzy_match(resolved.fuzzy_match)
         return result + fuzzy_info
@@ -5912,8 +6232,7 @@ if APPLESCRIPT_AVAILABLE:
                 info = cache.get_track_info(r.value)
                 if info and info.get("name"):
                     success, result = asc.remove_from_library(
-                        track_name=info["name"],
-                        artist=info.get("artist") or None
+                        track_name=info["name"], artist=info.get("artist") or None
                     )
                     if success:
                         results.append(result)
@@ -5928,8 +6247,7 @@ if APPLESCRIPT_AVAILABLE:
                 info = cache.get_track_info(r.value)
                 if info and info.get("name"):
                     success, result = asc.remove_from_library(
-                        track_name=info["name"],
-                        artist=info.get("artist") or None
+                        track_name=info["name"], artist=info.get("artist") or None
                     )
                     if success:
                         results.append(result)
@@ -5941,8 +6259,7 @@ if APPLESCRIPT_AVAILABLE:
             elif r.input_type in (InputType.NAME, InputType.JSON_OBJECT):
                 # Remove by name
                 success, result = asc.remove_from_library(
-                    track_name=r.value,
-                    artist=r.artist or None
+                    track_name=r.value, artist=r.artist or None
                 )
                 if success:
                     results.append(result)
@@ -5954,13 +6271,14 @@ if APPLESCRIPT_AVAILABLE:
             audit_log.log_action(
                 "remove_from_library",
                 {"tracks": results},
-                undo_info={"tracks": results, "note": "Re-add via search_catalog and add_to_library"}
+                undo_info={
+                    "tracks": results,
+                    "note": "Re-add via search_catalog and add_to_library",
+                },
             )
 
         return _build_track_results(
-            results, errors,
-            success_verb="removed from library",
-            error_verb="failed to remove"
+            results, errors, success_verb="removed from library", error_verb="failed to remove"
         )
 
     def _playlist_delete(playlist_name: str) -> str:
@@ -5979,7 +6297,11 @@ if APPLESCRIPT_AVAILABLE:
             audit_log.log_action(
                 "delete_playlist",
                 {"name": playlist_name, "track_count": track_count},
-                undo_info={"playlist_name": playlist_name, "tracks": track_names, "note": "Recreate playlist and re-add tracks"}
+                undo_info={
+                    "playlist_name": playlist_name,
+                    "tracks": track_names,
+                    "note": "Recreate playlist and re-add tracks",
+                },
             )
             return result
         return f"Error: {result}"
@@ -5997,7 +6319,7 @@ if APPLESCRIPT_AVAILABLE:
             audit_log.log_action(
                 "rename_playlist",
                 {"old_name": playlist_name, "new_name": new_name},
-                undo_info={"note": f"Rename back to '{playlist_name}'"}
+                undo_info={"note": f"Rename back to '{playlist_name}'"},
             )
             return result
         return f"Error: {result}"
@@ -6024,7 +6346,6 @@ if APPLESCRIPT_AVAILABLE:
             if not devices:
                 return "No AirPlay devices found"
             return f"AirPlay devices ({len(devices)}):\n" + "\n".join(f"  - {d}" for d in devices)
-
 
 
 def main():
