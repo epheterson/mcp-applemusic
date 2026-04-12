@@ -330,6 +330,47 @@ class TestAddToPlaylist:
         assert "Provide track or album parameter" in result
 
 
+class TestSplitTrackArtistCandidates:
+    """Tests for _split_track_artist_candidates helper (open-ended track input)."""
+
+    def test_simple_forward_form(self):
+        """Produces forward + reverse candidates for a clean 'Song - Artist'."""
+        got = server._split_track_artist_candidates("Silvera - GOJIRA")
+        assert got == [("Silvera", "GOJIRA"), ("GOJIRA", "Silvera")]
+
+    def test_no_separator_returns_empty(self):
+        """Returns empty list when the input has no ' - ' separator to split on."""
+        assert server._split_track_artist_candidates("No dash here") == []
+        assert server._split_track_artist_candidates("") == []
+
+    def test_hyphen_without_spaces_not_split(self):
+        """A plain hyphen (no spaces) isn't a split candidate — preserves names like 'Jay-Z'."""
+        assert server._split_track_artist_candidates("Jay-Z") == []
+
+    def test_multi_dash_produces_first_and_last_split(self):
+        """Multi-dash inputs try both first-dash and last-dash splits so multi-word titles work."""
+        got = server._split_track_artist_candidates("A - B - C")
+        # First-dash split: ('A', 'B - C') + reverse; last-dash split: ('A - B', 'C')
+        assert ("A", "B - C") in got
+        assert ("B - C", "A") in got
+        assert ("A - B", "C") in got
+
+    def test_forward_form_first(self):
+        """Forward form (Song - Artist, the convention) is always tried first."""
+        got = server._split_track_artist_candidates("Come Together - The Beatles")
+        assert got[0] == ("Come Together", "The Beatles")
+
+    def test_strips_whitespace_around_parts(self):
+        """Candidates have whitespace stripped from both parts."""
+        got = server._split_track_artist_candidates("  Song  -  Artist  ")
+        assert got[0] == ("Song", "Artist")
+
+    def test_empty_part_rejected(self):
+        """An empty part on either side is rejected (no junk candidates)."""
+        assert server._split_track_artist_candidates(" - Artist") == []
+        assert server._split_track_artist_candidates("Song - ") == []
+
+
 class TestSearchLibrary:
     """Tests for search_library function."""
 

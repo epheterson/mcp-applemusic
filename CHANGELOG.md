@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.2] - 2026-04-12
+
+### Fixed
+
+- **`playlist(action="add")` surfaced misleading "Developer token not found" on macOS** — when `auto_search=True` and the track couldn't be found in the local library, the fallback path unconditionally hit the API and bubbled the token error up, even though macOS has a full UI-automation catalog path that needs no API credentials. Now the auto-search fallback prefers API when a token is present, falls back to UI automation via `asc.ui_add_to_playlist` when not, and only returns a token-related error if both paths are genuinely unavailable.
+- **API auto-search failed on non-API-created playlists** — `_auto_search_and_add_to_playlist` added the resolved track to the playlist via `POST /me/library/playlists/{id}/tracks`, which returns HTTP 500 for any playlist not originally created by the API (most user playlists). On macOS the playlist-add step now goes through AppleScript after polling `search_library` for iCloud→local sync propagation, so any playlist works. API playlist-add remains as a last-resort fallback for headless / non-macOS setups.
+- **Empty-artist false-match in local sync poll** — the library-visibility check used a substring test that matched empty strings against anything; a track added with no artist metadata could select the wrong library hit. Now guards on a minimum-length artist and trusts the first name hit when artist is unusable.
+
+### Added
+
+- **Open-ended `track` input** — `playlist(action="add", track="Silvera - GOJIRA")` now works without a separate `artist` parameter. The new `_split_track_artist_candidates` helper splits on ` - ` and tries forward (Song - Artist) and reverse (Artist - Song) candidate pairs, plus last-dash variants for multi-dash names. Only activates when the caller provided no artist/album filter and the first lookup hit a "Track not found" error — explicit caller intent is always respected.
+- **Post-add playlist verification** — both the API and UI auto-search paths now verify via `track_exists_in_playlist` that the intended track actually landed in the target playlist before claiming success. Catches two real failure modes: AppleScript propagation lag (retries once on verify miss) and silent UI misclicks where Music.app's search state led the automation to add the wrong song.
+- **Error folding on cascade fail** — when both API and UI auto-search paths fail, the returned message now includes both reasons (`"{ui_error} (API attempt: {api_error})"`) so users can tell what broke where.
+- **Tuning constants at module level** — `_LIBRARY_SYNC_DEADLINE_S`, `_LIBRARY_SYNC_TICK_S`, `_VERIFY_ATTEMPTS`, `_VERIFY_DELAY_S` for easy adjustment.
+- **7 unit tests** for `_split_track_artist_candidates` covering forward/reverse forms, no-separator, `Jay-Z`-style plain hyphens, multi-dash splits, whitespace trimming, and empty-part rejection.
+
 ## [0.9.1] - 2026-04-05
 
 ### Added

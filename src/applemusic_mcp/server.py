@@ -738,6 +738,12 @@ PLAY_TRACK_INITIAL_DELAY = 1.0  # seconds before first retry
 PLAY_TRACK_RETRY_DELAY = 0.2  # seconds between retries
 PLAY_TRACK_MAX_ATTEMPTS = 45  # total retry attempts (~10 seconds)
 
+# auto-search-to-playlist tuning (API + UI flows)
+_LIBRARY_SYNC_DEADLINE_S = 18.0  # max wait for API add-to-library to show up in local Music.app
+_LIBRARY_SYNC_TICK_S = 0.5  # poll interval while waiting for sync
+_VERIFY_ATTEMPTS = 3  # retries for post-add playlist verification
+_VERIFY_DELAY_S = 1.0  # sleep between verification retries
+
 
 def get_storefront() -> str:
     """Get storefront from preferences, defaulting to 'us'."""
@@ -1603,6 +1609,185 @@ def _add_album_to_library(album_id: str) -> tuple[bool, str]:
     return _add_to_library_api([album_id], "albums")
 
 
+def _split_track_artist_candidates(combined: str) -> list[tuple[str, str]]:
+    """Split a free-form 'Track - Artist' string into candidate (name, artist) pairs.
+
+    Users often paste tracks as "Song - Artist" in a single field. This splits
+    on ' - ' and returns ordered candidates to try. Returns empty list if no
+    plausible split exists (no ' - ' separator).
+
+    Ordering rationale: forward form (Song - Artist) first since that's the
+    conventional write order. Reverse form (Artist - Song) as a safety net for
+    users who wrote it backwards. Last-dash variants cover multi-dash names
+    like "Sgt. Pepper's Lonely Hearts Club Band - Reprise - The Beatles".
+    Callers should only feed this function inputs gated on "Track not found"
+    errors — don't second-guess a first-attempt success.
+    """
+    if " - " not in combined:
+        return []
+    candidates: list[tuple[str, str]] = []
+    # Forward form (Song - Artist) — the common convention
+    first_idx = combined.find(" - ")
+    left = combined[:first_idx].strip()
+    right = combined[first_idx + 3 :].strip()
+    if left and right:
+        candidates.append((left, right))
+        # Reverse form (Artist - Song) in case user wrote it backwards
+        candidates.append((right, left))
+    # Last-dash split differs from first-dash when multiple ' - ' present
+    last_idx = combined.rfind(" - ")
+    if last_idx != first_idx:
+        left_l = combined[:last_idx].strip()
+        right_l = combined[last_idx + 3 :].strip()
+        if left_l and right_l and (left_l, right_l) not in candidates:
+            candidates.append((left_l, right_l))
+    return candidates
+
+
+def _smart_as_add_track_to_playlist(
+    playlist_name: str,
+    track_name: str,
+    artist: Optional[str],
+    album: Optional[str],
+) -> tuple[bool, str, Optional[tuple[str, str]]]:
+    """AppleScript add-to-playlist with open-ended-input recovery.
+
+    Tries the inputs as given first. If that fails and the caller supplied only
+    a combined ``track_name`` (no artist, no album), splits on ' - ' and retries
+    each candidate. Returns the matched (name, artist) pair on split success so
+    callers can report what actually resolved.
+    """
+    ok, result = asc.add_track_to_playlist(playlist_name, track_name, artist, album)
+    if ok:
+        return True, result, None
+
+    # Only try splits for genuinely open-ended inputs — don't second-guess the
+    # caller when they gave us an explicit artist or album filter.
+    if artist or album or " - " not in track_name:
+        return False, result, None
+    if "Track not found" not in result:
+        return False, result, None
+
+    for cand_name, cand_artist in _split_track_artist_candidates(track_name):
+        ok2, result2 = asc.add_track_to_playlist(playlist_name, cand_name, cand_artist, None)
+        if ok2:
+            return True, result2, (cand_name, cand_artist)
+    return False, result, None
+
+
+def _verify_track_in_playlist(
+    playlist_name: str,
+    track_name: str,
+    artist: str,
+) -> bool:
+    """Confirm a track matching (name, artist) is in a playlist, with retries.
+
+    Catches two failure modes the racy auto-search flow exposes:
+
+    - AppleScript add-to-playlist reports success but local state hasn't
+      propagated yet (re-query after a short sleep).
+    - UI automation adds the wrong track silently (e.g. clicked a non-Song
+      result with stale search state). If what ends up in the playlist
+      doesn't match what the caller asked for, verification fails — caller
+      then fails loudly instead of claiming a false success.
+
+    Uses ``track_exists_in_playlist``'s ``name contains`` + ``artist contains``
+    match, which tolerates mild name/artist punctuation differences.
+    """
+    if not APPLESCRIPT_AVAILABLE or not track_name:
+        return False
+    for i in range(_VERIFY_ATTEMPTS):
+        if i > 0:
+            time.sleep(_VERIFY_DELAY_S)
+        ok, result = asc.track_exists_in_playlist(playlist_name, track_name, artist or None)
+        if ok and result:
+            return True
+    return False
+
+
+def _unified_auto_search_to_playlist(
+    track_name: str,
+    artist: str,
+    playlist_name: str,
+) -> tuple[bool, str, list[str]]:
+    """Find-and-add an out-of-library track to a playlist.
+
+    API path is preferred when a developer token exists (fast, accurate catalog
+    search). Otherwise falls back to UI automation, which uses Music.app's
+    search field + hover-click add buttons — no API credentials needed.
+
+    Preprocesses open-ended "Song - Artist" input by splitting on ' - ' so both
+    search paths get a clean query. Post-validates each path via
+    ``_verify_track_in_playlist`` so a claimed success that didn't actually
+    land the expected track is caught and reported (or retried via the next
+    path).
+
+    Same return signature as ``_auto_search_and_add_to_playlist`` for drop-in
+    use at call sites.
+    """
+    steps: list[str] = []
+
+    # Preprocess free-form input: split "Song - Artist" into (name, artist) so
+    # both catalog searches run against a clean query. Only split when no
+    # artist was supplied — respect explicit caller intent.
+    search_name = track_name
+    search_artist = artist
+    if not artist and " - " in track_name:
+        candidates = _split_track_artist_candidates(track_name)
+        if candidates:
+            search_name, search_artist = candidates[0]
+            steps.append(f"Split '{track_name}' → name='{search_name}' artist='{search_artist}'")
+
+    # Probe token availability without leaking its error message
+    api_ok = False
+    try:
+        get_developer_token()
+        api_ok = True
+    except Exception:
+        pass
+
+    api_error: Optional[str] = None
+    if api_ok:
+        ok, result, api_steps = _auto_search_and_add_to_playlist(
+            search_name, search_artist, playlist_name
+        )
+        steps.extend(api_steps)
+        if ok and _verify_track_in_playlist(playlist_name, search_name, search_artist):
+            return True, result, steps
+        if ok:
+            api_error = "API path claimed success but playlist verification failed"
+            steps.append(api_error)
+        else:
+            api_error = result
+            steps.append(f"API auto-search failed ({result}); trying UI fallback")
+
+    if APPLESCRIPT_AVAILABLE:
+        query = f"{search_name} {search_artist}".strip() if search_artist else search_name
+        ok, msg = asc.ui_add_to_playlist(playlist_name, query, search_artist)
+        if ok:
+            if _verify_track_in_playlist(playlist_name, search_name, search_artist):
+                return True, msg, steps
+            ui_error = (
+                f"UI path reported success but '{search_name}' is not in "
+                f"'{playlist_name}' — likely clicked wrong result"
+            )
+            steps.append(ui_error)
+            if api_error:
+                return False, f"{ui_error} (API attempt: {api_error})", steps
+            return False, ui_error, steps
+        if api_error:
+            return False, f"{msg} (API attempt: {api_error})", steps
+        return False, msg, steps
+
+    if api_error:
+        return False, api_error, steps
+    return (
+        False,
+        "Not found in library; catalog search unavailable (need API token or macOS with Accessibility)",
+        steps,
+    )
+
+
 def _auto_search_and_add_to_playlist(
     track_name: str,
     artist: str,
@@ -1680,7 +1865,57 @@ def _auto_search_and_add_to_playlist(
         if not library_id:
             return False, "Added to library but could not get library ID", steps
 
-        # Get playlist ID if not provided
+        # Add to playlist — prefer AppleScript on macOS so non-API-created
+        # playlists work too. API playlist-add returns 500 for those.
+        if APPLESCRIPT_AVAILABLE:
+            # API add-to-library is async: the track lands in iCloud immediately
+            # but Music.app's local library has to sync before AppleScript can
+            # see it. Poll search_library until visible, then add.
+            visible = False
+            deadline = time.time() + _LIBRARY_SYNC_DEADLINE_S
+            while time.time() < deadline:
+                sok, shits = asc.search_library(found_name, "songs")
+                if sok and shits:
+                    if found_artist and len(found_artist) >= 2:
+                        fa_lower = found_artist.lower()
+                        for h in shits:
+                            if fa_lower in (h.get("artist") or "").lower():
+                                visible = True
+                                break
+                    else:
+                        # No usable artist to disambiguate — trust the first
+                        # library hit on name. Avoids an empty-string-in-any
+                        # false match.
+                        visible = True
+                if visible:
+                    break
+                time.sleep(_LIBRARY_SYNC_TICK_S)
+
+            if visible:
+                ok, as_result = asc.add_track_to_playlist(playlist_name, found_name, found_artist)
+                # Verify the track actually landed; retry once on verify miss
+                # to absorb local state propagation lag.
+                if ok and _verify_track_in_playlist(playlist_name, found_name, found_artist):
+                    return True, f"{found_name} - {found_artist}", steps
+                if ok:
+                    steps.append("Playlist add reported success but verify failed; retrying")
+                    time.sleep(_VERIFY_DELAY_S)
+                    ok2, as_result2 = asc.add_track_to_playlist(
+                        playlist_name, found_name, found_artist
+                    )
+                    if ok2 and _verify_track_in_playlist(playlist_name, found_name, found_artist):
+                        return True, f"{found_name} - {found_artist}", steps
+                    steps.append(
+                        f"Retry also did not verify: "
+                        f"{as_result2 if not ok2 else 'verify failed'}"
+                    )
+                else:
+                    steps.append(f"AppleScript playlist add failed after local sync: {as_result}")
+            else:
+                steps.append(f"Library sync did not complete in {_LIBRARY_SYNC_DEADLINE_S:.0f}s")
+            # Fall through to API attempt below for non-macOS playlist IDs
+
+        # Fall back to API playlist add (requires API-created playlist)
         if not playlist_id:
             pl_success, playlists = asc.get_playlists()
             if pl_success:
@@ -1692,7 +1927,6 @@ def _auto_search_and_add_to_playlist(
         if not playlist_id:
             return False, f"Could not find playlist ID for '{playlist_name}'", steps
 
-        # Add to playlist via API
         pl_add_response = requests.post(
             f"{BASE_URL}/me/library/playlists/{playlist_id}/tracks",
             headers=headers,
@@ -2703,17 +2937,24 @@ def _playlist_add(
                     steps.append(f"Skipped duplicate: {name}")
                     continue
 
-            # Add track
-            success, result = asc.add_track_to_playlist(
+            # Add track — smart wrapper retries split forms for open-ended input
+            success, result, split_match = _smart_as_add_track_to_playlist(
                 resolved.applescript_name, name, track_artist or None, track_album or None
             )
             if success:
-                added.append(f"{name} - {track_artist}" if track_artist else name)
+                if split_match:
+                    s_name, s_artist = split_match
+                    steps.append(f"Resolved '{name}' → '{s_name}' by '{s_artist}'")
+                    added.append(f"{s_name} - {s_artist}")
+                else:
+                    added.append(f"{name} - {track_artist}" if track_artist else name)
             elif "Track not found" in result and auto_search:
-                # Auto-search fallback: search catalog, add to library, add to playlist
-                search_success, search_result, _ = _auto_search_and_add_to_playlist(
+                # Out-of-library auto-search: prefer API, fall back to UI automation
+                search_success, search_result, search_steps = _unified_auto_search_to_playlist(
                     name, track_artist or "", resolved.applescript_name
                 )
+                if search_steps:
+                    steps.extend(search_steps)
                 if search_success:
                     added.append(search_result)
                 else:
