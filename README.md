@@ -129,7 +129,7 @@ Add to config.json:
 }
 ```
 
-- `auto_search`: Auto-find catalog tracks not in library, for `add_to_playlist` (default: false)
+- `auto_search`: Auto-find catalog tracks not in library, for `add_to_playlist` (default: false). On macOS works without an API token by falling back to UI automation (requires display + Accessibility permissions).
 - `clean_only`: Filter explicit content, for `search_catalog`, `search_library`, `browse_library` (default: false)
 - `fetch_explicit`: Fetch explicit status (cached), for `get_playlist_tracks`, `search_library`, `browse_library` (default: false)
 - `reveal_on_library_miss`: Open catalog tracks in Music app, for `play` (default: false)
@@ -176,7 +176,7 @@ Playlist and folder operations - list, manage tracks, create, copy, remove (macO
 | `tracks` | `playlist`, `filter`, `limit`, `offset`, `format`, `export`, `full`, `fetch_explicit` | Get playlist tracks with filter/pagination | All (by-name: macOS) |
 | `search` | `query`, `playlist` | Search tracks in playlist | All |
 | `create` | `name`, `description`, `folder` | Create playlist and/or folder. `folder` supports slash paths (e.g. `Summer/Chill`). | All |
-| `add` | `playlist`, `track`, `album`, `artist`, `allow_duplicates`, `verify`, `auto_search` | Smart add: auto-search catalog, skip duplicates | All (by-name: macOS) |
+| `add` | `playlist`, `track`, `album`, `artist`, `allow_duplicates`, `verify`, `auto_search` | Smart add: auto-search catalog, UI fallback when no API token, skip duplicates | All (by-name: macOS) |
 | `copy` | `source`, `new_name` | Copy playlist to editable version | All (by-name: macOS) |
 | `move` | `playlist`, `folder` | Move playlist/folder into a folder path. `folder=""` moves to root (recreates playlist*). | macOS |
 | `remove` | `playlist`, `track`, `artist` | Remove track(s) from playlist | macOS |
@@ -244,9 +244,11 @@ library(action="rate", rate_action="love", track="Hey Jude")
 ### `catalog(action=...)`
 Catalog search and details - search, albums, songs, artists, genres, stations
 
+`search` accepts fuzzy queries — typos, partial lyrics, vague descriptions ("whistling beatles song"). On macOS it falls back to Music.app's built-in UI search when no API token is available, so you can find a half-remembered song without credentials.
+
 | Action | Parameters | Description | Platform |
 |--------|-----------|-------------|----------|
-| `search` | `query`, `types`, `limit`, `format`, `export`, `full`, `clean_only` | Search Apple Music catalog | All |
+| `search` | `query`, `types`, `limit`, `format`, `export`, `full`, `clean_only` | Search Apple Music catalog (fuzzy; UI fallback on macOS when no API token) | All |
 | `album_tracks` | `album`, `artist`, `limit`, `offset`, `format`, `export`, `full` | Get album tracks (by name or ID) | All |
 | `album_details` | `album`, `artist`, `format`, `export`, `full` | Full album metadata + track listing | All |
 | `song_details` | `song_id` | Full song metadata | All |

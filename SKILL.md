@@ -1,6 +1,6 @@
 ---
 name: apple-music
-version: 0.9.1
+version: 0.9.2
 description: Apple Music integration via AppleScript, UI automation, or MusicKit API
 ---
 
@@ -346,6 +346,50 @@ end tell
 ## Fragility
 
 UI paths break when Apple updates Music.app's layout. Centralize paths as constants and test after macOS updates. Use Accessibility Inspector.app to explore the current hierarchy.
+
+## Compound flows (no API)
+
+Recipes for replicating mcp-applemusic's catalog features without an API token. Gate each user request on "does this need catalog access?" — pure library and playback ops stay in AppleScript; only catalog lookups go through UI automation.
+
+### Add a catalog song to the user's library
+
+If the user gave a single combined string like `"Silvera - GOJIRA"`, split on ` - ` before searching so the catalog query gets a clean name.
+
+1. UI search for the target (§ Search via UI)
+2. Pick the first `Song` result whose name + artist match — do not fall back to a non-Song result; fail cleanly if no Song matched. Stale search state can lead to wrong-result clicks otherwise.
+3. Get the result's element position via System Events
+4. Move the mouse there via CoreGraphics to trigger hover — the hidden "Add to Library" button becomes reachable in the accessibility tree
+5. Click it via System Events
+6. Clear the search field so the next call starts from fresh state
+7. Poll `search_library` via AppleScript until the track is visible locally (typical 0.5–8 s; iCloud can stall longer — cap at ~18 s, then give up cleanly)
+
+### Add a catalog song to a specific playlist
+
+Compose **"add to library"** (above) → then AppleScript `duplicate` the new library track into the target playlist:
+
+```applescript
+tell application "Music"
+    set targetTrack to first track of library playlist 1 ¬
+        whose name contains "Silvera" and artist contains "GOJIRA"
+    duplicate targetTrack to user playlist "Road Trip"
+end tell
+```
+
+**Don't** click "Add to Playlist" menu items via UI — the AppleScript `duplicate` path is more reliable. Even if you have a dev token, **don't** hit `POST /v1/me/library/playlists/{id}/tracks` — it returns HTTP 500 for any playlist not originally created via API (the default for playlists made in Music.app). `duplicate` works for any playlist.
+
+### Post-add verification
+
+The UI path can silently click the wrong result under stale search state, and AppleScript state lags briefly after a fresh add. Always verify the expected track actually landed:
+
+```applescript
+tell application "Music"
+    set matches to (every track of user playlist "Road Trip" ¬
+        whose name contains "Silvera" and artist contains "GOJIRA")
+    return (count of matches) > 0
+end tell
+```
+
+Retry once after a ~1 s sleep before failing. If the second verify still fails, trust it — the add did not land, surface the error instead of claiming false success.
 
 ---
 
