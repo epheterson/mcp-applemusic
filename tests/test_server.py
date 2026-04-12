@@ -44,7 +44,9 @@ class TestGetTokenExpirationWarning:
 class TestGetHeaders:
     """Tests for get_headers function."""
 
-    def test_returns_headers_with_tokens(self, mock_config_dir, mock_developer_token, mock_user_token):
+    def test_returns_headers_with_tokens(
+        self, mock_config_dir, mock_developer_token, mock_user_token
+    ):
         """Should return properly formatted headers."""
         # Setup token files
         dev_token_file = mock_config_dir / "developer_token.json"
@@ -67,7 +69,9 @@ class TestGetLibraryPlaylists:
     """Tests for get_library_playlists function (API path)."""
 
     @responses.activate
-    def test_returns_playlists(self, mock_config_dir, mock_developer_token, mock_user_token, monkeypatch):
+    def test_returns_playlists(
+        self, mock_config_dir, mock_developer_token, mock_user_token, monkeypatch
+    ):
         """Should return formatted playlist list via API."""
         # Disable AppleScript to test API path
         monkeypatch.setattr(server, "APPLESCRIPT_AVAILABLE", False)
@@ -87,14 +91,8 @@ class TestGetLibraryPlaylists:
             "https://api.music.apple.com/v1/me/library/playlists",
             json={
                 "data": [
-                    {
-                        "id": "p.abc123",
-                        "attributes": {"name": "Test Playlist", "canEdit": True}
-                    },
-                    {
-                        "id": "p.def456",
-                        "attributes": {"name": "Read Only", "canEdit": False}
-                    }
+                    {"id": "p.abc123", "attributes": {"name": "Test Playlist", "canEdit": True}},
+                    {"id": "p.def456", "attributes": {"name": "Read Only", "canEdit": False}},
                 ]
             },
             status=200,
@@ -109,7 +107,9 @@ class TestGetLibraryPlaylists:
         assert "2 items" in result
 
     @responses.activate
-    def test_handles_api_error(self, mock_config_dir, mock_developer_token, mock_user_token, monkeypatch):
+    def test_handles_api_error(
+        self, mock_config_dir, mock_developer_token, mock_user_token, monkeypatch
+    ):
         """Should return error message on API failure."""
         # Disable AppleScript to test API path
         monkeypatch.setattr(server, "APPLESCRIPT_AVAILABLE", False)
@@ -139,7 +139,9 @@ class TestCreatePlaylist:
     """Tests for create_playlist function (API path)."""
 
     @responses.activate
-    def test_creates_playlist_successfully(self, mock_config_dir, mock_developer_token, mock_user_token, monkeypatch):
+    def test_creates_playlist_successfully(
+        self, mock_config_dir, mock_developer_token, mock_user_token, monkeypatch
+    ):
         """Should create playlist via API and return ID."""
         # Disable AppleScript to test API path
         monkeypatch.setattr(server, "APPLESCRIPT_AVAILABLE", False)
@@ -160,7 +162,9 @@ class TestCreatePlaylist:
             status=201,
         )
 
-        result = server.playlist(action="create", name="My New Playlist", description="A description")
+        result = server.playlist(
+            action="create", name="My New Playlist", description="A description"
+        )
 
         assert "My New Playlist" in result
         assert "p.newplaylist123" in result
@@ -171,6 +175,7 @@ class TestRenamePlaylist:
 
     def test_renames_playlist_successfully(self, monkeypatch):
         """Should rename playlist via AppleScript."""
+
         # Mock AppleScript to return success
         def mock_rename_playlist(old_name, new_name):
             return (True, f"Renamed: {old_name} → {new_name}")
@@ -207,6 +212,7 @@ class TestCreateFolder:
 
     def test_creates_folder_successfully(self, monkeypatch):
         """Should create folder via AppleScript."""
+
         def mock_create_folder(name):
             return (True, "ABCD1234")
 
@@ -241,6 +247,7 @@ class TestMoveToFolder:
 
     def test_moves_playlist_successfully(self, monkeypatch):
         """Should move playlist to folder via AppleScript."""
+
         def mock_move_to_folder(item_name, folder_name):
             return (True, f"Moved '{item_name}' to folder '{folder_name}'")
 
@@ -300,7 +307,9 @@ class TestAddToPlaylist:
             status=204,
         )
 
-        result = server.playlist(action="add", playlist="p.test123", track="i.song1, i.song2, i.song3")
+        result = server.playlist(
+            action="add", playlist="p.test123", track="i.song1, i.song2, i.song3"
+        )
 
         assert "Added" in result
         assert "3 track" in result
@@ -321,11 +330,54 @@ class TestAddToPlaylist:
         assert "Provide track or album parameter" in result
 
 
+class TestSplitTrackArtistCandidates:
+    """Tests for _split_track_artist_candidates helper (open-ended track input)."""
+
+    def test_simple_forward_form(self):
+        """Produces forward + reverse candidates for a clean 'Song - Artist'."""
+        got = server._split_track_artist_candidates("Silvera - GOJIRA")
+        assert got == [("Silvera", "GOJIRA"), ("GOJIRA", "Silvera")]
+
+    def test_no_separator_returns_empty(self):
+        """Returns empty list when the input has no ' - ' separator to split on."""
+        assert server._split_track_artist_candidates("No dash here") == []
+        assert server._split_track_artist_candidates("") == []
+
+    def test_hyphen_without_spaces_not_split(self):
+        """A plain hyphen (no spaces) isn't a split candidate — preserves names like 'Jay-Z'."""
+        assert server._split_track_artist_candidates("Jay-Z") == []
+
+    def test_multi_dash_produces_first_and_last_split(self):
+        """Multi-dash inputs try both first-dash and last-dash splits so multi-word titles work."""
+        got = server._split_track_artist_candidates("A - B - C")
+        # First-dash split: ('A', 'B - C') + reverse; last-dash split: ('A - B', 'C')
+        assert ("A", "B - C") in got
+        assert ("B - C", "A") in got
+        assert ("A - B", "C") in got
+
+    def test_forward_form_first(self):
+        """Forward form (Song - Artist, the convention) is always tried first."""
+        got = server._split_track_artist_candidates("Come Together - The Beatles")
+        assert got[0] == ("Come Together", "The Beatles")
+
+    def test_strips_whitespace_around_parts(self):
+        """Candidates have whitespace stripped from both parts."""
+        got = server._split_track_artist_candidates("  Song  -  Artist  ")
+        assert got[0] == ("Song", "Artist")
+
+    def test_empty_part_rejected(self):
+        """An empty part on either side is rejected (no junk candidates)."""
+        assert server._split_track_artist_candidates(" - Artist") == []
+        assert server._split_track_artist_candidates("Song - ") == []
+
+
 class TestSearchLibrary:
     """Tests for search_library function."""
 
     @responses.activate
-    def test_returns_search_results(self, mock_config_dir, mock_developer_token, mock_user_token, monkeypatch):
+    def test_returns_search_results(
+        self, mock_config_dir, mock_developer_token, mock_user_token, monkeypatch
+    ):
         """Should return formatted search results via API fallback."""
         # Force API path by disabling AppleScript
         monkeypatch.setattr(server, "APPLESCRIPT_AVAILABLE", False)
@@ -351,8 +403,8 @@ class TestSearchLibrary:
                                 "attributes": {
                                     "name": "Wonderwall",
                                     "artistName": "Oasis",
-                                    "albumName": "(What's the Story) Morning Glory?"
-                                }
+                                    "albumName": "(What's the Story) Morning Glory?",
+                                },
                             }
                         ]
                     }
@@ -392,10 +444,7 @@ class TestSearchCatalog:
                         "data": [
                             {
                                 "id": "123456789",
-                                "attributes": {
-                                    "name": "Let It Be",
-                                    "artistName": "The Beatles"
-                                }
+                                "attributes": {"name": "Let It Be", "artistName": "The Beatles"},
                             }
                         ]
                     }
@@ -500,7 +549,7 @@ class TestExtractTrackData:
                 "durationInMillis": 258000,
                 "releaseDate": "1995-10-02",
                 "genreNames": ["Rock", "Alternative"],
-            }
+            },
         }
         result = server.extract_track_data(track)
 
@@ -544,7 +593,7 @@ class TestExtractTrackData:
                 "playParams": {"catalogId": "cat123"},
                 "previews": [{"url": "https://example.com/preview.m4a"}],
                 "artwork": {"url": "https://example.com/{w}x{h}bb.jpg"},
-            }
+            },
         }
         result = server.extract_track_data(track, include_extras=True)
 
@@ -589,15 +638,17 @@ class TestFormatTrackList:
 
     def test_full_format_for_small_lists(self):
         """Should use full format for small track lists."""
-        tracks = [{
-            "name": "Song Name",
-            "artist": "Artist Name",
-            "duration": "3:45",
-            "album": "Album Name",
-            "year": "2024",
-            "genre": "Rock",
-            "id": "123"
-        }]
+        tracks = [
+            {
+                "name": "Song Name",
+                "artist": "Artist Name",
+                "duration": "3:45",
+                "album": "Album Name",
+                "year": "2024",
+                "genre": "Rock",
+                "id": "123",
+            }
+        ]
         lines, tier = server.format_track_list(tracks)
 
         assert tier == "Full"
@@ -613,7 +664,7 @@ class TestFormatTrackList:
             "album": "C" * 100,
             "year": "2024",
             "genre": "Rock",
-            "id": "12345678901234567890"
+            "id": "12345678901234567890",
         }
         tracks = [track] * 200
         lines, tier = server.format_track_list(tracks)
@@ -634,7 +685,7 @@ class TestFormatTrackList:
             "album": "Album",
             "year": "2024",
             "genre": "Rock",
-            "id": "12345678901234567890"
+            "id": "12345678901234567890",
         }
         tracks = [track] * 450
         lines, tier = server.format_track_list(tracks)
@@ -654,7 +705,7 @@ class TestFormatTrackList:
             "album": "Album",
             "year": "2024",
             "genre": "Rock",
-            "id": "12345678901234567890"
+            "id": "12345678901234567890",
         }
         tracks = [track] * 800
         lines, tier = server.format_track_list(tracks)
@@ -665,15 +716,17 @@ class TestFormatTrackList:
 
     def test_handles_empty_optional_fields(self):
         """Should handle tracks with empty year/genre gracefully."""
-        tracks = [{
-            "name": "Song",
-            "artist": "Artist",
-            "duration": "3:00",
-            "album": "Album",
-            "year": "",
-            "genre": "",
-            "id": "123"
-        }]
+        tracks = [
+            {
+                "name": "Song",
+                "artist": "Artist",
+                "duration": "3:00",
+                "album": "Album",
+                "year": "",
+                "genre": "",
+                "id": "123",
+            }
+        ]
         lines, tier = server.format_track_list(tracks)
 
         assert tier == "Full"
@@ -709,7 +762,10 @@ class TestSearchCatalogSongsHelper:
                 "results": {
                     "songs": {
                         "data": [
-                            {"id": "123", "attributes": {"name": "Test Song", "artistName": "Test Artist"}}
+                            {
+                                "id": "123",
+                                "attributes": {"name": "Test Song", "artistName": "Test Artist"},
+                            }
                         ]
                     }
                 }
@@ -754,7 +810,9 @@ class TestAddSongsToLibraryHelper:
         assert "No catalog IDs" in msg
 
     @responses.activate
-    def test_returns_success_on_valid_response(self, mock_config_dir, mock_developer_token, mock_user_token):
+    def test_returns_success_on_valid_response(
+        self, mock_config_dir, mock_developer_token, mock_user_token
+    ):
         """Should return success tuple on successful add."""
         # Setup tokens
         dev_token_file = mock_config_dir / "developer_token.json"
@@ -776,7 +834,9 @@ class TestAddSongsToLibraryHelper:
         assert "1 song" in msg
 
     @responses.activate
-    def test_returns_error_on_api_failure(self, mock_config_dir, mock_developer_token, mock_user_token):
+    def test_returns_error_on_api_failure(
+        self, mock_config_dir, mock_developer_token, mock_user_token
+    ):
         """Should return error tuple on API failure."""
         # Setup tokens
         dev_token_file = mock_config_dir / "developer_token.json"
@@ -840,17 +900,19 @@ class TestPlayTrackMatching:
             "attributes": {
                 "name": "Uptown Funk (feat. Bruno Mars)",
                 "artistName": "Mark Ronson",
-                "url": "https://music.apple.com/us/song/123"
-            }
+                "url": "https://music.apple.com/us/song/123",
+            },
         }
-        
+
         # Check if "Bruno Mars" matches (in song name, not artistName)
         song_name = song["attributes"]["name"]
         song_artist = song["attributes"]["artistName"]
         artist = "Bruno Mars"
-        
+
         # This is the matching logic from play_track
-        matches_artist = artist.lower() in song_artist.lower() or artist.lower() in song_name.lower()
+        matches_artist = (
+            artist.lower() in song_artist.lower() or artist.lower() in song_name.lower()
+        )
         assert matches_artist is True
 
     def test_matches_artist_in_artist_name(self):
@@ -858,8 +920,10 @@ class TestPlayTrackMatching:
         song_name = "Bohemian Rhapsody"
         song_artist = "Queen"
         artist = "Queen"
-        
-        matches_artist = artist.lower() in song_artist.lower() or artist.lower() in song_name.lower()
+
+        matches_artist = (
+            artist.lower() in song_artist.lower() or artist.lower() in song_name.lower()
+        )
         assert matches_artist is True
 
     def test_no_match_when_artist_not_found(self):
@@ -867,15 +931,17 @@ class TestPlayTrackMatching:
         song_name = "Some Song"
         song_artist = "Some Artist"
         artist = "Different Artist"
-        
-        matches_artist = artist.lower() in song_artist.lower() or artist.lower() in song_name.lower()
+
+        matches_artist = (
+            artist.lower() in song_artist.lower() or artist.lower() in song_name.lower()
+        )
         assert matches_artist is False
 
     def test_partial_track_name_match(self):
         """Should match partial track names."""
         song_name = "Bohemian Rhapsody (Remastered 2011)"
         track_name = "Bohemian Rhapsody"
-        
+
         matches_track = track_name.lower() in song_name.lower()
         assert matches_track is True
 
@@ -922,25 +988,33 @@ class TestPaginationWithFetchExplicit:
 
         # Mock AppleScript - SHOULD be called
         mock_applescript_called = False
+
         def mock_asc_get_tracks(*args, **kwargs):
             nonlocal mock_applescript_called
             mock_applescript_called = True
-            return (True, [
-                {"name": f"Track {i}", "artist": "Artist", "album": "Album", "id": f"PID{i}"}
-                for i in range(5)
-            ])
+            return (
+                True,
+                [
+                    {"name": f"Track {i}", "artist": "Artist", "album": "Album", "id": f"PID{i}"}
+                    for i in range(5)
+                ],
+            )
 
         # Mock cache - return cached explicit status for all tracks
         mock_cache = MagicMock()
         mock_cache.get_explicit.return_value = "Clean"  # All tracks have cached explicit status
 
-        with patch.object(server.asc, 'get_playlist_tracks', side_effect=mock_asc_get_tracks):
-            with patch.object(server, 'get_track_cache', return_value=mock_cache):
+        with patch.object(server.asc, "get_playlist_tracks", side_effect=mock_asc_get_tracks):
+            with patch.object(server, "get_track_cache", return_value=mock_cache):
                 # Call with playlist name and fetch_explicit=True
-                result = server.playlist(action="tracks", playlist="Test Playlist", fetch_explicit=True)
+                result = server.playlist(
+                    action="tracks", playlist="Test Playlist", fetch_explicit=True
+                )
 
                 # Should use AppleScript
-                assert mock_applescript_called, "AppleScript should be called for fast native access"
+                assert (
+                    mock_applescript_called
+                ), "AppleScript should be called for fast native access"
 
                 # Cache should be checked for each track (via get_explicit)
                 assert mock_cache.get_explicit.call_count == 5
@@ -973,23 +1047,30 @@ class TestPaginationWithFetchExplicit:
 
         # Mock API: return 5 tracks (simulating a partial response)
         api_call_count = 0
+
         def request_callback(request):
             nonlocal api_call_count
             api_call_count += 1
-            return (200, {}, json.dumps({
-                "data": [
+            return (
+                200,
+                {},
+                json.dumps(
                     {
-                        "id": f"i.lib{i}",
-                        "attributes": {
-                            "name": f"Track {i}",
-                            "artistName": "Artist",
-                            "albumName": "Album",
-                            "contentRating": "clean",
-                        }
+                        "data": [
+                            {
+                                "id": f"i.lib{i}",
+                                "attributes": {
+                                    "name": f"Track {i}",
+                                    "artistName": "Artist",
+                                    "albumName": "Album",
+                                    "contentRating": "clean",
+                                },
+                            }
+                            for i in range(5)
+                        ]
                     }
-                    for i in range(5)
-                ]
-            }))
+                ),
+            )
 
         responses.add_callback(
             responses.GET,
@@ -1066,7 +1147,9 @@ class TestFindApiPlaylistByName:
         assert playlist_id == "p.emoji123"
 
     @responses.activate
-    def test_prefers_exact_match_over_partial(self, mock_config_dir, mock_developer_token, mock_user_token):
+    def test_prefers_exact_match_over_partial(
+        self, mock_config_dir, mock_developer_token, mock_user_token
+    ):
         """Should prefer exact match over partial match."""
         dev_token_file = mock_config_dir / "developer_token.json"
         with open(dev_token_file, "w") as f:
@@ -1094,7 +1177,9 @@ class TestFindApiPlaylistByName:
         assert fuzzy_match is None  # Should be exact match
 
     @responses.activate
-    def test_returns_none_when_not_found(self, mock_config_dir, mock_developer_token, mock_user_token):
+    def test_returns_none_when_not_found(
+        self, mock_config_dir, mock_developer_token, mock_user_token
+    ):
         """Should return None when playlist not found."""
         dev_token_file = mock_config_dir / "developer_token.json"
         with open(dev_token_file, "w") as f:
@@ -1116,7 +1201,9 @@ class TestFindApiPlaylistByName:
         assert fuzzy_match is None
 
     @responses.activate
-    def test_returns_none_on_api_error(self, mock_config_dir, mock_developer_token, mock_user_token):
+    def test_returns_none_on_api_error(
+        self, mock_config_dir, mock_developer_token, mock_user_token
+    ):
         """Should return None on API error (graceful fallback)."""
         dev_token_file = mock_config_dir / "developer_token.json"
         with open(dev_token_file, "w") as f:
@@ -1187,7 +1274,9 @@ class TestResolvePlaylistApiLookup:
         assert resolved.raw_input == "My Music"
 
     @responses.activate
-    def test_falls_back_to_name_when_not_in_api(self, mock_config_dir, mock_developer_token, mock_user_token):
+    def test_falls_back_to_name_when_not_in_api(
+        self, mock_config_dir, mock_developer_token, mock_user_token
+    ):
         """Should fall back to playlist name when not found in API."""
         dev_token_file = mock_config_dir / "developer_token.json"
         with open(dev_token_file, "w") as f:
@@ -1215,7 +1304,7 @@ class TestResolvePlaylistApiLookup:
         """Should treat 'p.s. I love you' as a name, not an ID."""
         # This tests the edge case where a playlist name starts with "p."
         # but isn't an ID (has spaces/punctuation after p.)
-        with patch.object(server, '_find_api_playlist_by_name', return_value=(None, None)):
+        with patch.object(server, "_find_api_playlist_by_name", return_value=(None, None)):
             resolved = server._resolve_playlist("p.s. I love you")
 
         # Should be treated as a name, not an ID
@@ -1228,7 +1317,9 @@ class TestFuzzyMatchingPlaylistResolution:
     """Tests for fuzzy matching playlist names - REGRESSION TESTS."""
 
     @responses.activate
-    def test_fuzzy_matches_and_vs_ampersand(self, mock_config_dir, mock_developer_token, mock_user_token):
+    def test_fuzzy_matches_and_vs_ampersand(
+        self, mock_config_dir, mock_developer_token, mock_user_token
+    ):
         """Should fuzzy match 'Jack and Norah' to 'Jack & Norah'."""
         # Setup tokens
         dev_token_file = mock_config_dir / "developer_token.json"
@@ -1260,10 +1351,14 @@ class TestFuzzyMatchingPlaylistResolution:
         assert resolved.error is None
         assert resolved.raw_input == "Jack and Norah"
         assert resolved.fuzzy_match is not None
-        assert "and" in str(resolved.fuzzy_match.transformations).lower() or "&" in str(resolved.fuzzy_match.transformations)
+        assert "and" in str(resolved.fuzzy_match.transformations).lower() or "&" in str(
+            resolved.fuzzy_match.transformations
+        )
 
     @responses.activate
-    def test_fuzzy_matches_with_emojis(self, mock_config_dir, mock_developer_token, mock_user_token):
+    def test_fuzzy_matches_with_emojis(
+        self, mock_config_dir, mock_developer_token, mock_user_token
+    ):
         """Should fuzzy match playlist names with emojis removed."""
         dev_token_file = mock_config_dir / "developer_token.json"
         with open(dev_token_file, "w") as f:
@@ -1295,7 +1390,9 @@ class TestFuzzyMatchingPlaylistResolution:
         assert resolved.fuzzy_match is not None
 
     @responses.activate
-    def test_exact_match_preferred_over_fuzzy(self, mock_config_dir, mock_developer_token, mock_user_token):
+    def test_exact_match_preferred_over_fuzzy(
+        self, mock_config_dir, mock_developer_token, mock_user_token
+    ):
         """Should prefer exact match over fuzzy match."""
         dev_token_file = mock_config_dir / "developer_token.json"
         with open(dev_token_file, "w") as f:
@@ -1311,7 +1408,10 @@ class TestFuzzyMatchingPlaylistResolution:
             "https://api.music.apple.com/v1/me/library/playlists",
             json={
                 "data": [
-                    {"id": "p.fuzzy", "attributes": {"name": "The Rock Music"}},  # Fuzzy (article removed)
+                    {
+                        "id": "p.fuzzy",
+                        "attributes": {"name": "The Rock Music"},
+                    },  # Fuzzy (article removed)
                     {"id": "p.exact", "attributes": {"name": "Rock Music"}},  # Exact match
                 ]
             },
@@ -1326,7 +1426,9 @@ class TestFuzzyMatchingPlaylistResolution:
         assert resolved.fuzzy_match is None or resolved.fuzzy_match.match_type == "exact"
 
     @responses.activate
-    def test_resolved_object_has_both_ids_after_fuzzy_match(self, mock_config_dir, mock_developer_token, mock_user_token):
+    def test_resolved_object_has_both_ids_after_fuzzy_match(
+        self, mock_config_dir, mock_developer_token, mock_user_token
+    ):
         """REGRESSION TEST: Resolved object MUST have both api_id and applescript_name after fuzzy match.
 
         This is the critical fix for the bug where remove_from_playlist("Jack and Norah", ...)
@@ -1355,7 +1457,9 @@ class TestFuzzyMatchingPlaylistResolution:
 
         # CRITICAL: Both must be populated
         assert resolved.api_id is not None, "api_id must be populated after fuzzy match"
-        assert resolved.applescript_name is not None, "applescript_name must be populated after fuzzy match"
+        assert (
+            resolved.applescript_name is not None
+        ), "applescript_name must be populated after fuzzy match"
         assert resolved.api_id == "p.test123"
         assert resolved.applescript_name == "Test & Playlist"
 
@@ -1364,7 +1468,9 @@ class TestPlaylistResolutionPerformance:
     """Performance tests for playlist resolution."""
 
     @responses.activate
-    def test_fuzzy_matching_performance_with_many_playlists(self, mock_config_dir, mock_developer_token, mock_user_token):
+    def test_fuzzy_matching_performance_with_many_playlists(
+        self, mock_config_dir, mock_developer_token, mock_user_token
+    ):
         """Should complete fuzzy matching in reasonable time even with many playlists.
 
         This tests the optimization where fuzzy matching only happens if exact/partial fails.
@@ -1382,16 +1488,14 @@ class TestPlaylistResolutionPerformance:
 
         # Mock API with 50 playlists (realistic library size)
         playlists = [
-            {"id": f"p.test{i}", "attributes": {"name": f"Playlist {i}"}}
-            for i in range(25)
+            {"id": f"p.test{i}", "attributes": {"name": f"Playlist {i}"}} for i in range(25)
         ]
         # Add fuzzy match target in the middle
         playlists.append({"id": "p.target", "attributes": {"name": "Rock & Roll"}})
         # Add more playlists after
-        playlists.extend([
-            {"id": f"p.test{i}", "attributes": {"name": f"Playlist {i}"}}
-            for i in range(25, 50)
-        ])
+        playlists.extend(
+            [{"id": f"p.test{i}", "attributes": {"name": f"Playlist {i}"}} for i in range(25, 50)]
+        )
 
         responses.add(
             responses.GET,
@@ -1455,7 +1559,7 @@ class TestUserJourneyAPIOnly:
                                     "durationInMillis": 431000,
                                     "releaseDate": "1968-08-26",
                                     "genreNames": ["Rock"],
-                                }
+                                },
                             }
                         ]
                     }
@@ -1497,11 +1601,25 @@ class TestUserJourneyAPIOnly:
         responses.add(
             responses.GET,
             "https://api.music.apple.com/v1/catalog/us/search",
-            json={"results": {"songs": {"data": [
-                {"id": "song1", "attributes": {"name": "Bohemian Rhapsody", "artistName": "Queen",
-                 "albumName": "A Night at the Opera", "durationInMillis": 354000,
-                 "releaseDate": "1975-10-31", "genreNames": ["Rock"]}}
-            ]}}},
+            json={
+                "results": {
+                    "songs": {
+                        "data": [
+                            {
+                                "id": "song1",
+                                "attributes": {
+                                    "name": "Bohemian Rhapsody",
+                                    "artistName": "Queen",
+                                    "albumName": "A Night at the Opera",
+                                    "durationInMillis": 354000,
+                                    "releaseDate": "1975-10-31",
+                                    "genreNames": ["Rock"],
+                                },
+                            }
+                        ]
+                    }
+                }
+            },
             status=200,
         )
         result = server.catalog(action="search", query="Bohemian Rhapsody")
@@ -1511,9 +1629,11 @@ class TestUserJourneyAPIOnly:
         responses.add(
             responses.GET,
             "https://api.music.apple.com/v1/me/library/playlists",
-            json={"data": [
-                {"id": "p.rock", "attributes": {"name": "Classic Rock", "canEdit": True}},
-            ]},
+            json={
+                "data": [
+                    {"id": "p.rock", "attributes": {"name": "Classic Rock", "canEdit": True}},
+                ]
+            },
             status=200,
         )
         result = server.playlist(action="list")
@@ -1523,18 +1643,29 @@ class TestUserJourneyAPIOnly:
         responses.add(
             responses.GET,
             "https://api.music.apple.com/v1/me/library/playlists",
-            json={"data": [
-                {"id": "p.rock", "attributes": {"name": "Classic Rock", "canEdit": True}},
-            ]},
+            json={
+                "data": [
+                    {"id": "p.rock", "attributes": {"name": "Classic Rock", "canEdit": True}},
+                ]
+            },
             status=200,
         )
         responses.add(
             responses.GET,
             "https://api.music.apple.com/v1/me/library/playlists/p.rock/tracks",
-            json={"data": [
-                {"id": "i.track1", "attributes": {"name": "Stairway to Heaven", "artistName": "Led Zeppelin",
-                 "albumName": "Led Zeppelin IV", "durationInMillis": 482000}}
-            ]},
+            json={
+                "data": [
+                    {
+                        "id": "i.track1",
+                        "attributes": {
+                            "name": "Stairway to Heaven",
+                            "artistName": "Led Zeppelin",
+                            "albumName": "Led Zeppelin IV",
+                            "durationInMillis": 482000,
+                        },
+                    }
+                ]
+            },
             status=200,
         )
         result = server.playlist(action="tracks", playlist="Classic Rock")
@@ -1544,10 +1675,23 @@ class TestUserJourneyAPIOnly:
         responses.add(
             responses.GET,
             "https://api.music.apple.com/v1/me/library/search",
-            json={"results": {"library-songs": {"data": [
-                {"id": "i.lib1", "attributes": {"name": "Hotel California", "artistName": "Eagles",
-                 "albumName": "Hotel California", "durationInMillis": 391000}}
-            ]}}},
+            json={
+                "results": {
+                    "library-songs": {
+                        "data": [
+                            {
+                                "id": "i.lib1",
+                                "attributes": {
+                                    "name": "Hotel California",
+                                    "artistName": "Eagles",
+                                    "albumName": "Hotel California",
+                                    "durationInMillis": 391000,
+                                },
+                            }
+                        ]
+                    }
+                }
+            },
             status=200,
         )
         result = server.library(action="search", query="Hotel California")
@@ -1557,17 +1701,33 @@ class TestUserJourneyAPIOnly:
         responses.add(
             responses.GET,
             "https://api.music.apple.com/v1/me/library/playlists",
-            json={"data": [{"id": "p.rock", "attributes": {"name": "Classic Rock", "canEdit": True}}]},
+            json={
+                "data": [{"id": "p.rock", "attributes": {"name": "Classic Rock", "canEdit": True}}]
+            },
             status=200,
         )
         responses.add(
             responses.GET,
             "https://api.music.apple.com/v1/catalog/us/search",
-            json={"results": {"songs": {"data": [
-                {"id": "cat123", "attributes": {"name": "Dream On", "artistName": "Aerosmith",
-                 "albumName": "Aerosmith", "durationInMillis": 267000, "releaseDate": "1973-01-01",
-                 "genreNames": ["Rock"]}}
-            ]}}},
+            json={
+                "results": {
+                    "songs": {
+                        "data": [
+                            {
+                                "id": "cat123",
+                                "attributes": {
+                                    "name": "Dream On",
+                                    "artistName": "Aerosmith",
+                                    "albumName": "Aerosmith",
+                                    "durationInMillis": 267000,
+                                    "releaseDate": "1973-01-01",
+                                    "genreNames": ["Rock"],
+                                },
+                            }
+                        ]
+                    }
+                }
+            },
             status=200,
         )
         responses.add(
@@ -1585,12 +1745,19 @@ class TestUserJourneyAPIOnly:
         responses.add(
             responses.GET,
             "https://api.music.apple.com/v1/me/library/playlists/p.rock/tracks",
-            json={"data": [
-                {"id": "i.track1", "attributes": {"name": "Dream On", "artistName": "Aerosmith"}}
-            ]},
+            json={
+                "data": [
+                    {
+                        "id": "i.track1",
+                        "attributes": {"name": "Dream On", "artistName": "Aerosmith"},
+                    }
+                ]
+            },
             status=200,
         )
-        result = server.playlist(action="add", playlist="Classic Rock", track="Dream On", artist="Aerosmith")
+        result = server.playlist(
+            action="add", playlist="Classic Rock", track="Dream On", artist="Aerosmith"
+        )
         assert "Dream On" in result or "Added" in result or "error" not in result.lower()
 
     @responses.activate
@@ -1608,17 +1775,28 @@ class TestUserJourneyAPIOnly:
             json={"data": [{"id": "p.new123", "attributes": {"name": "My New Playlist"}}]},
             status=201,
         )
-        result = server.playlist(action="create", name="My New Playlist", description="Created for testing")
+        result = server.playlist(
+            action="create", name="My New Playlist", description="Created for testing"
+        )
         assert "p.new123" in result or "My New Playlist" in result
 
         # 7. Get recently played
         responses.add(
             responses.GET,
             "https://api.music.apple.com/v1/me/recent/played/tracks",
-            json={"data": [
-                {"id": "recent1", "attributes": {"name": "Yesterday", "artistName": "The Beatles",
-                 "albumName": "Help!", "durationInMillis": 125000}}
-            ]},
+            json={
+                "data": [
+                    {
+                        "id": "recent1",
+                        "attributes": {
+                            "name": "Yesterday",
+                            "artistName": "The Beatles",
+                            "albumName": "Help!",
+                            "durationInMillis": 125000,
+                        },
+                    }
+                ]
+            },
             status=200,
         )
         result = server.library(action="recently_played", limit=5)
@@ -1628,9 +1806,7 @@ class TestUserJourneyAPIOnly:
         responses.add(
             responses.GET,
             "https://api.music.apple.com/v1/me/recommendations",
-            json={"data": [
-                {"id": "rec1", "type": "playlists", "attributes": {"name": "For You"}}
-            ]},
+            json={"data": [{"id": "rec1", "type": "playlists", "attributes": {"name": "For You"}}]},
             status=200,
         )
         result = server.discover(action="recommendations")
@@ -1640,9 +1816,15 @@ class TestUserJourneyAPIOnly:
         responses.add(
             responses.GET,
             "https://api.music.apple.com/v1/me/history/heavy-rotation",
-            json={"data": [
-                {"id": "hr1", "type": "albums", "attributes": {"name": "Abbey Road", "artistName": "The Beatles"}}
-            ]},
+            json={
+                "data": [
+                    {
+                        "id": "hr1",
+                        "type": "albums",
+                        "attributes": {"name": "Abbey Road", "artistName": "The Beatles"},
+                    }
+                ]
+            },
             status=200,
         )
         result = server.discover(action="heavy_rotation")
@@ -1652,18 +1834,36 @@ class TestUserJourneyAPIOnly:
         responses.add(
             responses.GET,
             "https://api.music.apple.com/v1/catalog/us/search",
-            json={"results": {"artists": {"data": [
-                {"id": "artist1", "attributes": {"name": "The Beatles", "genreNames": ["Rock"]}}
-            ]}}},
+            json={
+                "results": {
+                    "artists": {
+                        "data": [
+                            {
+                                "id": "artist1",
+                                "attributes": {"name": "The Beatles", "genreNames": ["Rock"]},
+                            }
+                        ]
+                    }
+                }
+            },
             status=200,
         )
         responses.add(
             responses.GET,
             "https://api.music.apple.com/v1/catalog/us/artists/artist1/view/top-songs",
-            json={"data": [
-                {"id": "top1", "attributes": {"name": "Come Together", "artistName": "The Beatles",
-                 "albumName": "Abbey Road", "durationInMillis": 259000}}
-            ]},
+            json={
+                "data": [
+                    {
+                        "id": "top1",
+                        "attributes": {
+                            "name": "Come Together",
+                            "artistName": "The Beatles",
+                            "albumName": "Abbey Road",
+                            "durationInMillis": 259000,
+                        },
+                    }
+                ]
+            },
             status=200,
         )
         result = server.discover(action="top_songs", artist="The Beatles")
@@ -1706,10 +1906,19 @@ class TestUserJourneyFuzzyMatching:
         responses.add(
             responses.GET,
             "https://api.music.apple.com/v1/me/library/playlists/p.fuzzy1/tracks",
-            json={"data": [
-                {"id": "i.t1", "attributes": {"name": "Sweet Child O' Mine", "artistName": "Guns N' Roses",
-                 "albumName": "Appetite for Destruction", "durationInMillis": 356000}}
-            ]},
+            json={
+                "data": [
+                    {
+                        "id": "i.t1",
+                        "attributes": {
+                            "name": "Sweet Child O' Mine",
+                            "artistName": "Guns N' Roses",
+                            "albumName": "Appetite for Destruction",
+                            "durationInMillis": 356000,
+                        },
+                    }
+                ]
+            },
             status=200,
         )
 
@@ -1727,11 +1936,25 @@ class TestUserJourneyFuzzyMatching:
         responses.add(
             responses.GET,
             "https://api.music.apple.com/v1/catalog/us/search",
-            json={"results": {"songs": {"data": [
-                {"id": "cat456", "attributes": {"name": "Back in Black", "artistName": "AC/DC",
-                 "albumName": "Back in Black", "durationInMillis": 255000, "releaseDate": "1980-07-25",
-                 "genreNames": ["Rock"]}}
-            ]}}},
+            json={
+                "results": {
+                    "songs": {
+                        "data": [
+                            {
+                                "id": "cat456",
+                                "attributes": {
+                                    "name": "Back in Black",
+                                    "artistName": "AC/DC",
+                                    "albumName": "Back in Black",
+                                    "durationInMillis": 255000,
+                                    "releaseDate": "1980-07-25",
+                                    "genreNames": ["Rock"],
+                                },
+                            }
+                        ]
+                    }
+                }
+            },
             status=200,
         )
         responses.add(
@@ -1753,7 +1976,9 @@ class TestUserJourneyFuzzyMatching:
             status=200,
         )
 
-        result = server.playlist(action="add", playlist="Rock and Roll Classics", track="Back in Black")
+        result = server.playlist(
+            action="add", playlist="Rock and Roll Classics", track="Back in Black"
+        )
         assert "Back in Black" in result or "Added" in result
 
     @responses.activate
@@ -1768,11 +1993,25 @@ class TestUserJourneyFuzzyMatching:
         responses.add(
             responses.GET,
             "https://api.music.apple.com/v1/catalog/us/search",
-            json={"results": {"songs": {"data": [
-                {"id": "789", "attributes": {"name": "Can't Buy Me Love", "artistName": "The Beatles",
-                 "albumName": "A Hard Day's Night", "durationInMillis": 137000,
-                 "releaseDate": "1964-03-16", "genreNames": ["Rock"]}}
-            ]}}},
+            json={
+                "results": {
+                    "songs": {
+                        "data": [
+                            {
+                                "id": "789",
+                                "attributes": {
+                                    "name": "Can't Buy Me Love",
+                                    "artistName": "The Beatles",
+                                    "albumName": "A Hard Day's Night",
+                                    "durationInMillis": 137000,
+                                    "releaseDate": "1964-03-16",
+                                    "genreNames": ["Rock"],
+                                },
+                            }
+                        ]
+                    }
+                }
+            },
             status=200,
         )
 
@@ -1792,10 +2031,23 @@ class TestUserJourneyFuzzyMatching:
         responses.add(
             responses.GET,
             "https://api.music.apple.com/v1/catalog/us/search",
-            json={"results": {"albums": {"data": [
-                {"id": "album1", "attributes": {"name": "Sgt. Pepper's Lonely Hearts Club Band",
-                 "artistName": "The Beatles", "trackCount": 13, "releaseDate": "1967-06-01"}}
-            ]}}},
+            json={
+                "results": {
+                    "albums": {
+                        "data": [
+                            {
+                                "id": "album1",
+                                "attributes": {
+                                    "name": "Sgt. Pepper's Lonely Hearts Club Band",
+                                    "artistName": "The Beatles",
+                                    "trackCount": 13,
+                                    "releaseDate": "1967-06-01",
+                                },
+                            }
+                        ]
+                    }
+                }
+            },
             status=200,
         )
 
@@ -1820,16 +2072,19 @@ class TestUserJourneyFuzzyMatching:
 class TestUserJourneyMacOSOnly:
     """Integration tests for macOS-only mode (AppleScript preferred)."""
 
-    def test_playlist_operations_prefer_applescript(self, mock_config_dir, mock_developer_token, mock_user_token, monkeypatch):
+    def test_playlist_operations_prefer_applescript(
+        self, mock_config_dir, mock_developer_token, mock_user_token, monkeypatch
+    ):
         """On macOS, playlist operations should prefer AppleScript when possible."""
         monkeypatch.setattr(server, "APPLESCRIPT_AVAILABLE", True)
         self._setup_tokens(mock_config_dir, mock_developer_token, mock_user_token)
 
         # Mock AppleScript module
         mock_asc = MagicMock()
-        mock_asc.get_playlists.return_value = (True, [
-            {"name": "Chill Vibes", "id": "abc123", "count": 25}
-        ])
+        mock_asc.get_playlists.return_value = (
+            True,
+            [{"name": "Chill Vibes", "id": "abc123", "count": 25}],
+        )
         monkeypatch.setattr(server, "asc", mock_asc)
 
         result = server.playlist(action="list")
@@ -1845,9 +2100,10 @@ class TestUserJourneyMacOSOnly:
 
         # Mock AppleScript
         mock_asc = MagicMock()
-        mock_asc.get_playlists.return_value = (True, [
-            {"name": "🎵 My Mix", "id": "xyz789", "count": 10}
-        ])
+        mock_asc.get_playlists.return_value = (
+            True,
+            [{"name": "🎵 My Mix", "id": "xyz789", "count": 10}],
+        )
         mock_asc.remove_track_from_playlist.return_value = (True, "Removed")
         monkeypatch.setattr(server, "asc", mock_asc)
 
@@ -1886,9 +2142,10 @@ class TestAlbumDisambiguation:
         monkeypatch.setattr(server, "APPLESCRIPT_AVAILABLE", True)
 
         mock_asc = MagicMock()
-        mock_asc.get_playlists.return_value = (True, [
-            {"name": "Test Playlist", "id": "test123", "count": 0}
-        ])
+        mock_asc.get_playlists.return_value = (
+            True,
+            [{"name": "Test Playlist", "id": "test123", "count": 0}],
+        )
         monkeypatch.setattr(server, "asc", mock_asc)
 
         # Will fail at API call, but that's fine — we're just checking _resolve_album was entered
@@ -1897,7 +2154,9 @@ class TestAlbumDisambiguation:
         except Exception:
             pass
 
-        assert resolve_album_called, "_resolve_album should be called when only album (no track) is provided"
+        assert (
+            resolve_album_called
+        ), "_resolve_album should be called when only album (no track) is provided"
 
     def test_album_with_track_skips_resolve_album(self, monkeypatch):
         """album + track together should NOT call _resolve_album (disambiguation path instead)."""
@@ -1913,18 +2172,24 @@ class TestAlbumDisambiguation:
         monkeypatch.setattr(server, "APPLESCRIPT_AVAILABLE", True)
 
         mock_asc = MagicMock()
-        mock_asc.get_playlists.return_value = (True, [
-            {"name": "Test Playlist", "id": "test123", "count": 0}
-        ])
+        mock_asc.get_playlists.return_value = (
+            True,
+            [{"name": "Test Playlist", "id": "test123", "count": 0}],
+        )
         mock_asc.track_exists_in_playlist.return_value = (True, False)
         mock_asc.add_track_to_playlist.return_value = (True, "Added Hot Potato")
         monkeypatch.setattr(server, "asc", mock_asc)
 
         server._playlist_add(
-            playlist="Test Playlist", track="Hot Potato", album="Ready, Steady, Wiggle!", artist="The Wiggles"
+            playlist="Test Playlist",
+            track="Hot Potato",
+            album="Ready, Steady, Wiggle!",
+            artist="The Wiggles",
         )
 
-        assert not resolve_album_called, "_resolve_album should NOT be called when both track and album are provided"
+        assert (
+            not resolve_album_called
+        ), "_resolve_album should NOT be called when both track and album are provided"
 
     @responses.activate
     def test_album_with_track_uses_album_as_filter(
@@ -1935,11 +2200,15 @@ class TestAlbumDisambiguation:
         self._setup_tokens(mock_config_dir, mock_developer_token, mock_user_token)
 
         mock_asc = MagicMock()
-        mock_asc.get_playlists.return_value = (True, [
-            {"name": "Test Playlist", "id": "test123", "count": 0}
-        ])
+        mock_asc.get_playlists.return_value = (
+            True,
+            [{"name": "Test Playlist", "id": "test123", "count": 0}],
+        )
         mock_asc.track_exists_in_playlist.return_value = (True, False)
-        mock_asc.add_track_to_playlist.return_value = (True, "Added Hot Potato (Ready, Steady, Wiggle!) by The Wiggles")
+        mock_asc.add_track_to_playlist.return_value = (
+            True,
+            "Added Hot Potato (Ready, Steady, Wiggle!) by The Wiggles",
+        )
         monkeypatch.setattr(server, "asc", mock_asc)
 
         result = server._playlist_add(
@@ -1957,7 +2226,10 @@ class TestAlbumDisambiguation:
         mock_asc.add_track_to_playlist.assert_called_once()
         call_args = mock_asc.add_track_to_playlist.call_args
         # 4th arg (album) should be "Ready, Steady, Wiggle!"
-        assert call_args[0][3] == "Ready, Steady, Wiggle!" or call_args.kwargs.get("album") == "Ready, Steady, Wiggle!"
+        assert (
+            call_args[0][3] == "Ready, Steady, Wiggle!"
+            or call_args.kwargs.get("album") == "Ready, Steady, Wiggle!"
+        )
 
     @responses.activate
     def test_library_ids_route_to_applescript_for_non_api_playlists(
@@ -1968,9 +2240,10 @@ class TestAlbumDisambiguation:
         self._setup_tokens(mock_config_dir, mock_developer_token, mock_user_token)
 
         mock_asc = MagicMock()
-        mock_asc.get_playlists.return_value = (True, [
-            {"name": "My Playlist", "id": "abc123", "count": 10}
-        ])
+        mock_asc.get_playlists.return_value = (
+            True,
+            [{"name": "My Playlist", "id": "abc123", "count": 10}],
+        )
         mock_asc.track_exists_in_playlist.return_value = (True, False)
         mock_asc.add_track_to_playlist.return_value = (True, "Added Hot Potato by The Wiggles")
         monkeypatch.setattr(server, "asc", mock_asc)
@@ -1979,7 +2252,14 @@ class TestAlbumDisambiguation:
         responses.add(
             responses.GET,
             "https://api.music.apple.com/v1/me/library/songs/i.abc123",
-            json={"data": [{"id": "i.abc123", "attributes": {"name": "Hot Potato", "artistName": "The Wiggles"}}]},
+            json={
+                "data": [
+                    {
+                        "id": "i.abc123",
+                        "attributes": {"name": "Hot Potato", "artistName": "The Wiggles"},
+                    }
+                ]
+            },
             status=200,
         )
 
@@ -2017,9 +2297,10 @@ class TestUserJourneyCombinedMode:
 
         # Mock AppleScript
         mock_asc = MagicMock()
-        mock_asc.get_playlists.return_value = (True, [
-            {"name": "Workout", "id": "work123", "count": 50}
-        ])
+        mock_asc.get_playlists.return_value = (
+            True,
+            [{"name": "Workout", "id": "work123", "count": 50}],
+        )
         mock_asc.track_exists_in_playlist.return_value = (True, False)  # Track doesn't exist yet
         mock_asc.add_track_to_playlist.return_value = (True, "Added")
         monkeypatch.setattr(server, "asc", mock_asc)
@@ -2055,9 +2336,11 @@ class TestUserJourneyCombinedMode:
         responses.add(
             responses.GET,
             "https://api.music.apple.com/v1/me/library/playlists",
-            json={"data": [
-                {"id": "p.fallback", "attributes": {"name": "API Playlist", "canEdit": True}}
-            ]},
+            json={
+                "data": [
+                    {"id": "p.fallback", "attributes": {"name": "API Playlist", "canEdit": True}}
+                ]
+            },
             status=200,
         )
 
@@ -2090,10 +2373,23 @@ class TestUserJourneyPowerUser:
         responses.add(
             responses.GET,
             "https://api.music.apple.com/v1/catalog/us/search",
-            json={"results": {"albums": {"data": [
-                {"id": "alb1", "attributes": {"name": "Dark Side of the Moon",
-                 "artistName": "Pink Floyd", "trackCount": 10, "releaseDate": "1973-03-01"}}
-            ]}}},
+            json={
+                "results": {
+                    "albums": {
+                        "data": [
+                            {
+                                "id": "alb1",
+                                "attributes": {
+                                    "name": "Dark Side of the Moon",
+                                    "artistName": "Pink Floyd",
+                                    "trackCount": 10,
+                                    "releaseDate": "1973-03-01",
+                                },
+                            }
+                        ]
+                    }
+                }
+            },
             status=200,
         )
 
@@ -2120,7 +2416,9 @@ class TestUserJourneyPowerUser:
         responses.add(
             responses.GET,
             "https://api.music.apple.com/v1/me/library/playlists",
-            json={"data": [{"id": "p.src", "attributes": {"name": "Original Mix", "canEdit": True}}]},
+            json={
+                "data": [{"id": "p.src", "attributes": {"name": "Original Mix", "canEdit": True}}]
+            },
             status=200,
         )
 
@@ -2128,10 +2426,12 @@ class TestUserJourneyPowerUser:
         responses.add(
             responses.GET,
             "https://api.music.apple.com/v1/me/library/playlists/p.src/tracks",
-            json={"data": [
-                {"id": "i.t1", "attributes": {"name": "Track 1", "artistName": "Artist 1"}},
-                {"id": "i.t2", "attributes": {"name": "Track 2", "artistName": "Artist 2"}},
-            ]},
+            json={
+                "data": [
+                    {"id": "i.t1", "attributes": {"name": "Track 1", "artistName": "Artist 1"}},
+                    {"id": "i.t2", "attributes": {"name": "Track 2", "artistName": "Artist 2"}},
+                ]
+            },
             status=200,
         )
 
@@ -2151,7 +2451,9 @@ class TestUserJourneyPowerUser:
             status=201,
         )
 
-        result = server.playlist(action="copy", source="Original Mix", new_name="Copy of Original Mix")
+        result = server.playlist(
+            action="copy", source="Original Mix", new_name="Copy of Original Mix"
+        )
         assert "p.new" in result or "Copy" in result or "copied" in result.lower()
 
     @responses.activate
@@ -2166,17 +2468,47 @@ class TestUserJourneyPowerUser:
         responses.add(
             responses.GET,
             "https://api.music.apple.com/v1/catalog/us/search",
-            json={"results": {"songs": {"data": [
-                {"id": "dup1", "attributes": {"name": "Duplicate Song", "artistName": "Artist",
-                 "albumName": "Album", "durationInMillis": 200000, "releaseDate": "2020-01-01",
-                 "genreNames": ["Pop"]}},
-                {"id": "dup1", "attributes": {"name": "Duplicate Song", "artistName": "Artist",
-                 "albumName": "Album", "durationInMillis": 200000, "releaseDate": "2020-01-01",
-                 "genreNames": ["Pop"]}},  # Same ID = duplicate
-                {"id": "dup2", "attributes": {"name": "Unique Song", "artistName": "Artist",
-                 "albumName": "Album", "durationInMillis": 180000, "releaseDate": "2020-01-01",
-                 "genreNames": ["Pop"]}},
-            ]}}},
+            json={
+                "results": {
+                    "songs": {
+                        "data": [
+                            {
+                                "id": "dup1",
+                                "attributes": {
+                                    "name": "Duplicate Song",
+                                    "artistName": "Artist",
+                                    "albumName": "Album",
+                                    "durationInMillis": 200000,
+                                    "releaseDate": "2020-01-01",
+                                    "genreNames": ["Pop"],
+                                },
+                            },
+                            {
+                                "id": "dup1",
+                                "attributes": {
+                                    "name": "Duplicate Song",
+                                    "artistName": "Artist",
+                                    "albumName": "Album",
+                                    "durationInMillis": 200000,
+                                    "releaseDate": "2020-01-01",
+                                    "genreNames": ["Pop"],
+                                },
+                            },  # Same ID = duplicate
+                            {
+                                "id": "dup2",
+                                "attributes": {
+                                    "name": "Unique Song",
+                                    "artistName": "Artist",
+                                    "albumName": "Album",
+                                    "durationInMillis": 180000,
+                                    "releaseDate": "2020-01-01",
+                                    "genreNames": ["Pop"],
+                                },
+                            },
+                        ]
+                    }
+                }
+            },
             status=200,
         )
 
@@ -2215,18 +2547,22 @@ class TestCatalogAlbumDetails:
         responses.add(
             responses.GET,
             "https://api.music.apple.com/v1/catalog/us/albums/1781270319",
-            json={"data": [{
-                "id": "1781270319",
-                "attributes": {
-                    "name": "GNX",
-                    "artistName": "Kendrick Lamar",
-                    "releaseDate": "2024-11-22",
-                    "genreNames": ["Hip-Hop/Rap"],
-                    "recordLabel": "pgLang",
-                    "trackCount": 12,
-                    "copyright": "℗ 2024 pgLang"
-                }
-            }]},
+            json={
+                "data": [
+                    {
+                        "id": "1781270319",
+                        "attributes": {
+                            "name": "GNX",
+                            "artistName": "Kendrick Lamar",
+                            "releaseDate": "2024-11-22",
+                            "genreNames": ["Hip-Hop/Rap"],
+                            "recordLabel": "pgLang",
+                            "trackCount": 12,
+                            "copyright": "℗ 2024 pgLang",
+                        },
+                    }
+                ]
+            },
             status=200,
         )
 
@@ -2234,10 +2570,15 @@ class TestCatalogAlbumDetails:
         responses.add(
             responses.GET,
             "https://api.music.apple.com/v1/catalog/us/albums/1781270319/tracks",
-            json={"data": [
-                {"id": "t1", "attributes": {"name": "wacced out murals", "durationInMillis": 251000}},
-                {"id": "t2", "attributes": {"name": "squabble up", "durationInMillis": 193000}},
-            ]},
+            json={
+                "data": [
+                    {
+                        "id": "t1",
+                        "attributes": {"name": "wacced out murals", "durationInMillis": 251000},
+                    },
+                    {"id": "t2", "attributes": {"name": "squabble up", "durationInMillis": 193000}},
+                ]
+            },
             status=200,
         )
 
@@ -2269,10 +2610,18 @@ class TestCatalogAlbumDetails:
         responses.add(
             responses.GET,
             "https://api.music.apple.com/v1/catalog/us/search",
-            json={"results": {"albums": {"data": [{
-                "id": "123",
-                "attributes": {"name": "Abbey Road", "artistName": "The Beatles"}
-            }]}}},
+            json={
+                "results": {
+                    "albums": {
+                        "data": [
+                            {
+                                "id": "123",
+                                "attributes": {"name": "Abbey Road", "artistName": "The Beatles"},
+                            }
+                        ]
+                    }
+                }
+            },
             status=200,
         )
 
@@ -2280,18 +2629,22 @@ class TestCatalogAlbumDetails:
         responses.add(
             responses.GET,
             "https://api.music.apple.com/v1/catalog/us/albums/123",
-            json={"data": [{
-                "id": "123",
-                "attributes": {
-                    "name": "Abbey Road",
-                    "artistName": "The Beatles",
-                    "releaseDate": "1969-09-26",
-                    "genreNames": ["Rock"],
-                    "recordLabel": "Apple Records",
-                    "trackCount": 17,
-                    "copyright": "℗ 1969"
-                }
-            }]},
+            json={
+                "data": [
+                    {
+                        "id": "123",
+                        "attributes": {
+                            "name": "Abbey Road",
+                            "artistName": "The Beatles",
+                            "releaseDate": "1969-09-26",
+                            "genreNames": ["Rock"],
+                            "recordLabel": "Apple Records",
+                            "trackCount": 17,
+                            "copyright": "℗ 1969",
+                        },
+                    }
+                ]
+            },
             status=200,
         )
 
@@ -2299,9 +2652,14 @@ class TestCatalogAlbumDetails:
         responses.add(
             responses.GET,
             "https://api.music.apple.com/v1/catalog/us/albums/123/tracks",
-            json={"data": [
-                {"id": "t1", "attributes": {"name": "Come Together", "durationInMillis": 259000}},
-            ]},
+            json={
+                "data": [
+                    {
+                        "id": "t1",
+                        "attributes": {"name": "Come Together", "durationInMillis": 259000},
+                    },
+                ]
+            },
             status=200,
         )
 
@@ -2359,12 +2717,24 @@ class TestDiscoverStorefrontParameter:
         responses.add(
             responses.GET,
             "https://api.music.apple.com/v1/catalog/it/charts",
-            json={"results": {"songs": [{
-                "name": "Top brani",
-                "data": [
-                    {"id": "it1", "attributes": {"name": "Italian Song", "artistName": "Italian Artist"}},
-                ]
-            }]}},
+            json={
+                "results": {
+                    "songs": [
+                        {
+                            "name": "Top brani",
+                            "data": [
+                                {
+                                    "id": "it1",
+                                    "attributes": {
+                                        "name": "Italian Song",
+                                        "artistName": "Italian Artist",
+                                    },
+                                },
+                            ],
+                        }
+                    ]
+                }
+            },
             status=200,
         )
 
@@ -2393,10 +2763,13 @@ class TestDiscoverStorefrontParameter:
         responses.add(
             responses.GET,
             "https://api.music.apple.com/v1/catalog/jp/search",
-            json={"results": {"artists": {"data": [{
-                "id": "jp-artist-123",
-                "attributes": {"name": "Japanese Artist"}
-            }]}}},
+            json={
+                "results": {
+                    "artists": {
+                        "data": [{"id": "jp-artist-123", "attributes": {"name": "Japanese Artist"}}]
+                    }
+                }
+            },
             status=200,
         )
 
@@ -2404,9 +2777,14 @@ class TestDiscoverStorefrontParameter:
         responses.add(
             responses.GET,
             "https://api.music.apple.com/v1/catalog/jp/artists/jp-artist-123/view/top-songs",
-            json={"data": [
-                {"id": "jp-song-1", "attributes": {"name": "JP Hit Song", "artistName": "Japanese Artist"}},
-            ]},
+            json={
+                "data": [
+                    {
+                        "id": "jp-song-1",
+                        "attributes": {"name": "JP Hit Song", "artistName": "Japanese Artist"},
+                    },
+                ]
+            },
             status=200,
         )
 
@@ -2438,16 +2816,29 @@ class TestDiscoverRecommendationsLimit:
         responses.add(
             responses.GET,
             "https://api.music.apple.com/v1/me/recommendations",
-            json={"data": [
-                {
-                    "attributes": {"title": {"stringForDisplay": "For You"}},
-                    "relationships": {"contents": {"data": [
-                        {"id": f"rec{i}", "type": "songs", "attributes": {
-                            "name": f"Song {i}", "artistName": "Artist", "releaseDate": "2024-01-01"
-                        }} for i in range(1, 51)  # 50 items
-                    ]}}
-                }
-            ]},
+            json={
+                "data": [
+                    {
+                        "attributes": {"title": {"stringForDisplay": "For You"}},
+                        "relationships": {
+                            "contents": {
+                                "data": [
+                                    {
+                                        "id": f"rec{i}",
+                                        "type": "songs",
+                                        "attributes": {
+                                            "name": f"Song {i}",
+                                            "artistName": "Artist",
+                                            "releaseDate": "2024-01-01",
+                                        },
+                                    }
+                                    for i in range(1, 51)  # 50 items
+                                ]
+                            }
+                        },
+                    }
+                ]
+            },
             status=200,
         )
 
@@ -2455,7 +2846,7 @@ class TestDiscoverRecommendationsLimit:
         result = server.discover(action="recommendations", limit=15, format="text")
 
         # Count items in result (rough check - each song should have a line)
-        lines = [l for l in result.split('\n') if l.strip() and not l.startswith('===')]
+        lines = [l for l in result.split("\n") if l.strip() and not l.startswith("===")]
         # Should have ~15 lines, not 50
         assert len(lines) <= 20  # Allow some buffer for formatting
 
@@ -2477,16 +2868,29 @@ class TestDiscoverRecommendationsLimit:
         responses.add(
             responses.GET,
             "https://api.music.apple.com/v1/me/recommendations",
-            json={"data": [
-                {
-                    "attributes": {"title": {"stringForDisplay": "For You"}},
-                    "relationships": {"contents": {"data": [
-                        {"id": f"rec{i}", "type": "songs", "attributes": {
-                            "name": f"Song {i}", "artistName": "Artist", "releaseDate": "2024-01-01"
-                        }} for i in range(1, 21)  # 20 items
-                    ]}}
-                }
-            ]},
+            json={
+                "data": [
+                    {
+                        "attributes": {"title": {"stringForDisplay": "For You"}},
+                        "relationships": {
+                            "contents": {
+                                "data": [
+                                    {
+                                        "id": f"rec{i}",
+                                        "type": "songs",
+                                        "attributes": {
+                                            "name": f"Song {i}",
+                                            "artistName": "Artist",
+                                            "releaseDate": "2024-01-01",
+                                        },
+                                    }
+                                    for i in range(1, 21)  # 20 items
+                                ]
+                            }
+                        },
+                    }
+                ]
+            },
             status=200,
         )
 
@@ -2494,5 +2898,5 @@ class TestDiscoverRecommendationsLimit:
         result = server.discover(action="recommendations", limit=0, format="text")
 
         # Should have all ~20 items
-        lines = [l for l in result.split('\n') if l.strip() and not l.startswith('===')]
+        lines = [l for l in result.split("\n") if l.strip() and not l.startswith("===")]
         assert len(lines) >= 7  # At least 7-8 items from the category
