@@ -397,3 +397,7 @@ MIT · *Unofficial community project, not affiliated with Apple.*
 ## Credits
 
 [FastMCP](https://github.com/jlowin/fastmcp) · [Apple MusicKit](https://developer.apple.com/documentation/applemusicapi) · [Model Context Protocol](https://modelcontextprotocol.io/)
+
+## Download History
+
+[![Download History](https://skill-history.com/chart/epheterson/mcp-applemusic.svg)](https://skill-history.com/epheterson/mcp-applemusic)
