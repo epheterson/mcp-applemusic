@@ -2932,27 +2932,16 @@ class TestHasDeveloperToken:
 class TestSmartAddVerifiesSplitMatch:
     """Verify _smart_as_add_track_to_playlist re-checks split-resolved adds."""
 
-    def test_split_match_with_verify_failure_falls_through(self, monkeypatch):
-        """When split candidate adds OK but verify fails, try next candidate
-        rather than reporting suspect success."""
-        # First add (literal "Silvera - GOJIRA") fails → trigger split path
-        # First split candidate (forward form): add succeeds, verify FAILS
-        # Second split candidate (reverse form): add succeeds, verify PASSES
-        verify_calls = []
+    def test_split_match_with_verify_passes_returns_success(self, monkeypatch):
+        """Happy path: split candidate adds and verifies → return success."""
 
         def fake_add(playlist, name, artist, album):
-            # The literal combined input has no separation between track and
-            # artist, so AppleScript can't match it — that's the trigger for
-            # the split-retry path.
             if " - " in name and artist is None:
                 return False, "Track not found"
             return True, f"Added '{name}' to '{playlist}'"
 
         def fake_verify(playlist, name, artist):
-            verify_calls.append((name, artist))
-            # Forward form fails (would be a wrong-track silent click);
-            # reverse form is the real match.
-            return (name, artist) == ("GOJIRA", "Silvera")
+            return (name, artist) == ("Silvera", "GOJIRA")
 
         monkeypatch.setattr(server.asc, "add_track_to_playlist", fake_add)
         monkeypatch.setattr(server, "_verify_track_in_playlist", fake_verify)
@@ -2961,10 +2950,40 @@ class TestSmartAddVerifiesSplitMatch:
             "MyPlaylist", "Silvera - GOJIRA", None, None
         )
         assert ok is True
-        assert split_match == ("GOJIRA", "Silvera")
-        # Verify was called for both forward and reverse before settling
-        assert ("Silvera", "GOJIRA") in verify_calls
-        assert ("GOJIRA", "Silvera") in verify_calls
+        assert split_match == ("Silvera", "GOJIRA")
+
+    def test_split_match_verify_failure_does_not_cascade(self, monkeypatch):
+        """First split add succeeds but verify fails → return False with a
+        descriptive error rather than try the next candidate.
+
+        Cascading would risk a second wrong-track add on slow iCloud sync
+        (the 'real' track really did land but verify is just slow). One
+        suspect add is better than two."""
+        add_calls = []
+
+        def fake_add(playlist, name, artist, album):
+            add_calls.append((name, artist))
+            if " - " in name and artist is None:
+                return False, "Track not found"
+            # Both candidates would add OK — but we should never reach the
+            # second one once verify fails on the first.
+            return True, f"Added '{name}' to '{playlist}'"
+
+        def fake_verify(playlist, name, artist):
+            return False  # always fails — simulates slow sync
+
+        monkeypatch.setattr(server.asc, "add_track_to_playlist", fake_add)
+        monkeypatch.setattr(server, "_verify_track_in_playlist", fake_verify)
+
+        ok, result, split_match = server._smart_as_add_track_to_playlist(
+            "MyPlaylist", "Silvera - GOJIRA", None, None
+        )
+        assert ok is False
+        assert split_match is None
+        # Literal attempt + first split candidate only — second candidate
+        # must NOT have been tried (would cascade a second wrong add).
+        assert len(add_calls) == 2
+        assert "could not verify" in result
 
     def test_first_attempt_success_does_not_verify(self, monkeypatch):
         """A clean first-attempt add should NOT trigger verification — preserves
@@ -3097,3 +3116,39 @@ class TestLibrarySearchSurfacesAppleScriptError:
         assert "Developer token not found" in result
         assert "AppleScript also failed" in result
         assert "AppleScript exited with code 1" in result
+
+    @pytest.mark.usefixtures("mock_config_dir")
+    def test_no_songs_found_includes_applescript_failure(
+        self, monkeypatch, mock_config_dir, mock_developer_token, mock_user_token
+    ):
+        """If AS fails AND API returns zero songs, the user should still see
+        why AS failed — not a bare 'No songs found' that hides the cause."""
+        import responses as resp_lib
+
+        # Configure tokens so the API path actually runs (no FileNotFoundError)
+        dev_token_file = mock_config_dir / "developer_token.json"
+        with open(dev_token_file, "w") as f:
+            json.dump({"token": mock_developer_token, "expires": time.time() + 86400 * 30}, f)
+        user_token_file = mock_config_dir / "music_user_token.json"
+        with open(user_token_file, "w") as f:
+            json.dump({"music_user_token": mock_user_token}, f)
+
+        monkeypatch.setattr(server, "APPLESCRIPT_AVAILABLE", True)
+
+        def fake_search(query, types):
+            return False, "Music app not running"
+
+        monkeypatch.setattr(server.asc, "search_library", fake_search)
+
+        with resp_lib.RequestsMock() as r:
+            r.add(
+                resp_lib.GET,
+                f"{server.BASE_URL}/me/library/search",
+                json={"results": {"library-songs": {"data": []}}},
+                status=200,
+            )
+            result = server._library_search("nonexistent track")
+
+        assert "No songs found" in result
+        assert "AppleScript also failed" in result
+        assert "Music app not running" in result

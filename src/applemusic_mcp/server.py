@@ -815,10 +815,12 @@ def get_headers() -> dict:
 def _has_developer_token() -> bool:
     """Probe whether a usable developer token is configured.
 
-    Returns False on missing/expired/malformed token. Use this for feature
-    detection at callsites that have a tokenless fallback (e.g. AppleScript)
-    so the raw "Developer token not found" exception doesn't leak to users
-    on macOS where the operation could have succeeded without API access.
+    Returns False on any exception from get_developer_token() — that
+    includes missing/expired tokens AND environmental failures (config dir
+    permissions, malformed JSON, etc). Callers that have a tokenless
+    fallback (e.g. AppleScript) use this for feature detection so the raw
+    exception doesn't leak to users where the operation could have
+    succeeded without API access.
     """
     try:
         get_developer_token()
@@ -1693,9 +1695,16 @@ def _smart_as_add_track_to_playlist(
             # rather fail loudly than claim a false success on a guess.
             if _verify_track_in_playlist(playlist_name, cand_name, cand_artist):
                 return True, result2, (cand_name, cand_artist)
-            # Verify failed — try the next candidate rather than returning a
-            # suspect success.
-            continue
+            # Verify failed after a successful add. Don't try the next
+            # candidate — that would risk a second wrong-track add if the
+            # first one really did land but verify is just slow (iCloud
+            # propagation lag). Better one suspect add than two.
+            return (
+                False,
+                f"Added '{cand_name}' but could not verify in '{playlist_name}' "
+                f"(may have landed; check manually)",
+                None,
+            )
     return False, result, None
 
 
@@ -3672,7 +3681,12 @@ def _library_search(
 
         songs = data.get("results", {}).get("library-songs", {}).get("data", [])
         if not songs:
-            return "No songs found"
+            msg = "No songs found"
+            if asc_error:
+                # AS failure + zero API hits is the exact case the legacy
+                # error swallowed silently — surface what AS reported.
+                msg += f"\n\n(AppleScript also failed: {asc_error})"
+            return msg
 
         song_data = [extract_track_data(s, full) for s in songs]
 
