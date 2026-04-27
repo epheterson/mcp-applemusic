@@ -3542,7 +3542,9 @@ def library(
 
     if action == "search":
         if not query:
-            return "Error: query is required for search action"
+            return _library_browse(
+                item_type, limit, offset, format, export, full, fetch_explicit, clean_only
+            )
         return _library_search(
             query, types, limit, format, export, full, fetch_explicit, clean_only
         )
@@ -3603,6 +3605,7 @@ def _library_search(
         clean_only = prefs["clean_only"]
 
     # Try AppleScript on macOS (faster for local searches)
+    asc_error = None
     if APPLESCRIPT_AVAILABLE:
         success, results = asc.search_library(query, types)
         if success and results:
@@ -3628,6 +3631,8 @@ def _library_search(
                 results = [t for t in results if t.get("explicit") != "Yes"]
 
             return format_output(results, format, export, full, f"search_{query[:20]}")
+        if not success:
+            asc_error = results
         # AppleScript found nothing or failed - fall through to API
 
     # API fallback (or primary on non-macOS)
@@ -3658,9 +3663,15 @@ def _library_search(
         return format_output(song_data, format, export, full, f"search_{query[:20]}")
 
     except requests.exceptions.RequestException as e:
-        return f"API Error: {str(e)}"
+        msg = f"API Error: {str(e)}"
+        if asc_error:
+            msg += f"\n\n(AppleScript also failed: {asc_error})"
+        return msg
     except (FileNotFoundError, ValueError) as e:
-        return str(e)
+        msg = str(e)
+        if asc_error:
+            msg += f"\n\n(AppleScript also failed: {asc_error})"
+        return msg
 
 
 def _library_add(

@@ -1630,28 +1630,32 @@ def get_library_songs(limit: int = 100) -> tuple[bool, list[dict]]:
         set resultCount to 0
         repeat with t in tracks of library playlist 1
             {limit_clause}
-            set tName to name of t
-            set tArtist to artist of t
-            set tAlbum to album of t
-            set tDuration to duration of t
-            set tId to persistent ID of t
             try
-                set tGenre to genre of t
+                set tName to name of t
+                set tArtist to artist of t
+                set tAlbum to album of t
+                set tDuration to duration of t
+                set tId to persistent ID of t
+                try
+                    set tGenre to genre of t
+                on error
+                    set tGenre to ""
+                end try
+                try
+                    set tYear to year of t as string
+                on error
+                    set tYear to ""
+                end try
+                try
+                    set tExplicit to explicit of t
+                on error
+                    set tExplicit to false
+                end try
+                set output to output & tName & "|||" & tArtist & "|||" & tAlbum & "|||" & tDuration & "|||" & tGenre & "|||" & tYear & "|||" & tId & "|||" & tExplicit & "\\n"
+                set resultCount to resultCount + 1
             on error
-                set tGenre to ""
+                -- skip inaccessible tracks (broken file references, error -1728)
             end try
-            try
-                set tYear to year of t as string
-            on error
-                set tYear to ""
-            end try
-            try
-                set tExplicit to explicit of t
-            on error
-                set tExplicit to false
-            end try
-            set output to output & tName & "|||" & tArtist & "|||" & tAlbum & "|||" & tDuration & "|||" & tGenre & "|||" & tYear & "|||" & tId & "|||" & tExplicit & "\\n"
-            set resultCount to resultCount + 1
         end repeat
         return output
     end tell
@@ -1720,28 +1724,32 @@ def search_library(query: str, types: str = "all") -> tuple[bool, list[dict]]:
         set resultCount to 0
         repeat with t in searchResults
             if resultCount >= maxResults then exit repeat
-            set tName to name of t
-            set tArtist to artist of t
-            set tAlbum to album of t
-            set tDuration to duration of t
-            set tId to persistent ID of t
             try
-                set tGenre to genre of t
+                set tName to name of t
+                set tArtist to artist of t
+                set tAlbum to album of t
+                set tDuration to duration of t
+                set tId to persistent ID of t
+                try
+                    set tGenre to genre of t
+                on error
+                    set tGenre to ""
+                end try
+                try
+                    set tYear to year of t as string
+                on error
+                    set tYear to ""
+                end try
+                try
+                    set tExplicit to explicit of t
+                on error
+                    set tExplicit to false
+                end try
+                set output to output & tName & "|||" & tArtist & "|||" & tAlbum & "|||" & tDuration & "|||" & tGenre & "|||" & tYear & "|||" & tId & "|||" & tExplicit & "\\n"
+                set resultCount to resultCount + 1
             on error
-                set tGenre to ""
+                -- skip inaccessible tracks (broken file references, error -1728)
             end try
-            try
-                set tYear to year of t as string
-            on error
-                set tYear to ""
-            end try
-            try
-                set tExplicit to explicit of t
-            on error
-                set tExplicit to false
-            end try
-            set output to output & tName & "|||" & tArtist & "|||" & tAlbum & "|||" & tDuration & "|||" & tGenre & "|||" & tYear & "|||" & tId & "|||" & tExplicit & "\\n"
-            set resultCount to resultCount + 1
         end repeat
         return output
     end tell
