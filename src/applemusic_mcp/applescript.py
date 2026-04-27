@@ -24,7 +24,7 @@ from typing import Optional
 
 def is_available() -> bool:
     """Check if AppleScript is available (macOS with osascript)."""
-    return sys.platform == 'darwin' and shutil.which('osascript') is not None
+    return sys.platform == "darwin" and shutil.which("osascript") is not None
 
 
 def _escape_for_applescript(s: str) -> str:
@@ -41,8 +41,8 @@ def _escape_for_applescript(s: str) -> str:
     errors out.
     """
     # Strip control characters that could break out of string literals
-    s = s.replace('\r\n', ' ').replace('\r', ' ').replace('\n', ' ').replace('\t', ' ')
-    return s.replace('\\', '\\\\').replace('"', '\\"')
+    s = s.replace("\r\n", " ").replace("\r", " ").replace("\n", " ").replace("\t", " ")
+    return s.replace("\\", "\\\\").replace('"', '\\"')
 
 
 def _find_playlist_applescript(safe_name: str) -> str:
@@ -57,7 +57,7 @@ def _find_playlist_applescript(safe_name: str) -> str:
     Returns:
         AppleScript code snippet that sets targetPlaylist variable
     """
-    return f'''
+    return f"""
         try
             -- Try exact match on user playlists
             set targetPlaylist to first user playlist whose name is "{safe_name}"
@@ -78,7 +78,7 @@ def _find_playlist_applescript(safe_name: str) -> str:
                     end try
                 end try
             end try
-        end try'''
+        end try"""
 
 
 def run_applescript(script: str) -> tuple[bool, str]:
@@ -94,10 +94,7 @@ def run_applescript(script: str) -> tuple[bool, str]:
     """
     try:
         result = subprocess.run(
-            ['osascript', '-e', script],
-            capture_output=True,
-            text=True,
-            timeout=30
+            ["osascript", "-e", script], capture_output=True, text=True, timeout=30
         )
         if result.returncode == 0:
             return True, result.stdout.strip()
@@ -112,6 +109,7 @@ def run_applescript(script: str) -> tuple[bool, str]:
 # =============================================================================
 # Playback Control
 # =============================================================================
+
 
 def play() -> tuple[bool, str]:
     """Start or resume playback."""
@@ -154,7 +152,7 @@ def get_current_track() -> tuple[bool, dict]:
     Returns:
         Tuple of (success, track_info_dict or error_string)
     """
-    script = '''
+    script = """
     tell application "Music"
         if player state is stopped then
             return "STOPPED"
@@ -174,7 +172,7 @@ def get_current_track() -> tuple[bool, dict]:
         end try
         return output
     end tell
-    '''
+    """
     success, output = run_applescript(script)
     if not success:
         return False, output
@@ -183,9 +181,9 @@ def get_current_track() -> tuple[bool, dict]:
 
     # Parse key:value pairs
     track_info = {"state": "playing"}
-    for line in output.split('\n'):
-        if ':' in line:
-            key, value = line.split(':', 1)
+    for line in output.split("\n"):
+        if ":" in line:
+            key, value = line.split(":", 1)
             track_info[key.strip()] = value.strip()
     return True, track_info
 
@@ -219,13 +217,13 @@ def get_shuffle() -> tuple[bool, bool | str]:
     """
     success, output = run_applescript('tell application "Music" to get shuffle enabled')
     if success:
-        return True, output.lower() == 'true'
+        return True, output.lower() == "true"
     return False, output
 
 
 def set_shuffle(enabled: bool) -> tuple[bool, str]:
     """Set shuffle on/off."""
-    value = 'true' if enabled else 'false'
+    value = "true" if enabled else "false"
     return run_applescript(f'tell application "Music" to set shuffle enabled to {value}')
 
 
@@ -236,7 +234,7 @@ def get_repeat() -> tuple[bool, str]:
 
 def set_repeat(mode: str) -> tuple[bool, str]:
     """Set repeat mode (off, one, all)."""
-    if mode not in ('off', 'one', 'all'):
+    if mode not in ("off", "one", "all"):
         return False, f"Invalid repeat mode: {mode}. Use 'off', 'one', or 'all'"
     return run_applescript(f'tell application "Music" to set song repeat to {mode}')
 
@@ -250,13 +248,14 @@ def seek(position: float) -> tuple[bool, str]:
 # Playlist Operations
 # =============================================================================
 
+
 def get_playlists() -> tuple[bool, list[dict]]:
     """Get all user playlists with details.
 
     Returns:
         Tuple of (success, list of playlist dicts or error string)
     """
-    script = '''
+    script = """
     tell application "Music"
         set output to ""
         repeat with p in user playlists
@@ -273,23 +272,25 @@ def get_playlists() -> tuple[bool, list[dict]]:
         end repeat
         return output
     end tell
-    '''
+    """
     success, output = run_applescript(script)
     if not success:
         return False, output
 
     playlists = []
-    for line in output.split('\n'):
-        if '|||' in line:
-            parts = line.split('|||')
+    for line in output.split("\n"):
+        if "|||" in line:
+            parts = line.split("|||")
             if len(parts) >= 5:
-                playlists.append({
-                    'name': parts[0],
-                    'id': parts[1],
-                    'smart': parts[2].lower() == 'true',
-                    'track_count': int(parts[3]) if parts[3].isdigit() else 0,
-                    'duration': parts[4]
-                })
+                playlists.append(
+                    {
+                        "name": parts[0],
+                        "id": parts[1],
+                        "smart": parts[2].lower() == "true",
+                        "track_count": int(parts[3]) if parts[3].isdigit() else 0,
+                        "duration": parts[4],
+                    }
+                )
     return True, playlists
 
 
@@ -298,7 +299,7 @@ def _get_playlist_tracks_bulk(safe_name: str, limit: int) -> tuple[bool, str]:
 
     Returns (success, output) where output is raw AppleScript output or error.
     """
-    script = f'''
+    script = f"""
     tell application "Music"
 {_find_playlist_applescript(safe_name)}
 
@@ -331,7 +332,7 @@ def _get_playlist_tracks_bulk(safe_name: str, limit: int) -> tuple[bool, str]:
         end repeat
         return output
     end tell
-    '''
+    """
     return run_applescript(script)
 
 
@@ -341,7 +342,7 @@ def _get_playlist_tracks_slow(safe_name: str, limit: int) -> tuple[bool, str]:
     Optimized for shared tracks: skips genre/year (saves ~33% time).
     Returns (success, output) where output is raw AppleScript output or error.
     """
-    script = f'''
+    script = f"""
     tell application "Music"
 {_find_playlist_applescript(safe_name)}
 
@@ -370,7 +371,7 @@ def _get_playlist_tracks_slow(safe_name: str, limit: int) -> tuple[bool, str]:
         end repeat
         return output
     end tell
-    '''
+    """
     return run_applescript(script)
 
 
@@ -403,9 +404,9 @@ def get_playlist_tracks(playlist_name: str, limit: int = 500) -> tuple[bool, lis
         return False, output[6:]
 
     tracks = []
-    for line in output.split('\n'):
-        if '|||' in line:
-            parts = line.split('|||')
+    for line in output.split("\n"):
+        if "|||" in line:
+            parts = line.split("|||")
             if len(parts) >= 7:
                 # Format duration
                 try:
@@ -416,15 +417,17 @@ def get_playlist_tracks(playlist_name: str, limit: int = 500) -> tuple[bool, lis
                 except (ValueError, TypeError):
                     duration = ""
 
-                tracks.append({
-                    'name': parts[0],
-                    'artist': parts[1],
-                    'album': parts[2],
-                    'duration': duration,
-                    'genre': parts[4],
-                    'year': parts[5],
-                    'id': parts[6],
-                })
+                tracks.append(
+                    {
+                        "name": parts[0],
+                        "artist": parts[1],
+                        "album": parts[2],
+                        "duration": duration,
+                        "genre": parts[4],
+                        "year": parts[5],
+                        "id": parts[6],
+                    }
+                )
     return True, tracks
 
 
@@ -442,19 +445,19 @@ def create_playlist(name: str, description: str = "") -> tuple[bool, str]:
     safe_desc = _escape_for_applescript(description)
 
     if description:
-        script = f'''
+        script = f"""
         tell application "Music"
             set newPlaylist to make new user playlist with properties {{name:"{safe_name}", description:"{safe_desc}"}}
             return persistent ID of newPlaylist
         end tell
-        '''
+        """
     else:
-        script = f'''
+        script = f"""
         tell application "Music"
             set newPlaylist to make new user playlist with properties {{name:"{safe_name}"}}
             return persistent ID of newPlaylist
         end tell
-        '''
+        """
     return run_applescript(script)
 
 
@@ -477,26 +480,26 @@ def _resolve_folder_path_applescript(path: str) -> str:
     safe_parts = [_escape_for_applescript(p) for p in parts]
 
     if len(safe_parts) == 1:
-        return f'''        try
+        return f"""        try
             set targetFolder to first folder playlist whose name is "{safe_parts[0]}"
         on error
             return "ERROR:Folder not found: {safe_parts[0]}"
-        end try'''
+        end try"""
 
     # Multi-level: walk down the tree
     lines = []
-    lines.append(f'''        try
+    lines.append(f"""        try
             set targetFolder to first folder playlist whose name is "{safe_parts[0]}"
         on error
             return "ERROR:Folder not found: {safe_parts[0]}"
-        end try''')
+        end try""")
 
     for part in safe_parts[1:]:
-        lines.append(f'''        try
+        lines.append(f"""        try
             set targetFolder to first folder playlist of targetFolder whose name is "{part}"
         on error
             return "ERROR:Subfolder not found: {part}"
-        end try''')
+        end try""")
 
     return "\n".join(lines)
 
@@ -512,7 +515,7 @@ def get_folder_tree() -> tuple[bool, str]:
     Returns:
         Tuple of (success, indented tree string)
     """
-    script = '''
+    script = """
     tell application "Music"
         set output to ""
         set allFolders to every folder playlist
@@ -577,7 +580,7 @@ def get_folder_tree() -> tuple[bool, str]:
 
         return output
     end tell
-    '''
+    """
     return run_applescript(script)
 
 
@@ -603,29 +606,29 @@ def create_folder_path(path: str) -> tuple[bool, str]:
     for i, part in enumerate(safe_parts):
         if i == 0:
             # Top-level: create if not exists
-            create_lines.append(f'''
+            create_lines.append(f"""
         try
             set folder{i} to first folder playlist whose name is "{part}"
         on error
             set folder{i} to make new folder playlist with properties {{name:"{part}"}}
-        end try''')
+        end try""")
         else:
             # Nested: create inside parent if not exists
-            create_lines.append(f'''
+            create_lines.append(f"""
         try
             set folder{i} to first folder playlist of folder{i-1} whose name is "{part}"
         on error
             set folder{i} to make new folder playlist with properties {{name:"{part}"}}
             move folder{i} to folder{i-1}
-        end try''')
+        end try""")
 
     last_idx = len(safe_parts) - 1
-    script = f'''
+    script = f"""
     tell application "Music"
 {"".join(create_lines)}
         return persistent ID of folder{last_idx}
     end tell
-    '''
+    """
     return run_applescript(script)
 
 
@@ -639,12 +642,12 @@ def create_folder(name: str) -> tuple[bool, str]:
         Tuple of (success, folder_id or error)
     """
     safe_name = _escape_for_applescript(name)
-    script = f'''
+    script = f"""
     tell application "Music"
         set newFolder to make new folder playlist with properties {{name:"{safe_name}"}}
         return persistent ID of newFolder
     end tell
-    '''
+    """
     return run_applescript(script)
 
 
@@ -659,14 +662,14 @@ def move_to_folder(item_name: str, folder_path: str) -> tuple[bool, str]:
         Tuple of (success, message or error)
     """
     safe_item = _escape_for_applescript(item_name)
-    script = f'''
+    script = f"""
     tell application "Music"
 {_resolve_folder_path_applescript(folder_path)}
 {_find_playlist_applescript(safe_item)}
         move targetPlaylist to targetFolder
         return "Moved '" & name of targetPlaylist & "' to folder '" & name of targetFolder & "'"
     end tell
-    '''
+    """
     success, output = run_applescript(script)
     if output.startswith("ERROR:"):
         return False, output[6:]
@@ -687,7 +690,7 @@ def move_to_root(item_name: str) -> tuple[bool, str]:
         Tuple of (success, message or error)
     """
     safe_item = _escape_for_applescript(item_name)
-    script = f'''
+    script = f"""
     tell application "Music"
 {_find_playlist_applescript(safe_item)}
         try
@@ -707,7 +710,7 @@ def move_to_root(item_name: str) -> tuple[bool, str]:
         set name of newPlaylist to origName
         return "Moved '" & origName & "' to top level (playlist recreated)"
     end tell
-    '''
+    """
     success, output = run_applescript(script)
     if output.startswith("ERROR:"):
         return False, output[6:]
@@ -725,7 +728,7 @@ def get_playlist_path(playlist_name: str) -> tuple[bool, str]:
         e.g. "Summer/Chill/Road Trip" or just "Road Trip" if at root
     """
     safe_name = _escape_for_applescript(playlist_name)
-    script = f'''
+    script = f"""
     tell application "Music"
 {_find_playlist_applescript(safe_name)}
         set pathParts to {{name of targetPlaylist}}
@@ -741,7 +744,7 @@ def get_playlist_path(playlist_name: str) -> tuple[bool, str]:
         set AppleScript's text item delimiters to "/"
         return pathParts as text
     end tell
-    '''
+    """
     success, output = run_applescript(script)
     if output.startswith("ERROR:"):
         return False, output[6:]
@@ -757,14 +760,14 @@ def delete_folder(folder_path: str) -> tuple[bool, str]:
     Returns:
         Tuple of (success, message or error)
     """
-    script = f'''
+    script = f"""
     tell application "Music"
 {_resolve_folder_path_applescript(folder_path)}
         set folderName to name of targetFolder
         delete targetFolder
         return "Deleted folder: " & folderName
     end tell
-    '''
+    """
     success, output = run_applescript(script)
     if output.startswith("ERROR:"):
         return False, output[6:]
@@ -781,14 +784,14 @@ def delete_playlist(playlist_name: str) -> tuple[bool, str]:
         Tuple of (success, message or error)
     """
     safe_name = _escape_for_applescript(playlist_name)
-    script = f'''
+    script = f"""
     tell application "Music"
 {_find_playlist_applescript(safe_name)}
         set playlistName to name of targetPlaylist
         delete targetPlaylist
         return "Deleted playlist: " & playlistName
     end tell
-    '''
+    """
     success, output = run_applescript(script)
     if output.startswith("ERROR:"):
         return False, output[6:]
@@ -807,21 +810,23 @@ def rename_playlist(playlist_name: str, new_name: str) -> tuple[bool, str]:
     """
     safe_old = _escape_for_applescript(playlist_name)
     safe_new = _escape_for_applescript(new_name)
-    script = f'''
+    script = f"""
     tell application "Music"
 {_find_playlist_applescript(safe_old)}
         set oldName to name of targetPlaylist
         set name of targetPlaylist to "{safe_new}"
         return "Renamed: " & oldName & " → {safe_new}"
     end tell
-    '''
+    """
     success, output = run_applescript(script)
     if output.startswith("ERROR:"):
         return False, output[6:]
     return success, output
 
 
-def track_exists_in_playlist(playlist_name: str, track_name: str, artist: Optional[str] = None) -> tuple[bool, bool | str]:
+def track_exists_in_playlist(
+    playlist_name: str, track_name: str, artist: Optional[str] = None
+) -> tuple[bool, bool | str]:
     """Quick check if a track exists in a playlist.
 
     Args:
@@ -843,7 +848,7 @@ def track_exists_in_playlist(playlist_name: str, track_name: str, artist: Option
     else:
         track_filter = f'whose name contains "{safe_track}"'
 
-    script = f'''
+    script = f"""
     tell application "Music"
 {_find_playlist_applescript(safe_playlist)}
         set matchingTracks to (every track of targetPlaylist {track_filter})
@@ -853,7 +858,7 @@ def track_exists_in_playlist(playlist_name: str, track_name: str, artist: Option
             return "NOT_FOUND"
         end if
     end tell
-    '''
+    """
     success, output = run_applescript(script)
     if not success:
         return False, output
@@ -864,7 +869,9 @@ def track_exists_in_playlist(playlist_name: str, track_name: str, artist: Option
     return True, False  # NOT_FOUND
 
 
-def add_track_to_playlist(playlist_name: str, track_name: str, artist: Optional[str] = None, album: Optional[str] = None) -> tuple[bool, str]:
+def add_track_to_playlist(
+    playlist_name: str, track_name: str, artist: Optional[str] = None, album: Optional[str] = None
+) -> tuple[bool, str]:
     """Add a track from library to a playlist.
 
     Args:
@@ -893,15 +900,23 @@ def add_track_to_playlist(playlist_name: str, track_name: str, artist: Optional[
     # If artist provided, try exact match first, then fall back to contains
     if artist and not album:
         fallback_conditions = [f'name contains "{safe_track}"', f'artist contains "{safe_artist}"']
-        fallback_query = f'first track of library playlist 1 whose {" and ".join(fallback_conditions)}'
+        fallback_query = (
+            f'first track of library playlist 1 whose {" and ".join(fallback_conditions)}'
+        )
     elif artist and album:
-        fallback_conditions = [f'name contains "{safe_track}"', f'artist contains "{safe_artist}"', f'album contains "{safe_album}"']
-        fallback_query = f'first track of library playlist 1 whose {" and ".join(fallback_conditions)}'
+        fallback_conditions = [
+            f'name contains "{safe_track}"',
+            f'artist contains "{safe_artist}"',
+            f'album contains "{safe_album}"',
+        ]
+        fallback_query = (
+            f'first track of library playlist 1 whose {" and ".join(fallback_conditions)}'
+        )
     else:
         fallback_query = None
 
     if fallback_query:
-        script = f'''
+        script = f"""
     tell application "Music"
 {_find_playlist_applescript(safe_playlist)}
         try
@@ -916,9 +931,9 @@ def add_track_to_playlist(playlist_name: str, track_name: str, artist: Optional[
         duplicate targetTrack to targetPlaylist
         return "Added " & name of targetTrack & " (" & album of targetTrack & ") by " & artist of targetTrack & " to " & name of targetPlaylist
     end tell
-    '''
+    """
     else:
-        script = f'''
+        script = f"""
     tell application "Music"
 {_find_playlist_applescript(safe_playlist)}
         try
@@ -929,7 +944,7 @@ def add_track_to_playlist(playlist_name: str, track_name: str, artist: Optional[
         duplicate targetTrack to targetPlaylist
         return "Added " & name of targetTrack & " (" & album of targetTrack & ") by " & artist of targetTrack & " to " & name of targetPlaylist
     end tell
-    '''
+    """
     success, output = run_applescript(script)
     if output.startswith("ERROR:"):
         return False, output[6:]
@@ -940,7 +955,7 @@ def remove_track_from_playlist(
     playlist_name: str,
     track_name: str = "",
     artist: Optional[str] = None,
-    track_id: Optional[str] = None
+    track_id: Optional[str] = None,
 ) -> tuple[bool, str]:
     """Remove a track from a playlist (not from library).
 
@@ -970,7 +985,7 @@ def remove_track_from_playlist(
     else:
         return False, "Must provide track_name or track_id"
 
-    script = f'''
+    script = f"""
     tell application "Music"
 {_find_playlist_applescript(safe_playlist)}
         try
@@ -983,7 +998,7 @@ def remove_track_from_playlist(
         delete targetTrack
         return "Removed " & trackName & " by " & trackArtist & " from {safe_playlist}"
     end tell
-    '''
+    """
     success, output = run_applescript(script)
     if output.startswith("ERROR:"):
         return False, output[6:]
@@ -991,9 +1006,7 @@ def remove_track_from_playlist(
 
 
 def remove_from_library(
-    track_name: str = "",
-    artist: Optional[str] = None,
-    track_id: Optional[str] = None
+    track_name: str = "", artist: Optional[str] = None, track_id: Optional[str] = None
 ) -> tuple[bool, str]:
     """Remove a track from the library entirely.
 
@@ -1020,7 +1033,7 @@ def remove_from_library(
     else:
         return False, "Must provide track_name or track_id"
 
-    script = f'''
+    script = f"""
     tell application "Music"
         try
             set targetTrack to (first track of library playlist 1 {track_filter})
@@ -1032,7 +1045,7 @@ def remove_from_library(
         delete targetTrack
         return "Removed from library: " & trackName & " by " & trackArtist
     end tell
-    '''
+    """
     success, output = run_applescript(script)
     if output.startswith("ERROR:"):
         return False, output[6:]
@@ -1055,7 +1068,7 @@ def search_playlist(playlist_name: str, query: str) -> tuple[bool, list[dict]]:
     safe_name = _escape_for_applescript(playlist_name)
     safe_query = _escape_for_applescript(query)
 
-    script = f'''
+    script = f"""
     tell application "Music"
 {_find_playlist_applescript(safe_name)}
         set foundTracks to search targetPlaylist for "{safe_query}"
@@ -1074,7 +1087,7 @@ def search_playlist(playlist_name: str, query: str) -> tuple[bool, list[dict]]:
         end repeat
         return output
     end tell
-    '''
+    """
     success, output = run_applescript(script)
 
     if not success:
@@ -1095,13 +1108,15 @@ def search_playlist(playlist_name: str, query: str) -> tuple[bool, list[dict]]:
             if len(parts) >= 5:
                 explicit = "Yes" if parts[4].lower() == "true" else "No"
 
-            tracks.append({
-                "name": parts[0],
-                "artist": parts[1],
-                "album": parts[2],
-                "id": parts[3],
-                "explicit": explicit,
-            })
+            tracks.append(
+                {
+                    "name": parts[0],
+                    "artist": parts[1],
+                    "album": parts[2],
+                    "id": parts[3],
+                    "explicit": explicit,
+                }
+            )
 
     return True, tracks
 
@@ -1124,13 +1139,13 @@ def download_tracks(track_ids: str = "", playlist_name: str = "") -> tuple[bool,
     if playlist_name:
         # Download entire playlist
         safe_name = _escape_for_applescript(playlist_name)
-        script = f'''
+        script = f"""
         tell application "Music"
 {_find_playlist_applescript(safe_name)}
             download targetPlaylist
             return "Downloading playlist: " & name of targetPlaylist
         end tell
-        '''
+        """
     else:
         # Download individual tracks by ID
         ids = [tid.strip() for tid in track_ids.split(",") if tid.strip()]
@@ -1141,14 +1156,16 @@ def download_tracks(track_ids: str = "", playlist_name: str = "") -> tuple[bool,
         download_cmds = []
         for track_id in ids:
             safe_id = _escape_for_applescript(track_id)
-            download_cmds.append(f'download (first track of library playlist 1 whose persistent ID is "{safe_id}")')
+            download_cmds.append(
+                f'download (first track of library playlist 1 whose persistent ID is "{safe_id}")'
+            )
 
-        script = f'''
+        script = f"""
         tell application "Music"
             {chr(10).join(f"            {cmd}" for cmd in download_cmds)}
             return "Downloading {len(ids)} track(s)"
         end tell
-        '''
+        """
 
     success, output = run_applescript(script)
     if output.startswith("ERROR:"):
@@ -1169,14 +1186,14 @@ def play_playlist(playlist_name: str, shuffle: bool = False) -> tuple[bool, str]
     safe_name = _escape_for_applescript(playlist_name)
     shuffle_cmd = "set shuffle enabled to true" if shuffle else "set shuffle enabled to false"
 
-    script = f'''
+    script = f"""
     tell application "Music"
 {_find_playlist_applescript(safe_name)}
         {shuffle_cmd}
         play targetPlaylist
         return "Now playing: " & name of targetPlaylist
     end tell
-    '''
+    """
     success, output = run_applescript(script)
     if output.startswith("ERROR:"):
         return False, output[6:]
@@ -1201,7 +1218,7 @@ def play_track(track_name: str, artist: Optional[str] = None) -> tuple[bool, str
     else:
         track_query = f'first track of library playlist 1 whose name contains "{safe_track}"'
 
-    script = f'''
+    script = f"""
     tell application "Music"
         try
             set targetTrack to {track_query}
@@ -1211,7 +1228,7 @@ def play_track(track_name: str, artist: Optional[str] = None) -> tuple[bool, str
         play targetTrack
         return "Now playing: " & name of targetTrack & " by " & artist of targetTrack
     end tell
-    '''
+    """
     success, output = run_applescript(script)
     if output.startswith("ERROR:"):
         return False, output[6:]
@@ -1274,7 +1291,7 @@ def open_catalog_song(song_url: str) -> tuple[bool, str]:
 _SCROLL_AREA = 'scroll area 2 of splitter group 1 of window "Music"'
 
 _SEARCH_FIELD = (
-    'text field 1 of UI element 1 of row 1 of outline 1'
+    "text field 1 of UI element 1 of row 1 of outline 1"
     ' of scroll area 1 of splitter group 1 of window "Music"'
 )
 
@@ -1324,7 +1341,7 @@ def _ensure_music_frontmost() -> None:
     or via background playback). This ensures the main window is open via
     the Window menu if no window is found.
     """
-    run_applescript('''
+    run_applescript("""
 tell application "Music" to activate
 delay 0.5
 tell application "System Events"
@@ -1342,7 +1359,7 @@ tell application "System Events"
             end if
         end if
     end tell
-end tell''')
+end tell""")
 
 
 def _jxa_mouse_move(x: float, y: float) -> bool:
@@ -1363,7 +1380,9 @@ delay(0.5);
     try:
         result = subprocess.run(
             ["osascript", "-l", "JavaScript", "-e", script],
-            capture_output=True, text=True, timeout=10,
+            capture_output=True,
+            text=True,
+            timeout=10,
         )
         return result.returncode == 0
     except (subprocess.TimeoutExpired, Exception):
@@ -1393,7 +1412,9 @@ delay(0.5);
     try:
         result = subprocess.run(
             ["osascript", "-l", "JavaScript", "-e", script],
-            capture_output=True, text=True, timeout=15,
+            capture_output=True,
+            text=True,
+            timeout=15,
         )
         return result.returncode == 0
     except (subprocess.TimeoutExpired, Exception):
@@ -1409,7 +1430,7 @@ def _find_highlighted_track_position() -> Optional[tuple[float, float, str]]:
 
     Returns (center_x, center_y, track_name) or None if not found.
     """
-    ok, result = run_applescript('''
+    ok, result = run_applescript("""
 tell application "System Events"
     tell process "Music"
         set sg to splitter group 1 of window "Music"
@@ -1431,7 +1452,7 @@ tell application "System Events"
         end repeat
         return "NOT_FOUND"
     end tell
-end tell''')
+end tell""")
     if not ok or not result or result.strip() == "NOT_FOUND":
         return None
     parts = result.strip().split(",", 2)
@@ -1445,14 +1466,14 @@ end tell''')
 
 def _get_window_bottom() -> Optional[float]:
     """Get the bottom y-coordinate of the Music window."""
-    ok, result = run_applescript('''
+    ok, result = run_applescript("""
 tell application "System Events"
     tell process "Music"
         set {wx, wy} to position of window "Music"
         set {ww, wh} to size of window "Music"
         return ((wy + wh) as text)
     end tell
-end tell''')
+end tell""")
     if ok and result:
         try:
             return float(result.strip())
@@ -1502,7 +1523,7 @@ def _play_specific_track() -> tuple[bool, str]:
     time.sleep(0.5)
 
     # Click the play checkbox that appears on hover
-    ok, result = run_applescript('''
+    ok, result = run_applescript("""
 tell application "System Events"
     tell process "Music"
         set sg to splitter group 1 of window "Music"
@@ -1521,7 +1542,7 @@ tell application "System Events"
         end repeat
         return "NOT_FOUND"
     end tell
-end tell''')
+end tell""")
     if ok and result and result.strip() != "NOT_FOUND":
         time.sleep(1)
         if _check_playing():
@@ -1530,7 +1551,9 @@ end tell''')
     return False, f"Hover+click attempted on {track_name} but playback did not start"
 
 
-def open_catalog_and_play(url: str, shuffle: bool = False, timeout: float = 15.0) -> tuple[bool, str]:
+def open_catalog_and_play(
+    url: str, shuffle: bool = False, timeout: float = 15.0
+) -> tuple[bool, str]:
     """Open an Apple Music URL and attempt to start playback via UI scripting.
 
     Supports albums, playlists (editorial and personal), and specific tracks
@@ -1601,13 +1624,20 @@ def open_catalog_and_play(url: str, shuffle: bool = False, timeout: float = 15.0
         time.sleep(wait)
 
     if has_track_param:
-        return True, "Opened URL in Music. Could not auto-play the specific track — try clicking it manually."
-    return True, "Opened URL in Music. Auto-play attempted but could not confirm playback started — may need Accessibility permissions for System Events."
+        return (
+            True,
+            "Opened URL in Music. Could not auto-play the specific track — try clicking it manually.",
+        )
+    return (
+        True,
+        "Opened URL in Music. Auto-play attempted but could not confirm playback started — may need Accessibility permissions for System Events.",
+    )
 
 
 # =============================================================================
 # Library Search
 # =============================================================================
+
 
 def get_library_songs(limit: int = 100) -> tuple[bool, list[dict]]:
     """Get songs from the library (no search query required).
@@ -1624,7 +1654,7 @@ def get_library_songs(limit: int = 100) -> tuple[bool, list[dict]]:
         return False, "limit must be >= 0 (use 0 for all songs)"
     limit_clause = f"if resultCount >= {limit} then exit repeat" if limit > 0 else ""
 
-    script = f'''
+    script = f"""
     tell application "Music"
         set output to ""
         set resultCount to 0
@@ -1655,15 +1685,15 @@ def get_library_songs(limit: int = 100) -> tuple[bool, list[dict]]:
         end repeat
         return output
     end tell
-    '''
+    """
     success, output = run_applescript(script)
     if not success:
         return False, output
 
     tracks = []
-    for line in output.split('\n'):
-        if '|||' in line:
-            parts = line.split('|||')
+    for line in output.split("\n"):
+        if "|||" in line:
+            parts = line.split("|||")
             if len(parts) >= 7:
                 try:
                     dur_sec = float(parts[3])
@@ -1678,16 +1708,18 @@ def get_library_songs(limit: int = 100) -> tuple[bool, list[dict]]:
                 if len(parts) >= 8:
                     explicit = "Yes" if parts[7].lower() == "true" else "No"
 
-                tracks.append({
-                    'name': parts[0],
-                    'artist': parts[1],
-                    'album': parts[2],
-                    'duration': duration,
-                    'genre': parts[4],
-                    'year': parts[5],
-                    'id': parts[6],
-                    'explicit': explicit,
-                })
+                tracks.append(
+                    {
+                        "name": parts[0],
+                        "artist": parts[1],
+                        "album": parts[2],
+                        "duration": duration,
+                        "genre": parts[4],
+                        "year": parts[5],
+                        "id": parts[6],
+                        "explicit": explicit,
+                    }
+                )
     return True, tracks
 
 
@@ -1708,11 +1740,11 @@ def search_library(query: str, types: str = "all") -> tuple[bool, list[dict]]:
         "all": "",
         "artists": "only artists",
         "albums": "only albums",
-        "songs": "only songs"
+        "songs": "only songs",
     }
     search_modifier = search_map.get(types, "")
 
-    script = f'''
+    script = f"""
     tell application "Music"
         set searchResults to search library playlist 1 for "{safe_query}" {search_modifier}
         set output to ""
@@ -1745,15 +1777,15 @@ def search_library(query: str, types: str = "all") -> tuple[bool, list[dict]]:
         end repeat
         return output
     end tell
-    '''
+    """
     success, output = run_applescript(script)
     if not success:
         return False, output
 
     tracks = []
-    for line in output.split('\n'):
-        if '|||' in line:
-            parts = line.split('|||')
+    for line in output.split("\n"):
+        if "|||" in line:
+            parts = line.split("|||")
             if len(parts) >= 7:
                 try:
                     dur_sec = float(parts[3])
@@ -1768,22 +1800,25 @@ def search_library(query: str, types: str = "all") -> tuple[bool, list[dict]]:
                 if len(parts) >= 8:
                     explicit = "Yes" if parts[7].lower() == "true" else "No"
 
-                tracks.append({
-                    'name': parts[0],
-                    'artist': parts[1],
-                    'album': parts[2],
-                    'duration': duration,
-                    'genre': parts[4],
-                    'year': parts[5],
-                    'id': parts[6],
-                    'explicit': explicit,
-                })
+                tracks.append(
+                    {
+                        "name": parts[0],
+                        "artist": parts[1],
+                        "album": parts[2],
+                        "duration": duration,
+                        "genre": parts[4],
+                        "year": parts[5],
+                        "id": parts[6],
+                        "explicit": explicit,
+                    }
+                )
     return True, tracks
 
 
 # =============================================================================
 # Track Metadata
 # =============================================================================
+
 
 def love_track(track_name: str, artist: Optional[str] = None) -> tuple[bool, str]:
     """Mark a track as loved.
@@ -1803,7 +1838,7 @@ def love_track(track_name: str, artist: Optional[str] = None) -> tuple[bool, str
     else:
         track_query = f'first track of library playlist 1 whose name contains "{safe_track}"'
 
-    script = f'''
+    script = f"""
     tell application "Music"
         try
             set targetTrack to {track_query}
@@ -1814,7 +1849,7 @@ def love_track(track_name: str, artist: Optional[str] = None) -> tuple[bool, str
         set disliked of targetTrack to false
         return "Loved: " & name of targetTrack
     end tell
-    '''
+    """
     success, output = run_applescript(script)
     if output.startswith("ERROR:"):
         return False, output[6:]
@@ -1839,7 +1874,7 @@ def dislike_track(track_name: str, artist: Optional[str] = None) -> tuple[bool, 
     else:
         track_query = f'first track of library playlist 1 whose name contains "{safe_track}"'
 
-    script = f'''
+    script = f"""
     tell application "Music"
         try
             set targetTrack to {track_query}
@@ -1850,7 +1885,7 @@ def dislike_track(track_name: str, artist: Optional[str] = None) -> tuple[bool, 
         set loved of targetTrack to false
         return "Disliked: " & name of targetTrack
     end tell
-    '''
+    """
     success, output = run_applescript(script)
     if output.startswith("ERROR:"):
         return False, output[6:]
@@ -1875,7 +1910,7 @@ def get_rating(track_name: str, artist: Optional[str] = None) -> tuple[bool, int
     else:
         track_query = f'first track of library playlist 1 whose name contains "{safe_track}"'
 
-    script = f'''
+    script = f"""
     tell application "Music"
         try
             set targetTrack to {track_query}
@@ -1884,7 +1919,7 @@ def get_rating(track_name: str, artist: Optional[str] = None) -> tuple[bool, int
         end try
         return rating of targetTrack as integer
     end tell
-    '''
+    """
     success, output = run_applescript(script)
     if output.startswith("ERROR:"):
         return False, output[6:]
@@ -1914,7 +1949,7 @@ def set_rating(track_name: str, rating: int, artist: Optional[str] = None) -> tu
     else:
         track_query = f'first track of library playlist 1 whose name contains "{safe_track}"'
 
-    script = f'''
+    script = f"""
     tell application "Music"
         try
             set targetTrack to {track_query}
@@ -1924,7 +1959,7 @@ def set_rating(track_name: str, rating: int, artist: Optional[str] = None) -> tu
         set rating of targetTrack to {rating}
         return "Set rating to {rating} for: " & name of targetTrack
     end tell
-    '''
+    """
     success, output = run_applescript(script)
     if output.startswith("ERROR:"):
         return False, output[6:]
@@ -1935,9 +1970,10 @@ def set_rating(track_name: str, rating: int, artist: Optional[str] = None) -> tu
 # AirPlay
 # =============================================================================
 
+
 def get_airplay_devices() -> tuple[bool, list[str]]:
     """Get list of available AirPlay devices."""
-    script = '''
+    script = """
     tell application "Music"
         set deviceNames to name of every AirPlay device
         set output to ""
@@ -1946,12 +1982,12 @@ def get_airplay_devices() -> tuple[bool, list[str]]:
         end repeat
         return output
     end tell
-    '''
+    """
     success, output = run_applescript(script)
     if not success:
         return False, output
 
-    devices = [d.strip() for d in output.split('\n') if d.strip()]
+    devices = [d.strip() for d in output.split("\n") if d.strip()]
     return True, devices
 
 
@@ -1966,7 +2002,7 @@ def set_airplay_device(device_name: str) -> tuple[bool, str]:
     """
     safe_name = _escape_for_applescript(device_name)
 
-    script = f'''
+    script = f"""
     tell application "Music"
         try
             set targetDevice to first AirPlay device whose name contains "{safe_name}"
@@ -1976,7 +2012,7 @@ def set_airplay_device(device_name: str) -> tuple[bool, str]:
         set current AirPlay devices to {{targetDevice}}
         return "Switched to: " & name of targetDevice
     end tell
-    '''
+    """
     success, output = run_applescript(script)
     if output.startswith("ERROR:"):
         return False, output[6:]
@@ -1986,6 +2022,7 @@ def set_airplay_device(device_name: str) -> tuple[bool, str]:
 # =============================================================================
 # Utilities
 # =============================================================================
+
 
 def reveal_track(track_name: str, artist: Optional[str] = None) -> tuple[bool, str]:
     """Reveal a track in the Music app window.
@@ -2005,7 +2042,7 @@ def reveal_track(track_name: str, artist: Optional[str] = None) -> tuple[bool, s
     else:
         track_query = f'first track of library playlist 1 whose name contains "{safe_track}"'
 
-    script = f'''
+    script = f"""
     tell application "Music"
         try
             set targetTrack to {track_query}
@@ -2016,7 +2053,7 @@ def reveal_track(track_name: str, artist: Optional[str] = None) -> tuple[bool, s
         activate
         return "Revealed: " & name of targetTrack
     end tell
-    '''
+    """
     success, output = run_applescript(script)
     if output.startswith("ERROR:"):
         return False, output[6:]
@@ -2025,7 +2062,7 @@ def reveal_track(track_name: str, artist: Optional[str] = None) -> tuple[bool, s
 
 def get_library_stats() -> tuple[bool, dict]:
     """Get library statistics."""
-    script = '''
+    script = """
     tell application "Music"
         set trackCount to count of tracks of library playlist 1
         set playlistCount to count of user playlists
@@ -2036,20 +2073,20 @@ def get_library_stats() -> tuple[bool, dict]:
 
         return trackCount & "|||" & playlistCount & "|||" & playerState & "|||" & shuffleState & "|||" & repeatState & "|||" & vol
     end tell
-    '''
+    """
     success, output = run_applescript(script)
     if not success:
         return False, output
 
-    parts = output.split('|||')
+    parts = output.split("|||")
     if len(parts) >= 6:
         return True, {
-            'track_count': int(parts[0]) if parts[0].isdigit() else 0,
-            'playlist_count': int(parts[1]) if parts[1].isdigit() else 0,
-            'player_state': parts[2],
-            'shuffle': parts[3].lower() == 'true',
-            'repeat': parts[4],
-            'volume': int(parts[5]) if parts[5].isdigit() else 0
+            "track_count": int(parts[0]) if parts[0].isdigit() else 0,
+            "playlist_count": int(parts[1]) if parts[1].isdigit() else 0,
+            "player_state": parts[2],
+            "shuffle": parts[3].lower() == "true",
+            "repeat": parts[4],
+            "volume": int(parts[5]) if parts[5].isdigit() else 0,
         }
     return False, "Failed to parse library stats"
 
@@ -2086,7 +2123,7 @@ def ui_search_catalog(query: str) -> tuple[bool, list[dict]]:
     # Ensure Music has a visible window before interacting with search
     _ensure_music_frontmost()
 
-    ok, _ = run_applescript(f'''
+    ok, _ = run_applescript(f"""
 tell application "System Events"
     tell process "Music"
         set searchField to {_SEARCH_FIELD}
@@ -2096,7 +2133,7 @@ tell application "System Events"
         delay 0.5
         key code 36
     end tell
-end tell''')
+end tell""")
     if not ok:
         return False, []
 
@@ -2104,7 +2141,7 @@ end tell''')
     time.sleep(4)
 
     # Parse the Top Results section
-    ok, raw = run_applescript(f'''
+    ok, raw = run_applescript(f"""
 tell application "System Events"
     tell process "Music"
         set sa to {_SCROLL_AREA}
@@ -2137,7 +2174,7 @@ tell application "System Events"
         end repeat
         return r
     end tell
-end tell''')
+end tell""")
     if not ok or not raw or raw.strip() == "NO_RESULTS":
         return False, []
 
@@ -2160,19 +2197,21 @@ end tell''')
                     break
             else:
                 result_type = type_line
-            results.append({
-                "name": name,
-                "type": result_type.strip(),
-                "artist": artist.strip(),
-                "index": int(parts[0]),
-            })
+            results.append(
+                {
+                    "name": name,
+                    "type": result_type.strip(),
+                    "artist": artist.strip(),
+                    "index": int(parts[0]),
+                }
+            )
 
     return True, results
 
 
 def ui_clear_search() -> None:
     """Clear the Music.app search field and dismiss search."""
-    run_applescript(f'''
+    run_applescript(f"""
 tell application "System Events"
     tell process "Music"
         set searchField to {_SEARCH_FIELD}
@@ -2182,7 +2221,7 @@ tell application "System Events"
         delay 0.2
         key code 53
     end tell
-end tell''')
+end tell""")
 
 
 def ui_add_to_library(result_name: str) -> tuple[bool, str]:
@@ -2200,7 +2239,7 @@ def ui_add_to_library(result_name: str) -> tuple[bool, str]:
     safe_name = _escape_for_applescript(result_name)
 
     # Find the result's position
-    ok, pos_str = run_applescript(f'''
+    ok, pos_str = run_applescript(f"""
 tell application "System Events"
     tell process "Music"
         set sa to {_SCROLL_AREA}
@@ -2221,7 +2260,7 @@ tell application "System Events"
         end repeat
         return "NOT_FOUND"
     end tell
-end tell''')
+end tell""")
     if not ok or not pos_str or pos_str.strip() in ("NOT_FOUND", "NO_RESULTS"):
         return False, f"Could not find '{result_name}' in search results"
 
@@ -2237,7 +2276,7 @@ end tell''')
     time.sleep(1)
 
     # Click the Add to Library button
-    ok, click_result = run_applescript(f'''
+    ok, click_result = run_applescript(f"""
 tell application "System Events"
     tell process "Music"
         set sa to {_SCROLL_AREA}
@@ -2263,12 +2302,15 @@ tell application "System Events"
         end repeat
         return "NOT_FOUND"
     end tell
-end tell''')
+end tell""")
     if ok and click_result and click_result.strip() == "ADDED":
         return True, f"Added '{result_name}' to library"
 
     if click_result and "NO_ADD_BUTTON" in click_result:
-        return False, f"No 'Add to Library' button found — may already be in library, or hover didn't reveal it"
+        return (
+            False,
+            f"No 'Add to Library' button found — may already be in library, or hover didn't reveal it",
+        )
 
     return False, f"Failed to add: {click_result}"
 
@@ -2288,7 +2330,7 @@ def ui_play_result(result_name: str) -> tuple[bool, str]:
     safe_name = _escape_for_applescript(result_name)
 
     # Find position
-    ok, pos_str = run_applescript(f'''
+    ok, pos_str = run_applescript(f"""
 tell application "System Events"
     tell process "Music"
         set sa to {_SCROLL_AREA}
@@ -2309,7 +2351,7 @@ tell application "System Events"
         end repeat
         return "NOT_FOUND"
     end tell
-end tell''')
+end tell""")
     if not ok or not pos_str or pos_str.strip() == "NOT_FOUND":
         return False, f"Could not find '{result_name}' in search results"
 
@@ -2325,7 +2367,7 @@ end tell''')
     time.sleep(1)
 
     # Click the play checkbox
-    ok, _ = run_applescript(f'''
+    ok, _ = run_applescript(f"""
 tell application "System Events"
     tell process "Music"
         set sa to {_SCROLL_AREA}
@@ -2345,7 +2387,7 @@ tell application "System Events"
         end repeat
         return "NOT_FOUND"
     end tell
-end tell''')
+end tell""")
     time.sleep(2)
     if _check_playing():
         return True, f"Playing: {result_name}"
@@ -2451,6 +2493,7 @@ def ui_add_to_playlist(playlist_name: str, query: str, artist: str = "") -> tupl
 # Library Snapshot & Diff
 # =============================================================================
 
+
 def library_snapshot() -> tuple[bool, dict]:
     """Capture a full snapshot of the Music library for integrity checking.
 
@@ -2474,7 +2517,7 @@ def library_snapshot() -> tuple[bool, dict]:
         return False, {"error": f"Invalid track count: {count_str}"}
 
     # Get playback state
-    ok, pb_str = run_applescript('''
+    ok, pb_str = run_applescript("""
 tell application "Music"
     set ps to player state as text
     set v to (sound volume) as text
@@ -2489,7 +2532,7 @@ tell application "Music"
         set calb to album of current track
     end try
     return ps & return & v & return & sh & return & rp & return & ct & return & ca & return & calb
-end tell''')
+end tell""")
     playback_state = {}
     if ok and pb_str:
         lines = pb_str.strip().split("\n")
@@ -2504,7 +2547,7 @@ end tell''')
         }
 
     # Get all user playlists and their contents, with folder paths
-    ok, playlist_data = run_applescript('''
+    ok, playlist_data = run_applescript("""
 tell application "Music"
     set r to ""
     repeat with p in user playlists
@@ -2561,7 +2604,7 @@ tell application "Music"
         set r to r & "FOLDER:" & name of f & "|||PATH:" & fPath & return
     end repeat
     return r
-end tell''')
+end tell""")
     if not ok:
         return False, {"error": f"Failed to get playlists: {playlist_data}"}
 
@@ -2591,11 +2634,13 @@ end tell''')
         elif current_playlist is not None and "|||" in line:
             parts = line.split("|||")
             if len(parts) >= 3:
-                playlists[current_playlist]["tracks"].append({
-                    "name": parts[0],
-                    "artist": parts[1],
-                    "album": parts[2],
-                })
+                playlists[current_playlist]["tracks"].append(
+                    {
+                        "name": parts[0],
+                        "artist": parts[1],
+                        "album": parts[2],
+                    }
+                )
 
     return True, {
         "track_count": track_count,
@@ -2677,12 +2722,14 @@ def library_diff(before: dict, after: dict) -> dict:
     result["folders_removed"] = list(before_folders - after_folders)
 
     # Determine if clean (library changes only — playback state changes don't count)
-    if (result["track_count_change"] != 0
-            or result["playlists_added"]
-            or result["playlists_removed"]
-            or result["playlists_changed"]
-            or result["folders_added"]
-            or result["folders_removed"]):
+    if (
+        result["track_count_change"] != 0
+        or result["playlists_added"]
+        or result["playlists_removed"]
+        or result["playlists_changed"]
+        or result["folders_added"]
+        or result["folders_removed"]
+    ):
         result["is_clean"] = False
 
     return result
