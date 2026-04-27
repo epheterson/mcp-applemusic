@@ -2900,3 +2900,200 @@ class TestDiscoverRecommendationsLimit:
         # Should have all ~20 items
         lines = [l for l in result.split("\n") if l.strip() and not l.startswith("===")]
         assert len(lines) >= 7  # At least 7-8 items from the category
+
+
+class TestHasDeveloperToken:
+    """Tests for _has_developer_token feature-detection helper."""
+
+    def test_returns_false_when_token_missing(self, monkeypatch):
+        """No token configured → False, no exception leaked."""
+
+        def raise_missing():
+            raise FileNotFoundError("Developer token not found")
+
+        monkeypatch.setattr(server, "get_developer_token", raise_missing)
+        assert server._has_developer_token() is False
+
+    def test_returns_false_when_token_expired(self, monkeypatch):
+        """Expired token → False (caller should fall back, not crash)."""
+
+        def raise_expired():
+            raise ValueError("Developer token expired or expiring soon")
+
+        monkeypatch.setattr(server, "get_developer_token", raise_expired)
+        assert server._has_developer_token() is False
+
+    def test_returns_true_when_token_valid(self, monkeypatch):
+        """Token present and valid → True."""
+        monkeypatch.setattr(server, "get_developer_token", lambda: "fake_token")
+        assert server._has_developer_token() is True
+
+
+class TestSmartAddVerifiesSplitMatch:
+    """Verify _smart_as_add_track_to_playlist re-checks split-resolved adds."""
+
+    def test_split_match_with_verify_failure_falls_through(self, monkeypatch):
+        """When split candidate adds OK but verify fails, try next candidate
+        rather than reporting suspect success."""
+        # First add (literal "Silvera - GOJIRA") fails → trigger split path
+        # First split candidate (forward form): add succeeds, verify FAILS
+        # Second split candidate (reverse form): add succeeds, verify PASSES
+        verify_calls = []
+
+        def fake_add(playlist, name, artist, album):
+            # The literal combined input has no separation between track and
+            # artist, so AppleScript can't match it — that's the trigger for
+            # the split-retry path.
+            if " - " in name and artist is None:
+                return False, "Track not found"
+            return True, f"Added '{name}' to '{playlist}'"
+
+        def fake_verify(playlist, name, artist):
+            verify_calls.append((name, artist))
+            # Forward form fails (would be a wrong-track silent click);
+            # reverse form is the real match.
+            return (name, artist) == ("GOJIRA", "Silvera")
+
+        monkeypatch.setattr(server.asc, "add_track_to_playlist", fake_add)
+        monkeypatch.setattr(server, "_verify_track_in_playlist", fake_verify)
+
+        ok, _result, split_match = server._smart_as_add_track_to_playlist(
+            "MyPlaylist", "Silvera - GOJIRA", None, None
+        )
+        assert ok is True
+        assert split_match == ("GOJIRA", "Silvera")
+        # Verify was called for both forward and reverse before settling
+        assert ("Silvera", "GOJIRA") in verify_calls
+        assert ("GOJIRA", "Silvera") in verify_calls
+
+    def test_first_attempt_success_does_not_verify(self, monkeypatch):
+        """A clean first-attempt add should NOT trigger verification — preserves
+        existing latency profile and behavior for the common path."""
+        verify_called = []
+
+        def fake_add(playlist, name, artist, album):
+            return True, "Added"
+
+        def fake_verify(*args, **kwargs):
+            verify_called.append(args)
+            return False  # would fail if called
+
+        monkeypatch.setattr(server.asc, "add_track_to_playlist", fake_add)
+        monkeypatch.setattr(server, "_verify_track_in_playlist", fake_verify)
+
+        ok, _result, split_match = server._smart_as_add_track_to_playlist(
+            "MyPlaylist", "Some Track", "Some Artist", None
+        )
+        assert ok is True
+        assert split_match is None
+        assert verify_called == []  # verify must NOT run on first-try success
+
+
+class TestUnifiedAutoSearchPlatformError:
+    """Platform-aware error when no path is available."""
+
+    def test_macos_no_applescript_says_accessibility(self, monkeypatch):
+        """On darwin without AppleScript, blame Accessibility — not 'need macOS'."""
+        monkeypatch.setattr(server.sys, "platform", "darwin")
+        monkeypatch.setattr(server, "APPLESCRIPT_AVAILABLE", False)
+        monkeypatch.setattr(server, "_has_developer_token", lambda: False)
+
+        ok, msg, _steps = server._unified_auto_search_to_playlist("track", "artist", "playlist")
+        assert ok is False
+        assert "Accessibility" in msg
+        assert "non-macOS" not in msg
+
+    def test_non_darwin_no_token_says_token_required(self, monkeypatch):
+        """Off-platform with no token → tell them they need a token, period."""
+        monkeypatch.setattr(server.sys, "platform", "linux")
+        monkeypatch.setattr(server, "APPLESCRIPT_AVAILABLE", False)
+        monkeypatch.setattr(server, "_has_developer_token", lambda: False)
+
+        ok, msg, _steps = server._unified_auto_search_to_playlist("track", "artist", "playlist")
+        assert ok is False
+        assert "API token" in msg
+        assert "Accessibility" not in msg
+
+
+class TestAppleScriptPerTrackGuards:
+    """Confirms the per-track try/on error wrap is present in generated scripts.
+
+    These tests don't run AppleScript — they assert on the script string the
+    Python helpers build. That's enough to confirm we deployed the defensive
+    wrap (preventing one broken track from aborting the whole iteration).
+    """
+
+    def test_get_library_songs_script_wraps_per_track(self):
+        """get_library_songs builds a script whose per-track read sits inside try/on error."""
+        from applemusic_mcp import applescript as asc
+
+        captured = {}
+
+        def fake_run(script):
+            captured["script"] = script
+            return True, ""
+
+        with patch.object(asc, "run_applescript", fake_run):
+            asc.get_library_songs(limit=10)
+
+        s = captured["script"]
+        # The skip-comment is a stable marker for the defensive block
+        assert "skip inaccessible tracks" in s
+        # Defensive wrap surrounds the property reads
+        assert s.find("set tName to name of t") > s.find("try")
+
+    def test_search_library_script_wraps_per_track(self):
+        from applemusic_mcp import applescript as asc
+
+        captured = {}
+
+        def fake_run(script):
+            captured["script"] = script
+            return True, ""
+
+        with patch.object(asc, "run_applescript", fake_run):
+            asc.search_library("anything", "songs")
+
+        s = captured["script"]
+        assert "skip inaccessible tracks" in s
+
+    def test_search_playlist_script_wraps_per_track(self):
+        from applemusic_mcp import applescript as asc
+
+        captured = {}
+
+        def fake_run(script):
+            captured["script"] = script
+            return True, ""
+
+        with patch.object(asc, "run_applescript", fake_run):
+            asc.search_playlist("MyPlaylist", "anything")
+
+        s = captured["script"]
+        assert "skip inaccessible tracks" in s
+
+
+class TestLibrarySearchSurfacesAppleScriptError:
+    """When both AS and API fail, the message should expose BOTH causes."""
+
+    def test_token_error_includes_applescript_failure(self, monkeypatch):
+        """If AS fails AND token is missing, surface both — don't pretend the
+        only problem was the token (the original misleading-error class)."""
+        monkeypatch.setattr(server, "APPLESCRIPT_AVAILABLE", True)
+
+        # AppleScript fails outright
+        def fake_search(query, types):
+            return False, "AppleScript exited with code 1"
+
+        monkeypatch.setattr(server.asc, "search_library", fake_search)
+
+        # API path raises the legacy token error
+        def fake_get_headers():
+            raise FileNotFoundError("Developer token not found. Run: applemusic-mcp generate-token")
+
+        monkeypatch.setattr(server, "get_headers", fake_get_headers)
+
+        result = server._library_search("test query")
+        assert "Developer token not found" in result
+        assert "AppleScript also failed" in result
+        assert "AppleScript exited with code 1" in result
