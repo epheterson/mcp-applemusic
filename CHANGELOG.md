@@ -5,6 +5,26 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.3] - 2026-04-27
+
+### Fixed
+
+- **One broken track no longer aborts library iteration** — `get_library_songs`, `search_library`, `search_playlist`, and the playlist-level loop in `library_snapshot` previously bailed on the first AppleScript error -1728 ("Can't get") thrown by an inaccessible track reference. The loop now wraps the per-track property reads in `try/on error` and skips the offending track instead of returning empty. When the AppleScript path silently bailed, `_library_search` would fall through to the API and surface a misleading "Developer token not found" — completely hiding what was actually wrong. Diagnosis credit: mik-rzo (PR #11, withdrawn before testing).
+- **`_library_search` surfaces both failures when both paths fail** — when AppleScript fails AND the API call fails (or returns zero songs), the message now includes the AppleScript error alongside the API error so the real cause isn't hidden behind a misleading token message.
+- **`_unified_auto_search_to_playlist` no-paths-available message is platform-aware** — replaced the legacy "need API token or macOS with Accessibility" with a darwin-specific "AppleScript unavailable (Music.app + Accessibility permissions required)" or non-darwin "API token required" so users see what's actually missing for their platform, not both.
+
+### Added
+
+- **`_has_developer_token()` feature-detection helper** — extracts the inline probe pattern from `_unified_auto_search_to_playlist` so future callsites can choose between API and AppleScript paths without raising the misleading token error. Returns False on any exception from `get_developer_token()`.
+- **`_smart_as_add_track_to_playlist` verifies split-resolved adds** — when a "Song - Artist" combined input is split into candidates and one matches, `_verify_track_in_playlist` now confirms the right track actually landed before claiming success. On verify-fail returns False with a "may have landed; check manually" message rather than cascading to the next candidate (which could compound a second wrong-track add if iCloud sync is just slow). First-attempt success still skips verification — preserves latency profile and existing behavior for the common path.
+
+### Internal
+
+- Renamed local variable `shits` → `s_hits` in the library-sync poll loop. Cosmetic.
+- Black formatter applied to `applescript.py` and `test_applescript.py` (split into separate prep commits so the logic diffs stay reviewable).
+- Test `test_create_and_delete_playlist` made hermetic against leftover state — Music.app allows duplicate playlist names, so prior failed runs could leave a stale `_TEST_PLAYLIST_DELETE_ME_` that cascaded into future-run failures. Now drains by name before creating.
+- 13 new unit tests covering the probe helper, split-resolved verify behavior, platform-aware error message, AppleScript per-track wrap presence in generated scripts, and AppleScript-error surfacing in `_library_search`.
+
 ## [0.9.2] - 2026-04-12
 
 ### Fixed
