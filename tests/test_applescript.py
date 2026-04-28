@@ -10,8 +10,7 @@ import sys
 
 # Skip all tests if not on macOS
 pytestmark = pytest.mark.skipif(
-    sys.platform != 'darwin',
-    reason="AppleScript tests only run on macOS"
+    sys.platform != "darwin", reason="AppleScript tests only run on macOS"
 )
 
 from applemusic_mcp import applescript as asc
@@ -32,13 +31,13 @@ class TestAppleScriptAvailability:
 
     def test_run_applescript_math(self):
         """Should handle AppleScript expressions."""
-        success, output = asc.run_applescript('return 2 + 2')
+        success, output = asc.run_applescript("return 2 + 2")
         assert success is True
         assert output == "4"
 
     def test_run_applescript_error(self):
         """Should handle AppleScript errors gracefully."""
-        success, output = asc.run_applescript('this is not valid applescript')
+        success, output = asc.run_applescript("this is not valid applescript")
         assert success is False
         assert len(output) > 0  # Should have error message
 
@@ -50,7 +49,7 @@ class TestPlaybackControl:
         """Should get player state."""
         success, state = asc.get_player_state()
         assert success is True
-        assert state in ('stopped', 'playing', 'paused')
+        assert state in ("stopped", "playing", "paused")
 
     def test_get_volume(self):
         """Should get volume level."""
@@ -69,7 +68,7 @@ class TestPlaybackControl:
         """Should get repeat mode."""
         success, repeat = asc.get_repeat()
         assert success is True
-        assert repeat in ('off', 'one', 'all')
+        assert repeat in ("off", "one", "all")
 
     def test_get_current_track_when_stopped(self):
         """Should handle stopped state gracefully."""
@@ -91,10 +90,10 @@ class TestPlaylistOperations:
 
         # Check playlist structure
         p = playlists[0]
-        assert 'name' in p
-        assert 'id' in p
-        assert 'smart' in p
-        assert 'track_count' in p
+        assert "name" in p
+        assert "id" in p
+        assert "smart" in p
+        assert "track_count" in p
 
     def test_get_playlist_tracks(self):
         """Should get tracks from a known playlist."""
@@ -104,20 +103,20 @@ class TestPlaylistOperations:
         assert len(playlists) > 0
 
         # Skip special/smart playlists that could be huge (Music, Music Videos, etc)
-        special_names = {'Music', 'Music Videos', 'Library', 'Favorite Songs'}
+        special_names = {"Music", "Music Videos", "Library", "Favorite Songs"}
 
         # Get tracks from first non-empty, non-special playlist
         for p in playlists:
-            if p['track_count'] > 0 and p['track_count'] < 1000 and p['name'] not in special_names:
-                success, tracks = asc.get_playlist_tracks(p['name'])
+            if p["track_count"] > 0 and p["track_count"] < 1000 and p["name"] not in special_names:
+                success, tracks = asc.get_playlist_tracks(p["name"])
                 assert success is True
                 assert isinstance(tracks, list)
                 if tracks:
                     t = tracks[0]
-                    assert 'name' in t
-                    assert 'artist' in t
-                    assert 'album' in t
-                    assert 'id' in t
+                    assert "name" in t
+                    assert "artist" in t
+                    assert "album" in t
+                    assert "id" in t
                 break
 
     def test_get_playlist_tracks_not_found(self):
@@ -130,16 +129,27 @@ class TestPlaylistOperations:
         """Should create and delete a playlist."""
         test_name = "_TEST_PLAYLIST_DELETE_ME_"
 
+        # Music.app cheerfully allows duplicate playlist names. If a prior
+        # test run failed before its delete step (or was interrupted), a
+        # leftover instance will still be there — and create_playlist will
+        # add ANOTHER one alongside it. Drain any leftovers first so this
+        # test is hermetic regardless of prior state.
+        ok, playlists = asc.get_playlists()
+        if ok:
+            for _ in range(sum(1 for p in playlists if p.get("name") == test_name)):
+                asc.delete_playlist(test_name)
+
         # Create
         success, playlist_id = asc.create_playlist(test_name, "Test description")
         assert success is True
         assert len(playlist_id) > 0
 
-        # Verify it exists
+        # Verify it exists (and is the only one — confirms the pre-clean worked)
         success, playlists = asc.get_playlists()
         assert success is True
-        names = [p['name'] for p in playlists]
+        names = [p["name"] for p in playlists]
         assert test_name in names
+        assert names.count(test_name) == 1
 
         # Delete
         success, msg = asc.delete_playlist(test_name)
@@ -147,7 +157,7 @@ class TestPlaylistOperations:
 
         # Verify deleted
         success, playlists = asc.get_playlists()
-        names = [p['name'] for p in playlists]
+        names = [p["name"] for p in playlists]
         assert test_name not in names
 
 
@@ -319,11 +329,11 @@ class TestLibrarySearch:
         assert success is True
         if results:
             t = results[0]
-            assert 'name' in t
-            assert 'artist' in t
-            assert 'album' in t
-            assert 'duration' in t
-            assert 'id' in t
+            assert "name" in t
+            assert "artist" in t
+            assert "album" in t
+            assert "duration" in t
+            assert "id" in t
 
 
 class TestLibraryStats:
@@ -334,16 +344,16 @@ class TestLibraryStats:
         success, stats = asc.get_library_stats()
         assert success is True
         assert isinstance(stats, dict)
-        assert 'track_count' in stats
-        assert 'playlist_count' in stats
-        assert 'player_state' in stats
-        assert 'shuffle' in stats
-        assert 'repeat' in stats
-        assert 'volume' in stats
+        assert "track_count" in stats
+        assert "playlist_count" in stats
+        assert "player_state" in stats
+        assert "shuffle" in stats
+        assert "repeat" in stats
+        assert "volume" in stats
 
-        assert isinstance(stats['track_count'], int)
-        assert stats['track_count'] >= 0
-        assert isinstance(stats['shuffle'], bool)
+        assert isinstance(stats["track_count"], int)
+        assert stats["track_count"] >= 0
+        assert isinstance(stats["shuffle"], bool)
 
 
 class TestAirPlay:
@@ -426,6 +436,7 @@ class TestOpenCatalogSong:
         """Should return (success, message) tuple for valid Apple Music URL."""
         # Mock subprocess to avoid launching Music
         import subprocess
+
         monkeypatch.setattr(subprocess, "run", lambda *args, **kwargs: None)
 
         success, result = asc.open_catalog_song("https://music.apple.com/us/song/1234567890")
@@ -454,6 +465,7 @@ class TestOpenCatalogSong:
         """Should accept music:// scheme URLs."""
         # Mock subprocess to avoid launching Music
         import subprocess
+
         monkeypatch.setattr(subprocess, "run", lambda *args, **kwargs: None)
 
         success, result = asc.open_catalog_song("music://music.apple.com/us/song/1234567890")
@@ -481,9 +493,7 @@ class TestAddTrackDisambiguation:
         'artist is "The Wiggles"' should match solo Wiggles,
         not 'Dorothy the Dinosaur & The Wiggles'.
         """
-        success, result = asc.add_track_to_playlist(
-            self.TEST_PLAYLIST, "Hot Potato", "The Wiggles"
-        )
+        success, result = asc.add_track_to_playlist(self.TEST_PLAYLIST, "Hot Potato", "The Wiggles")
         assert success is True
         # Should be the solo Wiggles version, not Dorothy collab
         assert "Dorothy" not in result
@@ -533,11 +543,17 @@ class TestOpenCatalogAndPlay:
     def _mock_subprocess(self, monkeypatch):
         """Mock subprocess.run for open_catalog_song."""
         import subprocess
-        monkeypatch.setattr(subprocess, "run", lambda *args, **kwargs: type('R', (), {'returncode': 0, 'stdout': '', 'stderr': ''})())
+
+        monkeypatch.setattr(
+            subprocess,
+            "run",
+            lambda *args, **kwargs: type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})(),
+        )
 
     def _mock_time(self, monkeypatch):
         """Mock time.sleep to avoid delays."""
         import time
+
         monkeypatch.setattr(time, "sleep", lambda _: None)
 
     def test_returns_tuple(self, monkeypatch):
@@ -561,7 +577,9 @@ class TestOpenCatalogAndPlay:
 
     def test_rejects_song_url(self):
         """Should reject /song/ URLs with helpful message."""
-        success, result = asc.open_catalog_and_play("https://music.apple.com/us/song/track-name/1234567890")
+        success, result = asc.open_catalog_and_play(
+            "https://music.apple.com/us/song/track-name/1234567890"
+        )
         assert success is False
         assert "not supported" in result.lower()
         assert "?i=" in result
@@ -588,6 +606,7 @@ class TestOpenCatalogAndPlay:
         self._mock_subprocess(monkeypatch)
         self._mock_time(monkeypatch)
         call_count = [0]
+
         def mock_run(script):
             call_count[0] += 1
             if call_count[0] == 1:
@@ -595,6 +614,7 @@ class TestOpenCatalogAndPlay:
             if call_count[0] == 2:
                 return (True, "")
             return (True, "playing")
+
         monkeypatch.setattr(asc, "run_applescript", mock_run)
         success, result = asc.open_catalog_and_play("https://music.apple.com/us/album/1234567890")
         assert success is True
@@ -606,6 +626,7 @@ class TestOpenCatalogAndPlay:
         self._mock_time(monkeypatch)
         scripts_called = []
         call_count = [0]
+
         def mock_run(script):
             scripts_called.append(script)
             call_count[0] += 1
@@ -614,8 +635,11 @@ class TestOpenCatalogAndPlay:
             if call_count[0] == 2:
                 return (True, "")
             return (True, "playing")
+
         monkeypatch.setattr(asc, "run_applescript", mock_run)
-        success, result = asc.open_catalog_and_play("https://music.apple.com/us/album/1234567890", shuffle=True)
+        success, result = asc.open_catalog_and_play(
+            "https://music.apple.com/us/album/1234567890", shuffle=True
+        )
         assert success is True
         assert any("Shuffle" in s for s in scripts_called)
 
@@ -624,7 +648,9 @@ class TestOpenCatalogAndPlay:
         self._mock_subprocess(monkeypatch)
         self._mock_time(monkeypatch)
         monkeypatch.setattr(asc, "run_applescript", lambda script: (True, "stopped"))
-        success, result = asc.open_catalog_and_play("https://music.apple.com/us/album/1234567890", timeout=0.1)
+        success, result = asc.open_catalog_and_play(
+            "https://music.apple.com/us/album/1234567890", timeout=0.1
+        )
         assert success is True
         assert "could not confirm" in result.lower()
 
@@ -633,6 +659,7 @@ class TestOpenCatalogAndPlay:
         self._mock_subprocess(monkeypatch)
         self._mock_time(monkeypatch)
         call_count = [0]
+
         def mock_run(script):
             call_count[0] += 1
             if "player state" in script and call_count[0] <= 2:
@@ -648,9 +675,12 @@ class TestOpenCatalogAndPlay:
             if "player state" in script:
                 return (True, "playing")
             return (True, "")
+
         monkeypatch.setattr(asc, "run_applescript", mock_run)
         monkeypatch.setattr(asc, "_jxa_mouse_move", lambda x, y: True)
-        success, result = asc.open_catalog_and_play("https://music.apple.com/us/album/name/123?i=456")
+        success, result = asc.open_catalog_and_play(
+            "https://music.apple.com/us/album/name/123?i=456"
+        )
         assert success is True
         assert "test track" in result.lower()
 
@@ -835,8 +865,7 @@ class TestUISearchParsing:
 
 
 @pytest.mark.skipif(
-    not os.environ.get("TEST_UI"),
-    reason="UI tests require Music.app visible. Run with TEST_UI=1"
+    not os.environ.get("TEST_UI"), reason="UI tests require Music.app visible. Run with TEST_UI=1"
 )
 class TestUISearchIntegration:
     """Integration tests for UI search.
@@ -850,6 +879,7 @@ class TestUISearchIntegration:
         """Should find results for a well-known artist."""
         asc.run_applescript('tell application "Music" to activate')
         import time
+
         time.sleep(2)
         ok, results = asc.ui_search_catalog("Beatles")
         asc.ui_clear_search()
@@ -862,6 +892,7 @@ class TestUISearchIntegration:
         """Should clear search without errors."""
         asc.run_applescript('tell application "Music" to activate')
         import time
+
         time.sleep(1)
         asc.ui_search_catalog("test query")
         asc.ui_clear_search()

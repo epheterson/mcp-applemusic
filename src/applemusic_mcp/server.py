@@ -8,6 +8,7 @@ import csv
 import io
 import json
 import re
+import sys
 import time
 import unicodedata
 from dataclasses import dataclass
@@ -809,6 +810,23 @@ def get_headers() -> dict:
         "Music-User-Token": get_user_token(),
         "Content-Type": "application/json",
     }
+
+
+def _has_developer_token() -> bool:
+    """Probe whether a usable developer token is configured.
+
+    Returns False on any exception from get_developer_token() — that
+    includes missing/expired tokens AND environmental failures (config dir
+    permissions, malformed JSON, etc). Callers that have a tokenless
+    fallback (e.g. AppleScript) use this for feature detection so the raw
+    exception doesn't leak to users where the operation could have
+    succeeded without API access.
+    """
+    try:
+        get_developer_token()
+        return True
+    except Exception:
+        return False
 
 
 # ============ INTERNAL HELPERS ============
@@ -1671,7 +1689,22 @@ def _smart_as_add_track_to_playlist(
     for cand_name, cand_artist in _split_track_artist_candidates(track_name):
         ok2, result2 = asc.add_track_to_playlist(playlist_name, cand_name, cand_artist, None)
         if ok2:
-            return True, result2, (cand_name, cand_artist)
+            # Verify the split-resolved track actually landed. We've already
+            # second-guessed the caller's input by splitting it; if the wrong
+            # track silently got added (UI raciness, propagation lag), we'd
+            # rather fail loudly than claim a false success on a guess.
+            if _verify_track_in_playlist(playlist_name, cand_name, cand_artist):
+                return True, result2, (cand_name, cand_artist)
+            # Verify failed after a successful add. Don't try the next
+            # candidate — that would risk a second wrong-track add if the
+            # first one really did land but verify is just slow (iCloud
+            # propagation lag). Better one suspect add than two.
+            return (
+                False,
+                f"Added '{cand_name}' but could not verify in '{playlist_name}' "
+                f"(may have landed; check manually)",
+                None,
+            )
     return False, result, None
 
 
@@ -1739,12 +1772,7 @@ def _unified_auto_search_to_playlist(
             steps.append(f"Split '{track_name}' → name='{search_name}' artist='{search_artist}'")
 
     # Probe token availability without leaking its error message
-    api_ok = False
-    try:
-        get_developer_token()
-        api_ok = True
-    except Exception:
-        pass
+    api_ok = _has_developer_token()
 
     api_error: Optional[str] = None
     if api_ok:
@@ -1781,11 +1809,14 @@ def _unified_auto_search_to_playlist(
 
     if api_error:
         return False, api_error, steps
-    return (
-        False,
-        "Not found in library; catalog search unavailable (need API token or macOS with Accessibility)",
-        steps,
-    )
+    # Tell users what's actually missing for THEIR platform — the legacy
+    # generic message ("need API token or macOS with Accessibility") was
+    # confusing on macOS where the user obviously already had macOS.
+    if sys.platform == "darwin":
+        reason = "AppleScript unavailable (Music.app + Accessibility permissions required)"
+    else:
+        reason = "API token required on non-macOS platforms; run: applemusic-mcp generate-token"
+    return (False, f"Not found in library; catalog search unavailable — {reason}", steps)
 
 
 def _auto_search_and_add_to_playlist(
@@ -1874,11 +1905,11 @@ def _auto_search_and_add_to_playlist(
             visible = False
             deadline = time.time() + _LIBRARY_SYNC_DEADLINE_S
             while time.time() < deadline:
-                sok, shits = asc.search_library(found_name, "songs")
-                if sok and shits:
+                sok, s_hits = asc.search_library(found_name, "songs")
+                if sok and s_hits:
                     if found_artist and len(found_artist) >= 2:
                         fa_lower = found_artist.lower()
-                        for h in shits:
+                        for h in s_hits:
                             if fa_lower in (h.get("artist") or "").lower():
                                 visible = True
                                 break
@@ -3603,6 +3634,7 @@ def _library_search(
         clean_only = prefs["clean_only"]
 
     # Try AppleScript on macOS (faster for local searches)
+    asc_error: Optional[str] = None
     if APPLESCRIPT_AVAILABLE:
         success, results = asc.search_library(query, types)
         if success and results:
@@ -3628,6 +3660,11 @@ def _library_search(
                 results = [t for t in results if t.get("explicit") != "Yes"]
 
             return format_output(results, format, export, full, f"search_{query[:20]}")
+        if not success:
+            # Capture so the API-fallback error path can surface what really
+            # broke. Without this, an AS failure followed by missing-token
+            # would only show "Developer token not found" — hiding the cause.
+            asc_error = str(results) if results else "AppleScript search failed"
         # AppleScript found nothing or failed - fall through to API
 
     # API fallback (or primary on non-macOS)
@@ -3644,7 +3681,12 @@ def _library_search(
 
         songs = data.get("results", {}).get("library-songs", {}).get("data", [])
         if not songs:
-            return "No songs found"
+            msg = "No songs found"
+            if asc_error:
+                # AS failure + zero API hits is the exact case the legacy
+                # error swallowed silently — surface what AS reported.
+                msg += f"\n\n(AppleScript also failed: {asc_error})"
+            return msg
 
         song_data = [extract_track_data(s, full) for s in songs]
 
@@ -3658,9 +3700,15 @@ def _library_search(
         return format_output(song_data, format, export, full, f"search_{query[:20]}")
 
     except requests.exceptions.RequestException as e:
-        return f"API Error: {str(e)}"
+        msg = f"API Error: {str(e)}"
+        if asc_error:
+            msg += f"\n\n(AppleScript also failed: {asc_error})"
+        return msg
     except (FileNotFoundError, ValueError) as e:
-        return str(e)
+        msg = str(e)
+        if asc_error:
+            msg += f"\n\n(AppleScript also failed: {asc_error})"
+        return msg
 
 
 def _library_add(
