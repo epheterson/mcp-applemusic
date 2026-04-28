@@ -129,16 +129,27 @@ class TestPlaylistOperations:
         """Should create and delete a playlist."""
         test_name = "_TEST_PLAYLIST_DELETE_ME_"
 
+        # Music.app cheerfully allows duplicate playlist names. If a prior
+        # test run failed before its delete step (or was interrupted), a
+        # leftover instance will still be there — and create_playlist will
+        # add ANOTHER one alongside it. Drain any leftovers first so this
+        # test is hermetic regardless of prior state.
+        ok, playlists = asc.get_playlists()
+        if ok:
+            for _ in range(sum(1 for p in playlists if p.get("name") == test_name)):
+                asc.delete_playlist(test_name)
+
         # Create
         success, playlist_id = asc.create_playlist(test_name, "Test description")
         assert success is True
         assert len(playlist_id) > 0
 
-        # Verify it exists
+        # Verify it exists (and is the only one — confirms the pre-clean worked)
         success, playlists = asc.get_playlists()
         assert success is True
         names = [p["name"] for p in playlists]
         assert test_name in names
+        assert names.count(test_name) == 1
 
         # Delete
         success, msg = asc.delete_playlist(test_name)
