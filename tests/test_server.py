@@ -3544,3 +3544,40 @@ class TestPlaylistAddIdsRequireToken:
         assert "pass the track by name instead" in result
         # The legacy misleading error must NOT appear
         assert "Developer token not found" not in result.split("Track IDs")[0]
+
+    def test_album_without_token_does_not_leak_dev_token_error(self, monkeypatch):
+        """Adding by album also requires the catalog API (album's tracklist is
+        fetched there). On tokenless macOS, _playlist_add must surface a
+        specific 'add by album requires API' message — not 'Developer token
+        not found'. Reviewer-flagged sibling of the ID guard."""
+        monkeypatch.setattr(server, "APPLESCRIPT_AVAILABLE", True)
+
+        mock_asc = MagicMock()
+        mock_asc.get_playlists.return_value = (
+            True,
+            [{"name": "Workout", "id": "p.work", "smart": False, "track_count": 0}],
+        )
+        monkeypatch.setattr(server, "asc", mock_asc)
+        monkeypatch.setattr(server, "_has_developer_token", lambda: False)
+
+        # If we reach get_headers, the guard didn't fire.
+        def fail_loud():
+            raise AssertionError(
+                "get_headers() should not have been called — the album guard "
+                "must intercept before this point"
+            )
+
+        monkeypatch.setattr(server, "get_headers", fail_loud)
+
+        result = server._playlist_add(
+            playlist="Workout",
+            track="",
+            album="Dark Side of the Moon",
+            artist="",
+            allow_duplicates=False,
+            verify=False,
+            auto_search=False,
+        )
+
+        assert "Adding by album requires an API token" in result
+        assert "Developer token not found" not in result

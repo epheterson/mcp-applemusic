@@ -14,7 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **`asc.classify_error(text)`** — categorizes AppleScript error strings into stable categories (`music_not_running`, `automation_denied`, `timeout`, `syntax`, `unknown`) by matching numeric error codes (-609, -1728, -1743, -10810) and stable phrases. Used by callers to decide whether an AS failure should block API cascade (environmental errors do; logic errors don't).
+- **`asc.classify_error(text)`** — categorizes AppleScript error strings into stable categories (`music_not_running`, `automation_denied`, `timeout`, `syntax`, `unknown`) by matching numeric error codes (-609, -1743, -10810) and stable phrases (`Connection is invalid`, `not authorized`, `not allowed assistive`, etc.). `-1728` ("can't get") is deliberately left as `unknown` — it's a logic-level error (track/playlist doesn't exist), not environmental, so callers with legitimate API fallbacks can still cascade. Used to decide whether an AS failure should block API cascade (environmental errors do; logic errors don't).
 - **`_format_applescript_error(raw, operation)`** — translates a raw AppleScript stderr into a user-facing actionable message. Tells users to open Music.app for `-609`, opens the path to System Settings → Privacy & Security → Automation for `-1743`, etc. Includes the operation context so users know which call surfaced the problem.
 - **`_playlist_copy` AS-mode no longer requires a developer token** — refactored to defer `get_headers()` to the API-mode (by-ID) branch only. The AS-mode (by-name) branch is now strictly tokenless on macOS, matching the README's promise.
 

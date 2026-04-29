@@ -2915,6 +2915,17 @@ def _playlist_add(
     # Resolve album input - get all tracks from album(s)
     # When track is also provided, album acts as disambiguation filter (not "add whole album")
     if album and not track:
+        # Album resolution requires the catalog API — there's no AppleScript
+        # equivalent for fetching an album's tracklist by name. Without a
+        # token we'd leak "Developer token not found" (same class as the
+        # ID-guard below). Tell the user clearly what's needed.
+        if not _has_developer_token():
+            return (
+                "Error: Adding by album requires an API token (the album's "
+                "tracklist is fetched from the catalog). To add tracks "
+                "without a token, pass them by name. To configure an API "
+                "token, run: applemusic-mcp generate-token"
+            )
         resolved_albums = _resolve_album(album, artist)
         for r in resolved_albums:
             if r.error:
