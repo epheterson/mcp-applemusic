@@ -3581,3 +3581,96 @@ class TestPlaylistAddIdsRequireToken:
 
         assert "Adding by album requires an API token" in result
         assert "Developer token not found" not in result
+
+
+class TestPlaylistCopyNoTokenLeakOnAsFailure:
+    """Regression test for _playlist_copy AS-mode (by-name path). The fix
+    in cdc3e40 deferred get_headers() from the function preamble to inside
+    the API-mode (by-ID) branch only — without a regression test, a
+    future refactor could re-introduce the upfront get_headers() call
+    silently, leaking 'Developer token not found' to tokenless macOS
+    users copying playlists by name.
+
+    Reviewer-flagged gap (TestPlaylistCopyNoTokenLeakOnAsFailure was
+    missing; all other fixed callsites had regression tests)."""
+
+    @staticmethod
+    def _wire_error_constants(mock_asc, real_asc):
+        """Helper: replicate the error category attributes on a MagicMock
+        so server-side `asc.ERROR_*` lookups resolve to the real strings,
+        not auto-generated MagicMock instances. Without this, the
+        category-equality checks inside `_format_applescript_error` and
+        the gated-cascade in `_library_rate` always evaluate False."""
+        mock_asc.classify_error = real_asc.classify_error
+        mock_asc.ERROR_UNKNOWN = real_asc.ERROR_UNKNOWN
+        mock_asc.ERROR_AUTOMATION_DENIED = real_asc.ERROR_AUTOMATION_DENIED
+        mock_asc.ERROR_MUSIC_NOT_RUNNING = real_asc.ERROR_MUSIC_NOT_RUNNING
+        mock_asc.ERROR_TIMEOUT = real_asc.ERROR_TIMEOUT
+        mock_asc.ERROR_SYNTAX = real_asc.ERROR_SYNTAX
+
+    def test_as_mode_by_name_does_not_call_get_headers(self, monkeypatch):
+        from applemusic_mcp import applescript as real_asc
+
+        monkeypatch.setattr(server, "APPLESCRIPT_AVAILABLE", True)
+
+        mock_asc = MagicMock()
+        mock_asc.get_playlists.return_value = (
+            True,
+            [{"name": "Source Playlist", "id": "src.id", "smart": False, "track_count": 3}],
+        )
+        # AS read of source tracks succeeds with one track
+        mock_asc.get_playlist_tracks.return_value = (
+            True,
+            [{"name": "Track 1", "artist": "Artist 1", "album": "Album 1", "id": "t.1"}],
+        )
+        # AS create of destination succeeds
+        mock_asc.create_playlist.return_value = (True, "p.dest")
+        # AS add per track succeeds
+        mock_asc.add_track_to_playlist.return_value = (True, "Added")
+        self._wire_error_constants(mock_asc, real_asc)
+        monkeypatch.setattr(server, "asc", mock_asc)
+
+        # If get_headers is reached, the regression has happened.
+        def fail_loud():
+            raise AssertionError(
+                "get_headers() should NOT be called on the AS-by-name copy path — "
+                "v0.9.4 deferred it to API-mode (by-ID) only"
+            )
+
+        monkeypatch.setattr(server, "get_headers", fail_loud)
+
+        # Tokenless invocation by name (no token configured, AS-mode)
+        result = server._playlist_copy(source="Source Playlist", new_name="Destination")
+
+        assert "Created" in result and "Destination" in result
+        assert "Developer token not found" not in result
+
+    def test_as_mode_failure_surfaces_formatted_error(self, monkeypatch):
+        """When AS fails inside copy on macOS, surface the formatted error
+        (Music.app isn't running, Automation denied, etc.) — not a raw
+        stderr or a token error."""
+        from applemusic_mcp import applescript as real_asc
+
+        monkeypatch.setattr(server, "APPLESCRIPT_AVAILABLE", True)
+
+        mock_asc = MagicMock()
+        mock_asc.get_playlists.return_value = (
+            True,
+            [{"name": "Source Playlist", "id": "src.id", "smart": False, "track_count": 3}],
+        )
+        # AS read of source tracks fails environmentally
+        mock_asc.get_playlist_tracks.return_value = (
+            False,
+            "execution error: Music got an error: Connection is invalid. (-609)",
+        )
+        self._wire_error_constants(mock_asc, real_asc)
+        monkeypatch.setattr(server, "asc", mock_asc)
+
+        def fail_loud():
+            raise AssertionError("get_headers() reached — should have early-returned")
+
+        monkeypatch.setattr(server, "get_headers", fail_loud)
+
+        result = server._playlist_copy(source="Source Playlist", new_name="Destination")
+        assert "Music.app isn't running" in result
+        assert "Developer token not found" not in result
