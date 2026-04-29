@@ -3052,6 +3052,23 @@ def _playlist_add(
                 errors.append(f"{name}: {result}")
 
         # Process IDs (catalog or library IDs)
+        # NOTE: track IDs require the API to resolve catalog/library metadata
+        # before handing off to AppleScript. If the user has no developer
+        # token, fail with a specific message rather than letting the
+        # FileNotFoundError leak — same defensive class as _playlist_create
+        # et al, just with a different fix shape (we can't avoid the API
+        # entirely here, but we can tell the user exactly why their input
+        # type isn't workable on this configuration).
+        if ids_list:
+            if not _has_developer_token():
+                errors.append(
+                    "Track IDs require an API token on macOS (resolving the ID's "
+                    "catalog metadata uses the REST API). To add by ID without a "
+                    "token, pass the track by name instead. To configure an API "
+                    "token, run: applemusic-mcp generate-token"
+                )
+                ids_list = []  # Skip the ID loop below
+
         if ids_list:
             headers = get_headers()
 
@@ -4979,7 +4996,7 @@ def _library_rate(
         if success:
             s = rating_val // 20
             return f"{track_name}: {'★' * s}{'☆' * (5 - s)} ({rating_val}/100)"
-        return f"Error: {rating_val}"
+        return f"Error: {_format_applescript_error(str(rating_val), 'get star rating')}"
 
     if action == "set":
         if not APPLESCRIPT_AVAILABLE:
@@ -4995,7 +5012,7 @@ def _library_rate(
                 {"track": track_desc, "type": "set_stars", "value": stars, "method": "applescript"},
             )
             return f"Set {track_name} to {'★' * stars}{'☆' * (5 - stars)}"
-        return f"Error: {result}"
+        return f"Error: {_format_applescript_error(str(result), 'set star rating')}"
 
     # Love/dislike by name - try AppleScript first
     if APPLESCRIPT_AVAILABLE:

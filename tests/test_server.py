@@ -3488,3 +3488,59 @@ class TestNotAllowedOvermatchFix:
             asc.classify_error("requires assistive access to control Music")
             == asc.ERROR_AUTOMATION_DENIED
         )
+
+
+class TestPlaylistAddIdsRequireToken:
+    """When a tokenless macOS user passes a track ID (not name) to
+    playlist(action="add"), the AS-mode code path needs the API to
+    resolve the ID's metadata before handing off to AppleScript. Prior
+    to the fix, _playlist_add called get_headers() unconditionally inside
+    the AS block — leaking 'Developer token not found' on the same
+    user-facing surface as the bug this PR exists to close."""
+
+    def test_id_without_token_says_what_to_do_not_dev_token(self, monkeypatch):
+        from applemusic_mcp import applescript as real_asc
+
+        monkeypatch.setattr(server, "APPLESCRIPT_AVAILABLE", True)
+
+        # Set up: AS resolves the playlist by name, no tokens configured
+        mock_asc = MagicMock()
+        mock_asc.get_playlists.return_value = (
+            True,
+            [{"name": "Workout", "id": "p.work", "smart": False, "track_count": 5}],
+        )
+        # track_exists_in_playlist for dedup check (won't matter — we
+        # should bail before reaching it)
+        mock_asc.track_exists_in_playlist.return_value = (True, False)
+        mock_asc.classify_error = real_asc.classify_error
+        monkeypatch.setattr(server, "asc", mock_asc)
+
+        # No token configured — _has_developer_token returns False,
+        # which the new ID-guard catches and surfaces a specific message.
+        monkeypatch.setattr(server, "_has_developer_token", lambda: False)
+
+        # If the guard didn't fire, this would raise the misleading
+        # FileNotFoundError. Patch get_headers to fail loudly so the
+        # test catches a regression.
+        def fail_loud():
+            raise AssertionError(
+                "get_headers() should not have been called — the ID guard "
+                "must intercept before this point"
+            )
+
+        monkeypatch.setattr(server, "get_headers", fail_loud)
+
+        result = server._playlist_add(
+            playlist="Workout",
+            track="1440783617",  # catalog ID format
+            album="",
+            artist="",
+            allow_duplicates=False,
+            verify=False,
+            auto_search=False,
+        )
+
+        assert "Track IDs require an API token" in result
+        assert "pass the track by name instead" in result
+        # The legacy misleading error must NOT appear
+        assert "Developer token not found" not in result.split("Track IDs")[0]
