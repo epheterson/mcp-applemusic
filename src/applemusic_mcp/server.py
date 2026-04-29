@@ -829,6 +829,52 @@ def _has_developer_token() -> bool:
         return False
 
 
+def _format_applescript_error(raw: str, operation: str = "") -> str:
+    """Translate a raw AppleScript error into an actionable user message.
+
+    The MCP previously fell through to the API path when AppleScript
+    failed, surfacing "Developer token not found" — even when the real
+    cause was Music.app being closed or Automation permissions not granted.
+    This helper picks the right user-facing message based on
+    ``asc.classify_error`` so callers can stop misdirecting users to the
+    token-setup CLI when that's not what's broken.
+
+    Args:
+        raw: stderr / message returned by ``run_applescript`` on failure
+        operation: human-readable description of what was being attempted
+            (e.g. "create playlist", "list playlists"). Embedded in the
+            message so the user knows which call surfaced the problem.
+
+    Returns:
+        Single-line user-facing string. Includes the raw error in
+        parentheses for the unknown category so users can still report it.
+    """
+    op = f" ({operation})" if operation else ""
+    category = asc.classify_error(raw)
+
+    if category == asc.ERROR_MUSIC_NOT_RUNNING:
+        return (
+            f"Music.app isn't running{op}. Open Music.app, then retry. "
+            "(macOS playlist/library operations talk to Music.app via AppleScript "
+            "— no developer token required, but the app needs to be running.)"
+        )
+    if category == asc.ERROR_AUTOMATION_DENIED:
+        return (
+            f"Automation permission denied{op}. Your MCP host (Claude Desktop, "
+            "your terminal, etc.) hasn't been granted permission to control "
+            "Music.app. Open System Settings → Privacy & Security → Automation, "
+            "find the app running this MCP, and enable the 'Music' toggle."
+        )
+    if category == asc.ERROR_TIMEOUT:
+        return (
+            f"AppleScript timed out{op}. Music.app may be unresponsive — try "
+            "quitting and reopening it, then retry."
+        )
+    if category == asc.ERROR_SYNTAX:
+        return f"AppleScript syntax error{op} — please report this. Raw: {raw}"
+    return f"AppleScript failed{op}: {raw}"
+
+
 # ============ INTERNAL HELPERS ============
 
 
@@ -2032,9 +2078,14 @@ def _playlist_list(
                     }
                 )
             return format_output(playlist_data, format, export, full, "playlists")
-        # AppleScript failed - fall through to API
+        # AppleScript failed on macOS — surface the actionable error
+        # instead of cascading to API and leaking "Developer token not
+        # found" when the real cause is Music.app not running or
+        # Automation permissions denied.
+        as_error = str(as_playlists) if as_playlists else "AppleScript get_playlists failed"
+        return f"Error listing playlists: {_format_applescript_error(as_error, 'list playlists')}"
 
-    # Fall back to API
+    # Fall back to API (non-macOS only)
     try:
         headers = get_headers()
         all_playlists = []
@@ -2614,8 +2665,15 @@ def _playlist_create(name: str, description: str = "") -> str:
                 undo_info={"playlist_name": name, "playlist_id": result},
             )
             return f"Created playlist '{name}' (ID: {result})"
+        # AppleScript failed on macOS. Don't cascade to the API path —
+        # that leaks "Developer token not found" when the real cause is
+        # Music.app not running or Automation permissions denied. Surface
+        # the actionable AS error directly. Falling back to API would only
+        # help if the user has a token configured AND wants to bypass AS;
+        # they can opt in by running on a non-darwin host.
+        return f"Error creating playlist: {_format_applescript_error(result, 'create playlist')}"
 
-    # Fall back to API
+    # Fall back to API (non-macOS only)
     try:
         headers = get_headers()
 
@@ -3305,72 +3363,78 @@ def _playlist_copy(source: str = "", new_name: str = "") -> str:
     has_id = bool(resolved.api_id)
     has_name = bool(resolved.applescript_name)
 
-    try:
-        headers = get_headers()
+    # === AppleScript mode (by name, only if we don't have API ID) ===
+    # Run before any API-token fetch so the AS-only path works without a
+    # developer token — that's what leaked "Developer token not found"
+    # for tokenless macOS users on prior versions.
+    if has_name and not has_id:
+        if not APPLESCRIPT_AVAILABLE:
+            return "Error: Playlist name requires macOS (use playlist ID like 'p.XXX' for cross-platform)"
 
-        # === AppleScript mode (by name, only if we don't have API ID) ===
-        if has_name and not has_id:
-            if not APPLESCRIPT_AVAILABLE:
-                return "Error: Playlist name requires macOS (use playlist ID like 'p.XXX' for cross-platform)"
+        # Get tracks from source playlist via AppleScript
+        success, source_tracks = asc.get_playlist_tracks(resolved.applescript_name)
+        if not success:
+            return f"Error: {_format_applescript_error(str(source_tracks), 'read source playlist')}"
+        if not source_tracks:
+            return f"Error: Playlist '{resolved.applescript_name}' is empty"
 
-            # Get tracks from source playlist via AppleScript
-            success, source_tracks = asc.get_playlist_tracks(resolved.applescript_name)
-            if not success:
-                return f"Error: {source_tracks}"
-            if not source_tracks:
-                return f"Error: Playlist '{resolved.applescript_name}' is empty"
+        # Create new playlist via AppleScript
+        success, new_playlist_id = asc.create_playlist(new_name, "")
+        if not success:
+            return f"Error creating playlist: {_format_applescript_error(str(new_playlist_id), 'create destination playlist')}"
 
-            # Create new playlist via AppleScript
-            success, new_playlist_id = asc.create_playlist(new_name, "")
-            if not success:
-                return f"Error creating playlist: {new_playlist_id}"
-
-            # Add tracks to new playlist via AppleScript
-            added = 0
-            failed = []
-            for track in source_tracks:
-                track_name = track.get("name", "")
-                artist = track.get("artist", "")
-                if track_name:
-                    success, _ = asc.add_track_to_playlist(
-                        new_name, track_name, artist if artist else None
-                    )
-                    if success:
-                        added += 1
-                    else:
-                        failed.append(track_name)
-
-            if failed:
-                failed_list = ", ".join(failed[:5])
-                if len(failed) > 5:
-                    failed_list += f", ... (+{len(failed) - 5} more)"
-                audit_log.log_action(
-                    "copy_playlist",
-                    {
-                        "source": resolved.applescript_name,
-                        "destination": new_name,
-                        "track_count": added,
-                        "failed_count": len(failed),
-                        "method": "applescript",
-                    },
-                    undo_info={"playlist_name": new_name, "playlist_id": new_playlist_id},
+        # Add tracks to new playlist via AppleScript
+        added = 0
+        failed = []
+        for track in source_tracks:
+            track_name = track.get("name", "")
+            artist = track.get("artist", "")
+            if track_name:
+                success, _ = asc.add_track_to_playlist(
+                    new_name, track_name, artist if artist else None
                 )
-                fuzzy_info = _format_fuzzy_match(resolved.fuzzy_match)
-                return f"Created '{new_name}' (ID: {new_playlist_id}) with {added}/{len(source_tracks)} tracks. Failed: {failed_list}{fuzzy_info}"
+                if success:
+                    added += 1
+                else:
+                    failed.append(track_name)
+
+        if failed:
+            failed_list = ", ".join(failed[:5])
+            if len(failed) > 5:
+                failed_list += f", ... (+{len(failed) - 5} more)"
             audit_log.log_action(
                 "copy_playlist",
                 {
                     "source": resolved.applescript_name,
                     "destination": new_name,
                     "track_count": added,
+                    "failed_count": len(failed),
                     "method": "applescript",
                 },
                 undo_info={"playlist_name": new_name, "playlist_id": new_playlist_id},
             )
             fuzzy_info = _format_fuzzy_match(resolved.fuzzy_match)
-            return f"Created '{new_name}' (ID: {new_playlist_id}) with {added} tracks (macOS){fuzzy_info}"
+            return f"Created '{new_name}' (ID: {new_playlist_id}) with {added}/{len(source_tracks)} tracks. Failed: {failed_list}{fuzzy_info}"
+        audit_log.log_action(
+            "copy_playlist",
+            {
+                "source": resolved.applescript_name,
+                "destination": new_name,
+                "track_count": added,
+                "method": "applescript",
+            },
+            undo_info={"playlist_name": new_name, "playlist_id": new_playlist_id},
+        )
+        fuzzy_info = _format_fuzzy_match(resolved.fuzzy_match)
+        return (
+            f"Created '{new_name}' (ID: {new_playlist_id}) with {added} tracks (macOS){fuzzy_info}"
+        )
 
-        # === API mode (by ID) ===
+    # === API mode (by ID) ===
+    # Token is only required in this branch — AS-mode above doesn't need it.
+    try:
+        headers = get_headers()
+
         # Get source playlist tracks
         all_tracks = []
         offset = 0
@@ -4939,8 +5003,16 @@ def _library_rate(
                 {"track": track_desc, "type": action, "method": "applescript"},
             )
             return result
+        # If AS failed for an environmental reason (Music.app not running,
+        # Automation denied, timeout), don't cascade to the API — the API
+        # can't fix any of those, and its own "Developer token not found"
+        # error would mislead the user. Logic-level failures (track not
+        # found in library) should still cascade so the catalog API can
+        # rate songs the user doesn't have downloaded.
+        if asc.classify_error(result) != asc.ERROR_UNKNOWN:
+            return f"Error: {_format_applescript_error(result, action + ' track')}"
 
-    # API fallback for love/dislike
+    # API fallback for love/dislike (catalog rating path)
     search_term = f"{track_name} {track_artist}".strip() if track_artist else track_name
     songs = _search_catalog_songs(search_term, limit=5)
 

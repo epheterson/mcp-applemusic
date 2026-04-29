@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.4] - 2026-04-29
+
+### Fixed
+
+- **`playlist(action="create")` no longer leaks "Developer token not found" on tokenless macOS when AppleScript fails** — the v0.9.3 sweep missed `_playlist_create`'s API fallthrough. A user reported on Reddit that creating a playlist on macOS without a developer token still surfaced the misleading token error. Root cause: when AppleScript's `create_playlist` returned failure (Music.app not running, Automation permissions denied, etc.), `_playlist_create` cascaded to the API path and `get_headers()` raised the token error. Same class also fixed in `_playlist_list` and `_playlist_copy` (which fetched `get_headers()` upfront before the AS-only path even started).
+- **`_library_rate` gated fallthrough** — when the AppleScript love/dislike path fails on macOS, the API cascade now only runs for logic-level errors (track not found in library — the API can rate catalog songs that aren't downloaded). Environmental errors (Music.app not running, Automation denied, timeout) surface directly with actionable messages instead of leaking a token error.
+
+### Added
+
+- **`asc.classify_error(text)`** — categorizes AppleScript error strings into stable categories (`music_not_running`, `automation_denied`, `timeout`, `syntax`, `unknown`) by matching numeric error codes (-609, -1728, -1743, -10810) and stable phrases. Used by callers to decide whether an AS failure should block API cascade (environmental errors do; logic errors don't).
+- **`_format_applescript_error(raw, operation)`** — translates a raw AppleScript stderr into a user-facing actionable message. Tells users to open Music.app for `-609`, opens the path to System Settings → Privacy & Security → Automation for `-1743`, etc. Includes the operation context so users know which call surfaced the problem.
+- **`_playlist_copy` AS-mode no longer requires a developer token** — refactored to defer `get_headers()` to the API-mode (by-ID) branch only. The AS-mode (by-name) branch is now strictly tokenless on macOS, matching the README's promise.
+
+### Internal
+
+- 21 new unit tests covering `classify_error` categorization (codes + phrases + unknown fallback), `_format_applescript_error` per-category messaging, and regression tests confirming `_playlist_create` and `_playlist_list` no longer leak the developer-token error on AS environmental failures.
+- Existing test `test_fallback_to_api_when_applescript_fails` was capturing the prior bad behavior — rewritten to assert the new contract: AS failure on macOS surfaces actionable error, not silent API cascade with misleading token error.
+
 ## [0.9.3] - 2026-04-27
 
 ### Fixed
