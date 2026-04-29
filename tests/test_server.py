@@ -3402,3 +3402,89 @@ class TestLibraryRateGatedFallthrough:
 
         server._library_rate(action="love", track="Some Track", artist="Some Artist", stars=0)
         assert cascade_called, "Cascade to API should have happened on logic-level AS error"
+
+
+class TestLibraryBrowseNoTokenLeakOnAsFailure:
+    """Regression test for the reviewer-flagged callsite. _library_browse
+    is `library(action="browse")` — same shape as _playlist_list.
+    AppleScript failure on macOS must NOT cascade to the API path and
+    leak the token error."""
+
+    def test_music_not_running_does_not_leak_token_error(self, monkeypatch):
+        from applemusic_mcp import applescript as real_asc
+
+        monkeypatch.setattr(server, "APPLESCRIPT_AVAILABLE", True)
+
+        mock_asc = MagicMock()
+        mock_asc.get_library_songs.return_value = (
+            False,
+            "execution error: Music got an error: Connection is invalid. (-609)",
+        )
+        mock_asc.classify_error = real_asc.classify_error
+        mock_asc.ERROR_UNKNOWN = real_asc.ERROR_UNKNOWN
+        mock_asc.ERROR_AUTOMATION_DENIED = real_asc.ERROR_AUTOMATION_DENIED
+        mock_asc.ERROR_MUSIC_NOT_RUNNING = real_asc.ERROR_MUSIC_NOT_RUNNING
+        mock_asc.ERROR_TIMEOUT = real_asc.ERROR_TIMEOUT
+        mock_asc.ERROR_SYNTAX = real_asc.ERROR_SYNTAX
+        monkeypatch.setattr(server, "asc", mock_asc)
+
+        # Token NOT configured. If cascade leaks, this is what the user sees.
+        def raise_no_token():
+            raise FileNotFoundError("Developer token not found. Run: applemusic-mcp generate-token")
+
+        monkeypatch.setattr(server, "get_headers", raise_no_token)
+
+        result = server._library_browse(item_type="songs")
+        assert "Music.app isn't running" in result
+        assert "Developer token not found" not in result
+
+    def test_automation_denied_surfaces_actionable(self, monkeypatch):
+        from applemusic_mcp import applescript as real_asc
+
+        monkeypatch.setattr(server, "APPLESCRIPT_AVAILABLE", True)
+
+        mock_asc = MagicMock()
+        mock_asc.get_library_songs.return_value = (
+            False,
+            "Not authorized to send Apple events to Music. (-1743)",
+        )
+        mock_asc.classify_error = real_asc.classify_error
+        mock_asc.ERROR_UNKNOWN = real_asc.ERROR_UNKNOWN
+        mock_asc.ERROR_AUTOMATION_DENIED = real_asc.ERROR_AUTOMATION_DENIED
+        mock_asc.ERROR_MUSIC_NOT_RUNNING = real_asc.ERROR_MUSIC_NOT_RUNNING
+        mock_asc.ERROR_TIMEOUT = real_asc.ERROR_TIMEOUT
+        mock_asc.ERROR_SYNTAX = real_asc.ERROR_SYNTAX
+        monkeypatch.setattr(server, "asc", mock_asc)
+
+        result = server._library_browse(item_type="songs")
+        assert "Automation permission denied" in result
+        assert "System Settings" in result
+        assert "Developer token not found" not in result
+
+
+class TestNotAllowedOvermatchFix:
+    """Reviewer flagged that bare 'not allowed' was promoting Music.app
+    logic-level errors (e.g. 'editing not allowed for smart playlist')
+    to ERROR_AUTOMATION_DENIED, which would block legitimate API
+    cascade in _library_rate. Verify the tightened phrase matching."""
+
+    def test_smart_playlist_not_allowed_classifies_as_unknown(self):
+        from applemusic_mcp import applescript as asc
+
+        # This is a Music.app logic error, NOT an Automation denial.
+        # It should classify as UNKNOWN so callers cascade as appropriate.
+        assert asc.classify_error("operation not allowed on smart playlists") == asc.ERROR_UNKNOWN
+        assert asc.classify_error("editing not allowed for this playlist") == asc.ERROR_UNKNOWN
+
+    def test_full_assistive_phrase_still_classifies_as_automation_denied(self):
+        from applemusic_mcp import applescript as asc
+
+        # The actual -1743 phrase variant should still match.
+        assert (
+            asc.classify_error("Application is not allowed assistive access")
+            == asc.ERROR_AUTOMATION_DENIED
+        )
+        assert (
+            asc.classify_error("requires assistive access to control Music")
+            == asc.ERROR_AUTOMATION_DENIED
+        )

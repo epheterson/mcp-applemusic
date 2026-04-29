@@ -144,7 +144,16 @@ def classify_error(text: str) -> str:
 
     # Automation permissions denied. -1743 is the canonical code; phrasings
     # vary across macOS versions but consistently mention authorization.
-    if "-1743" in t or "not authorized" in t or "not allowed" in t:
+    # NOTE: bare "not allowed" is too broad — Music.app emits "operation
+    # not allowed on smart playlists" and similar logic-level errors.
+    # Match the full Automation-denial phrases instead.
+    if (
+        "-1743" in t
+        or "not authorized" in t
+        or "not allowed assistive" in t
+        or "assistive access" in t
+        or "not authorised" in t  # British English variant in some locales
+    ):
         return ERROR_AUTOMATION_DENIED
 
     # Music.app not running / connection invalid. -609 is "Connection is
@@ -161,9 +170,16 @@ def classify_error(text: str) -> str:
         return ERROR_MUSIC_NOT_RUNNING
 
     # AppleScript-level syntax errors (means we have a bug, not the user).
-    if "syntax error" in t or "expected" in t and "but found" in t:
+    # Parens explicit so future readers don't have to remember Python's
+    # `and` > `or` precedence rule.
+    if ("syntax error" in t) or ("expected" in t and "but found" in t):
         return ERROR_SYNTAX
 
+    # Note: -1728 ("can't get") deliberately classifies as ERROR_UNKNOWN.
+    # It's a logic-level error (track/playlist doesn't exist) rather than
+    # an environmental one, so callers with legitimate API fallback paths
+    # should still cascade. v0.9.3 handled the broken-track iteration
+    # case at the AppleScript level, not via this classifier.
     return ERROR_UNKNOWN
 
 

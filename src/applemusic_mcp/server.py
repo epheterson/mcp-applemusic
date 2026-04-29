@@ -2175,7 +2175,7 @@ def _playlist_tracks(
             return "Error: AppleScript (playlist_name) requires macOS"
         success, result = asc.get_playlist_tracks(resolved.applescript_name)
         if not success:
-            return f"Error: {result}"
+            return f"Error: {_format_applescript_error(str(result), 'list playlist tracks')}"
         if not result:
             return "Playlist is empty"
 
@@ -2548,7 +2548,7 @@ def _playlist_search(
         # Use native AppleScript search (fast, same as Music app search field)
         success, result = asc.search_playlist(resolved.applescript_name, query)
         if not success:
-            return f"Error: {result}"
+            return f"Error: {_format_applescript_error(str(result), 'search playlist')}"
         for t in result:
             track_id = t.get("id", "")
             matches.append({"name": t["name"], "artist": t["artist"], "id": track_id})
@@ -4380,9 +4380,14 @@ def _library_browse(
             return format_output(
                 data, format, export, full, "songs", total_count=total_count, offset=offset
             )
-        # AppleScript failed - fall through to API
+        # AppleScript failed on macOS — surface the actionable error
+        # instead of cascading to API and leaking "Developer token not
+        # found" when the real cause is Music.app not running or
+        # Automation permissions denied. Same defense as _playlist_list.
+        as_error = str(as_songs) if as_songs else "AppleScript get_library_songs failed"
+        return f"Error browsing library: {_format_applescript_error(as_error, 'browse library')}"
 
-    # Fall back to API
+    # Fall back to API (non-macOS, or non-songs item_type)
     try:
         headers = get_headers()
 
