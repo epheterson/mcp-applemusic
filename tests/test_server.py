@@ -2319,33 +2319,42 @@ class TestUserJourneyCombinedMode:
         # AppleScript should have been called for track name operations
         # (The exact assertion depends on implementation details)
 
-    @responses.activate
-    def test_fallback_to_api_when_applescript_fails(
+    def test_playlist_list_does_not_cascade_to_api_on_applescript_failure(
         self, mock_config_dir, mock_developer_token, mock_user_token, monkeypatch
     ):
-        """Should fall back to API when AppleScript fails."""
+        """When AppleScript fails on macOS, _playlist_list must NOT silently
+        cascade to the API. The API path returns a strict subset (only
+        API-visible playlists) and silently swapping views on AS failure
+        masked the real cause and confused users into thinking they needed
+        a developer token. Now the AS error surfaces directly with an
+        actionable message."""
         monkeypatch.setattr(server, "APPLESCRIPT_AVAILABLE", True)
+
+        # Tokens configured but should NOT be touched — fallthrough is
+        # blocked.
         self._setup_tokens(mock_config_dir, mock_developer_token, mock_user_token)
 
-        # Mock AppleScript to fail
         mock_asc = MagicMock()
-        mock_asc.get_playlists.return_value = (False, "AppleScript error")
+        mock_asc.get_playlists.return_value = (
+            False,
+            "execution error: Music got an error: Not authorized to send Apple events to Music. (-1743)",
+        )
+        # Wire classify_error / error constants through to the real module.
+        from applemusic_mcp import applescript as real_asc
+
+        mock_asc.classify_error = real_asc.classify_error
+        mock_asc.ERROR_UNKNOWN = real_asc.ERROR_UNKNOWN
+        mock_asc.ERROR_AUTOMATION_DENIED = real_asc.ERROR_AUTOMATION_DENIED
+        mock_asc.ERROR_MUSIC_NOT_RUNNING = real_asc.ERROR_MUSIC_NOT_RUNNING
+        mock_asc.ERROR_TIMEOUT = real_asc.ERROR_TIMEOUT
+        mock_asc.ERROR_SYNTAX = real_asc.ERROR_SYNTAX
         monkeypatch.setattr(server, "asc", mock_asc)
 
-        # Mock API fallback
-        responses.add(
-            responses.GET,
-            "https://api.music.apple.com/v1/me/library/playlists",
-            json={
-                "data": [
-                    {"id": "p.fallback", "attributes": {"name": "API Playlist", "canEdit": True}}
-                ]
-            },
-            status=200,
-        )
-
         result = server.playlist(action="list")
-        assert "API Playlist" in result
+        # Surfaces actionable Automation-denied message
+        assert "Automation permission denied" in result
+        # Does NOT leak the developer-token error
+        assert "Developer token not found" not in result
 
     def _setup_tokens(self, mock_config_dir, mock_developer_token, mock_user_token):
         """Helper to setup authentication tokens."""
@@ -3152,3 +3161,516 @@ class TestLibrarySearchSurfacesAppleScriptError:
         assert "No songs found" in result
         assert "AppleScript also failed" in result
         assert "Music app not running" in result
+
+
+class TestClassifyApplescriptError:
+    """Tests for applescript.classify_error pattern matching."""
+
+    def test_automation_denied_by_code(self):
+        from applemusic_mcp import applescript as asc
+
+        text = "execution error: Music got an error: Not authorized to send Apple events to Music. (-1743)"
+        assert asc.classify_error(text) == asc.ERROR_AUTOMATION_DENIED
+
+    def test_automation_denied_by_phrase(self):
+        from applemusic_mcp import applescript as asc
+
+        # Older / variant macOS wording
+        assert (
+            asc.classify_error("Application is not allowed assistive access")
+            == asc.ERROR_AUTOMATION_DENIED
+        )
+
+    def test_music_not_running_by_code_609(self):
+        from applemusic_mcp import applescript as asc
+
+        text = "execution error: Music got an error: Connection is invalid. (-609)"
+        assert asc.classify_error(text) == asc.ERROR_MUSIC_NOT_RUNNING
+
+    def test_music_not_running_by_code_10810(self):
+        from applemusic_mcp import applescript as asc
+
+        text = "Application isn't running. (-10810)"
+        assert asc.classify_error(text) == asc.ERROR_MUSIC_NOT_RUNNING
+
+    def test_music_not_running_by_phrase(self):
+        from applemusic_mcp import applescript as asc
+
+        assert asc.classify_error('Can\'t get application "Music"') == asc.ERROR_MUSIC_NOT_RUNNING
+
+    def test_timeout(self):
+        from applemusic_mcp import applescript as asc
+
+        # The exact message run_applescript emits on subprocess.TimeoutExpired
+        assert asc.classify_error("AppleScript timed out after 30 seconds") == asc.ERROR_TIMEOUT
+
+    def test_syntax_error(self):
+        from applemusic_mcp import applescript as asc
+
+        assert asc.classify_error("syntax error in line 3") == asc.ERROR_SYNTAX
+
+    def test_unknown_for_logic_errors(self):
+        """App-logic errors (track not found, playlist empty, etc.) classify as
+        unknown so callers can still cascade to the API for legitimate
+        fallbacks."""
+        from applemusic_mcp import applescript as asc
+
+        assert asc.classify_error("Track 'X' not found in library") == asc.ERROR_UNKNOWN
+        assert asc.classify_error("ERROR:Playlist is empty") == asc.ERROR_UNKNOWN
+
+    def test_unknown_for_empty(self):
+        from applemusic_mcp import applescript as asc
+
+        assert asc.classify_error("") == asc.ERROR_UNKNOWN
+
+
+class TestFormatApplescriptError:
+    """Tests for _format_applescript_error user-facing messages."""
+
+    def test_music_not_running_message(self):
+        msg = server._format_applescript_error("Connection is invalid (-609)", "create playlist")
+        assert "Music.app isn't running" in msg
+        assert "create playlist" in msg
+        assert "Open Music.app" in msg
+
+    def test_automation_denied_message(self):
+        msg = server._format_applescript_error(
+            "Not authorized to send Apple events to Music. (-1743)", "list playlists"
+        )
+        assert "Automation permission denied" in msg
+        assert "list playlists" in msg
+        assert "System Settings" in msg
+        assert "Music" in msg  # mentions enabling the Music toggle
+
+    def test_timeout_message(self):
+        msg = server._format_applescript_error(
+            "AppleScript timed out after 30 seconds", "rate track"
+        )
+        assert "timed out" in msg
+        assert "unresponsive" in msg
+
+    def test_unknown_includes_raw(self):
+        """Unknown errors fall through to raw display so users can report them."""
+        msg = server._format_applescript_error("some weird error", "some op")
+        assert "some weird error" in msg
+        assert "some op" in msg
+
+    def test_no_operation_context(self):
+        """Operation context is optional — no parens when not provided."""
+        msg = server._format_applescript_error("Connection is invalid (-609)")
+        assert "Music.app isn't running" in msg
+        # No empty-parens artifact like "isn't running ()."
+        assert "()" not in msg
+
+
+class TestPlaylistCreateNoTokenLeakOnAsFailure:
+    """Regression test for the Reddit-reported bug — _playlist_create must
+    NOT cascade to the API path on macOS when AS fails. Otherwise a
+    tokenless macOS user trying to create a playlist (the README-promised
+    happy path) sees 'Developer token not found' when their actual problem
+    is Music.app not running."""
+
+    def test_music_not_running_does_not_leak_token_error(self, monkeypatch):
+        from applemusic_mcp import applescript as real_asc
+
+        monkeypatch.setattr(server, "APPLESCRIPT_AVAILABLE", True)
+
+        mock_asc = MagicMock()
+        mock_asc.create_playlist.return_value = (
+            False,
+            "execution error: Music got an error: Connection is invalid. (-609)",
+        )
+        mock_asc.classify_error = real_asc.classify_error
+        mock_asc.ERROR_UNKNOWN = real_asc.ERROR_UNKNOWN
+        mock_asc.ERROR_AUTOMATION_DENIED = real_asc.ERROR_AUTOMATION_DENIED
+        mock_asc.ERROR_MUSIC_NOT_RUNNING = real_asc.ERROR_MUSIC_NOT_RUNNING
+        mock_asc.ERROR_TIMEOUT = real_asc.ERROR_TIMEOUT
+        mock_asc.ERROR_SYNTAX = real_asc.ERROR_SYNTAX
+        monkeypatch.setattr(server, "asc", mock_asc)
+
+        # Token deliberately not configured — if cascade leaks, this is
+        # the error the user would see.
+        def raise_no_token():
+            raise FileNotFoundError("Developer token not found. Run: applemusic-mcp generate-token")
+
+        monkeypatch.setattr(server, "get_headers", raise_no_token)
+
+        result = server._playlist_create("My New Playlist")
+
+        assert "Music.app isn't running" in result
+        assert "Developer token not found" not in result
+        assert "generate-token" not in result
+
+    def test_automation_denied_surfaces_actionable_message(self, monkeypatch):
+        from applemusic_mcp import applescript as real_asc
+
+        monkeypatch.setattr(server, "APPLESCRIPT_AVAILABLE", True)
+
+        mock_asc = MagicMock()
+        mock_asc.create_playlist.return_value = (
+            False,
+            "Not authorized to send Apple events to Music. (-1743)",
+        )
+        mock_asc.classify_error = real_asc.classify_error
+        mock_asc.ERROR_UNKNOWN = real_asc.ERROR_UNKNOWN
+        mock_asc.ERROR_AUTOMATION_DENIED = real_asc.ERROR_AUTOMATION_DENIED
+        mock_asc.ERROR_MUSIC_NOT_RUNNING = real_asc.ERROR_MUSIC_NOT_RUNNING
+        mock_asc.ERROR_TIMEOUT = real_asc.ERROR_TIMEOUT
+        mock_asc.ERROR_SYNTAX = real_asc.ERROR_SYNTAX
+        monkeypatch.setattr(server, "asc", mock_asc)
+
+        result = server._playlist_create("Whatever")
+        assert "Automation permission denied" in result
+        assert "System Settings" in result
+        assert "Developer token not found" not in result
+
+    def test_applescript_success_returns_normally(self, monkeypatch):
+        """Sanity: the happy path still works — AS create succeeds, function returns ID."""
+        from applemusic_mcp import applescript as real_asc
+
+        monkeypatch.setattr(server, "AppLESCRIPT_AVAILABLE", True) if False else None
+        monkeypatch.setattr(server, "APPLESCRIPT_AVAILABLE", True)
+
+        mock_asc = MagicMock()
+        mock_asc.create_playlist.return_value = (True, "p.123abc")
+        mock_asc.classify_error = real_asc.classify_error
+        monkeypatch.setattr(server, "asc", mock_asc)
+
+        result = server._playlist_create("My Playlist")
+        assert "Created playlist 'My Playlist'" in result
+        assert "p.123abc" in result
+
+
+class TestLibraryRateGatedFallthrough:
+    """_library_rate has a legitimate API fallback for catalog songs not in
+    the local library, so it uses gated fallthrough — environmental AS
+    errors surface; logic AS errors (track not found) cascade to API.
+
+    These tests use the public ``rating`` MCP tool to exercise the full
+    code path including _resolve_track, which simplifies setup."""
+
+    def test_environmental_error_blocks_cascade(self, monkeypatch):
+        from applemusic_mcp import applescript as real_asc
+
+        monkeypatch.setattr(server, "APPLESCRIPT_AVAILABLE", True)
+
+        mock_asc = MagicMock()
+        mock_asc.love_track.return_value = (False, "Not authorized (-1743)")
+        mock_asc.classify_error = real_asc.classify_error
+        mock_asc.ERROR_UNKNOWN = real_asc.ERROR_UNKNOWN
+        mock_asc.ERROR_AUTOMATION_DENIED = real_asc.ERROR_AUTOMATION_DENIED
+        mock_asc.ERROR_MUSIC_NOT_RUNNING = real_asc.ERROR_MUSIC_NOT_RUNNING
+        mock_asc.ERROR_TIMEOUT = real_asc.ERROR_TIMEOUT
+        mock_asc.ERROR_SYNTAX = real_asc.ERROR_SYNTAX
+        monkeypatch.setattr(server, "asc", mock_asc)
+
+        # If cascade happened, _search_catalog_songs would be called.
+        def fail_if_called(*args, **kwargs):
+            raise AssertionError("Cascade to API should have been blocked")
+
+        monkeypatch.setattr(server, "_search_catalog_songs", fail_if_called)
+
+        result = server._library_rate(
+            action="love", track="Some Track", artist="Some Artist", stars=0
+        )
+        assert "Automation permission denied" in result
+
+    def test_logic_error_allows_cascade(self, monkeypatch):
+        """When AS fails with a non-environmental error (e.g. track not
+        in library), cascade to API is allowed."""
+        from applemusic_mcp import applescript as real_asc
+
+        monkeypatch.setattr(server, "APPLESCRIPT_AVAILABLE", True)
+
+        mock_asc = MagicMock()
+        mock_asc.love_track.return_value = (False, "Track 'X' not found in library")
+        mock_asc.classify_error = real_asc.classify_error
+        mock_asc.ERROR_UNKNOWN = real_asc.ERROR_UNKNOWN
+        mock_asc.ERROR_AUTOMATION_DENIED = real_asc.ERROR_AUTOMATION_DENIED
+        mock_asc.ERROR_MUSIC_NOT_RUNNING = real_asc.ERROR_MUSIC_NOT_RUNNING
+        mock_asc.ERROR_TIMEOUT = real_asc.ERROR_TIMEOUT
+        mock_asc.ERROR_SYNTAX = real_asc.ERROR_SYNTAX
+        monkeypatch.setattr(server, "asc", mock_asc)
+
+        cascade_called = []
+
+        def mock_catalog_search(*args, **kwargs):
+            cascade_called.append(True)
+            return []  # No results — falls through cleanly
+
+        monkeypatch.setattr(server, "_search_catalog_songs", mock_catalog_search)
+
+        server._library_rate(action="love", track="Some Track", artist="Some Artist", stars=0)
+        assert cascade_called, "Cascade to API should have happened on logic-level AS error"
+
+
+class TestLibraryBrowseNoTokenLeakOnAsFailure:
+    """Regression test for the reviewer-flagged callsite. _library_browse
+    is `library(action="browse")` — same shape as _playlist_list.
+    AppleScript failure on macOS must NOT cascade to the API path and
+    leak the token error."""
+
+    def test_music_not_running_does_not_leak_token_error(self, monkeypatch):
+        from applemusic_mcp import applescript as real_asc
+
+        monkeypatch.setattr(server, "APPLESCRIPT_AVAILABLE", True)
+
+        mock_asc = MagicMock()
+        mock_asc.get_library_songs.return_value = (
+            False,
+            "execution error: Music got an error: Connection is invalid. (-609)",
+        )
+        mock_asc.classify_error = real_asc.classify_error
+        mock_asc.ERROR_UNKNOWN = real_asc.ERROR_UNKNOWN
+        mock_asc.ERROR_AUTOMATION_DENIED = real_asc.ERROR_AUTOMATION_DENIED
+        mock_asc.ERROR_MUSIC_NOT_RUNNING = real_asc.ERROR_MUSIC_NOT_RUNNING
+        mock_asc.ERROR_TIMEOUT = real_asc.ERROR_TIMEOUT
+        mock_asc.ERROR_SYNTAX = real_asc.ERROR_SYNTAX
+        monkeypatch.setattr(server, "asc", mock_asc)
+
+        # Token NOT configured. If cascade leaks, this is what the user sees.
+        def raise_no_token():
+            raise FileNotFoundError("Developer token not found. Run: applemusic-mcp generate-token")
+
+        monkeypatch.setattr(server, "get_headers", raise_no_token)
+
+        result = server._library_browse(item_type="songs")
+        assert "Music.app isn't running" in result
+        assert "Developer token not found" not in result
+
+    def test_automation_denied_surfaces_actionable(self, monkeypatch):
+        from applemusic_mcp import applescript as real_asc
+
+        monkeypatch.setattr(server, "APPLESCRIPT_AVAILABLE", True)
+
+        mock_asc = MagicMock()
+        mock_asc.get_library_songs.return_value = (
+            False,
+            "Not authorized to send Apple events to Music. (-1743)",
+        )
+        mock_asc.classify_error = real_asc.classify_error
+        mock_asc.ERROR_UNKNOWN = real_asc.ERROR_UNKNOWN
+        mock_asc.ERROR_AUTOMATION_DENIED = real_asc.ERROR_AUTOMATION_DENIED
+        mock_asc.ERROR_MUSIC_NOT_RUNNING = real_asc.ERROR_MUSIC_NOT_RUNNING
+        mock_asc.ERROR_TIMEOUT = real_asc.ERROR_TIMEOUT
+        mock_asc.ERROR_SYNTAX = real_asc.ERROR_SYNTAX
+        monkeypatch.setattr(server, "asc", mock_asc)
+
+        result = server._library_browse(item_type="songs")
+        assert "Automation permission denied" in result
+        assert "System Settings" in result
+        assert "Developer token not found" not in result
+
+
+class TestNotAllowedOvermatchFix:
+    """Reviewer flagged that bare 'not allowed' was promoting Music.app
+    logic-level errors (e.g. 'editing not allowed for smart playlist')
+    to ERROR_AUTOMATION_DENIED, which would block legitimate API
+    cascade in _library_rate. Verify the tightened phrase matching."""
+
+    def test_smart_playlist_not_allowed_classifies_as_unknown(self):
+        from applemusic_mcp import applescript as asc
+
+        # This is a Music.app logic error, NOT an Automation denial.
+        # It should classify as UNKNOWN so callers cascade as appropriate.
+        assert asc.classify_error("operation not allowed on smart playlists") == asc.ERROR_UNKNOWN
+        assert asc.classify_error("editing not allowed for this playlist") == asc.ERROR_UNKNOWN
+
+    def test_full_assistive_phrase_still_classifies_as_automation_denied(self):
+        from applemusic_mcp import applescript as asc
+
+        # The actual -1743 phrase variant should still match.
+        assert (
+            asc.classify_error("Application is not allowed assistive access")
+            == asc.ERROR_AUTOMATION_DENIED
+        )
+        assert (
+            asc.classify_error("requires assistive access to control Music")
+            == asc.ERROR_AUTOMATION_DENIED
+        )
+
+
+class TestPlaylistAddIdsRequireToken:
+    """When a tokenless macOS user passes a track ID (not name) to
+    playlist(action="add"), the AS-mode code path needs the API to
+    resolve the ID's metadata before handing off to AppleScript. Prior
+    to the fix, _playlist_add called get_headers() unconditionally inside
+    the AS block — leaking 'Developer token not found' on the same
+    user-facing surface as the bug this PR exists to close."""
+
+    def test_id_without_token_says_what_to_do_not_dev_token(self, monkeypatch):
+        from applemusic_mcp import applescript as real_asc
+
+        monkeypatch.setattr(server, "APPLESCRIPT_AVAILABLE", True)
+
+        # Set up: AS resolves the playlist by name, no tokens configured
+        mock_asc = MagicMock()
+        mock_asc.get_playlists.return_value = (
+            True,
+            [{"name": "Workout", "id": "p.work", "smart": False, "track_count": 5}],
+        )
+        # track_exists_in_playlist for dedup check (won't matter — we
+        # should bail before reaching it)
+        mock_asc.track_exists_in_playlist.return_value = (True, False)
+        mock_asc.classify_error = real_asc.classify_error
+        monkeypatch.setattr(server, "asc", mock_asc)
+
+        # No token configured — _has_developer_token returns False,
+        # which the new ID-guard catches and surfaces a specific message.
+        monkeypatch.setattr(server, "_has_developer_token", lambda: False)
+
+        # If the guard didn't fire, this would raise the misleading
+        # FileNotFoundError. Patch get_headers to fail loudly so the
+        # test catches a regression.
+        def fail_loud():
+            raise AssertionError(
+                "get_headers() should not have been called — the ID guard "
+                "must intercept before this point"
+            )
+
+        monkeypatch.setattr(server, "get_headers", fail_loud)
+
+        result = server._playlist_add(
+            playlist="Workout",
+            track="1440783617",  # catalog ID format
+            album="",
+            artist="",
+            allow_duplicates=False,
+            verify=False,
+            auto_search=False,
+        )
+
+        assert "Track IDs require an API token" in result
+        assert "pass the track by name instead" in result
+        # The legacy misleading error must NOT appear
+        assert "Developer token not found" not in result.split("Track IDs")[0]
+
+    def test_album_without_token_does_not_leak_dev_token_error(self, monkeypatch):
+        """Adding by album also requires the catalog API (album's tracklist is
+        fetched there). On tokenless macOS, _playlist_add must surface a
+        specific 'add by album requires API' message — not 'Developer token
+        not found'. Reviewer-flagged sibling of the ID guard."""
+        monkeypatch.setattr(server, "APPLESCRIPT_AVAILABLE", True)
+
+        mock_asc = MagicMock()
+        mock_asc.get_playlists.return_value = (
+            True,
+            [{"name": "Workout", "id": "p.work", "smart": False, "track_count": 0}],
+        )
+        monkeypatch.setattr(server, "asc", mock_asc)
+        monkeypatch.setattr(server, "_has_developer_token", lambda: False)
+
+        # If we reach get_headers, the guard didn't fire.
+        def fail_loud():
+            raise AssertionError(
+                "get_headers() should not have been called — the album guard "
+                "must intercept before this point"
+            )
+
+        monkeypatch.setattr(server, "get_headers", fail_loud)
+
+        result = server._playlist_add(
+            playlist="Workout",
+            track="",
+            album="Dark Side of the Moon",
+            artist="",
+            allow_duplicates=False,
+            verify=False,
+            auto_search=False,
+        )
+
+        assert "Adding by album requires an API token" in result
+        assert "Developer token not found" not in result
+
+
+class TestPlaylistCopyNoTokenLeakOnAsFailure:
+    """Regression test for _playlist_copy AS-mode (by-name path). The fix
+    in cdc3e40 deferred get_headers() from the function preamble to inside
+    the API-mode (by-ID) branch only — without a regression test, a
+    future refactor could re-introduce the upfront get_headers() call
+    silently, leaking 'Developer token not found' to tokenless macOS
+    users copying playlists by name.
+
+    Reviewer-flagged gap (TestPlaylistCopyNoTokenLeakOnAsFailure was
+    missing; all other fixed callsites had regression tests)."""
+
+    @staticmethod
+    def _wire_error_constants(mock_asc, real_asc):
+        """Helper: replicate the error category attributes on a MagicMock
+        so server-side `asc.ERROR_*` lookups resolve to the real strings,
+        not auto-generated MagicMock instances. Without this, the
+        category-equality checks inside `_format_applescript_error` and
+        the gated-cascade in `_library_rate` always evaluate False."""
+        mock_asc.classify_error = real_asc.classify_error
+        mock_asc.ERROR_UNKNOWN = real_asc.ERROR_UNKNOWN
+        mock_asc.ERROR_AUTOMATION_DENIED = real_asc.ERROR_AUTOMATION_DENIED
+        mock_asc.ERROR_MUSIC_NOT_RUNNING = real_asc.ERROR_MUSIC_NOT_RUNNING
+        mock_asc.ERROR_TIMEOUT = real_asc.ERROR_TIMEOUT
+        mock_asc.ERROR_SYNTAX = real_asc.ERROR_SYNTAX
+
+    def test_as_mode_by_name_does_not_call_get_headers(self, monkeypatch):
+        from applemusic_mcp import applescript as real_asc
+
+        monkeypatch.setattr(server, "APPLESCRIPT_AVAILABLE", True)
+
+        mock_asc = MagicMock()
+        mock_asc.get_playlists.return_value = (
+            True,
+            [{"name": "Source Playlist", "id": "src.id", "smart": False, "track_count": 3}],
+        )
+        # AS read of source tracks succeeds with one track
+        mock_asc.get_playlist_tracks.return_value = (
+            True,
+            [{"name": "Track 1", "artist": "Artist 1", "album": "Album 1", "id": "t.1"}],
+        )
+        # AS create of destination succeeds
+        mock_asc.create_playlist.return_value = (True, "p.dest")
+        # AS add per track succeeds
+        mock_asc.add_track_to_playlist.return_value = (True, "Added")
+        self._wire_error_constants(mock_asc, real_asc)
+        monkeypatch.setattr(server, "asc", mock_asc)
+
+        # If get_headers is reached, the regression has happened.
+        def fail_loud():
+            raise AssertionError(
+                "get_headers() should NOT be called on the AS-by-name copy path — "
+                "v0.9.4 deferred it to API-mode (by-ID) only"
+            )
+
+        monkeypatch.setattr(server, "get_headers", fail_loud)
+
+        # Tokenless invocation by name (no token configured, AS-mode)
+        result = server._playlist_copy(source="Source Playlist", new_name="Destination")
+
+        assert "Created" in result and "Destination" in result
+        assert "Developer token not found" not in result
+
+    def test_as_mode_failure_surfaces_formatted_error(self, monkeypatch):
+        """When AS fails inside copy on macOS, surface the formatted error
+        (Music.app isn't running, Automation denied, etc.) — not a raw
+        stderr or a token error."""
+        from applemusic_mcp import applescript as real_asc
+
+        monkeypatch.setattr(server, "APPLESCRIPT_AVAILABLE", True)
+
+        mock_asc = MagicMock()
+        mock_asc.get_playlists.return_value = (
+            True,
+            [{"name": "Source Playlist", "id": "src.id", "smart": False, "track_count": 3}],
+        )
+        # AS read of source tracks fails environmentally
+        mock_asc.get_playlist_tracks.return_value = (
+            False,
+            "execution error: Music got an error: Connection is invalid. (-609)",
+        )
+        self._wire_error_constants(mock_asc, real_asc)
+        monkeypatch.setattr(server, "asc", mock_asc)
+
+        def fail_loud():
+            raise AssertionError("get_headers() reached — should have early-returned")
+
+        monkeypatch.setattr(server, "get_headers", fail_loud)
+
+        result = server._playlist_copy(source="Source Playlist", new_name="Destination")
+        assert "Music.app isn't running" in result
+        assert "Developer token not found" not in result

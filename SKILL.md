@@ -1,6 +1,6 @@
 ---
 name: apple-music
-version: 0.9.3
+version: 0.9.4
 description: Apple Music integration via AppleScript, UI automation, or MusicKit API
 ---
 
@@ -278,10 +278,27 @@ safe_name = escape_applescript(user_input)
 script = f'tell application "Music" to play user playlist "{safe_name}"'
 ```
 
+## Common Failures
+
+osascript stderr messages map to a small set of environmental states. When AppleScript fails, classify before deciding what to tell the user — surfacing the raw stderr is misleading; cascading silently to an API path leaks unrelated errors (e.g. "Developer token not found" when the real problem was Music.app being closed).
+
+| Stderr signal | What it means | What to tell the user |
+|---|---|---|
+| `(-609)`, `Connection is invalid`, `(-10810)`, `isn't running`, `Can't get application "Music"` | Music.app isn't running or has crashed mid-session | "Music.app isn't running. Open it and retry." |
+| `(-1743)`, `Not authorized`, `not allowed assistive access`, `assistive access` | The host process (Claude Desktop, Python CLI, Terminal) hasn't been granted Automation permission for Music | "Open System Settings → Privacy & Security → Automation, find the app running this code, enable the 'Music' toggle." |
+| `AppleScript timed out after 30 seconds` | The 30s subprocess timeout fired — Music.app stuck or still launching | "Music.app may be unresponsive — quit and reopen it." |
+| `syntax error`, `expected … but found …` | The script itself is malformed (developer bug) | Report the raw error — this is on us, not the user. |
+| Anything else | Logic-level error (track not found, playlist empty, etc.) | Surface the raw stderr; safe to cascade to API if a legitimate fallback exists. |
+
+**Don't bare-match `not allowed`** — Music.app emits "operation not allowed on smart playlists" and similar logic-level errors that should NOT classify as Automation-denial. Match the full `not allowed assistive` or `assistive access` phrase.
+
+**Don't gate on `is_available()` alone** — that only checks `darwin + osascript exists`. It can't tell you whether Music.app is running or whether Automation permissions have been granted. The error-categorization above is your only signal for those states.
+
 ## Limitations
 
 - **macOS only** — no Windows/Linux
 - **UI features require display** — UI automation won't work headless or with Music.app minimized
+- **Music.app must be running** — `is_available()` returns True as soon as `osascript` is on PATH, but every `tell application "Music"` block needs Music.app actually running. First call after a fresh boot may also trigger an Automation-permission prompt the user has to approve once.
 
 ---
 

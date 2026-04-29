@@ -106,6 +106,83 @@ def run_applescript(script: str) -> tuple[bool, str]:
         return False, str(e)
 
 
+# AppleScript error categories. Used to map osascript stderr text to a
+# stable category so callers can produce actionable user-facing messages
+# without each callsite re-matching the same regexes.
+ERROR_MUSIC_NOT_RUNNING = "music_not_running"
+ERROR_AUTOMATION_DENIED = "automation_denied"
+ERROR_TIMEOUT = "timeout"
+ERROR_SYNTAX = "syntax"
+ERROR_UNKNOWN = "unknown"
+
+
+def classify_error(text: str) -> str:
+    """Categorize an AppleScript error string.
+
+    The osascript stderr surface is messy: error wording shifts across macOS
+    versions, but the numeric error codes (-609, -1728, -1743, etc.) and a
+    handful of stable phrases ("Not authorized", "isn't running") are
+    reliable. Match those first; fall through to ``unknown`` so callers can
+    still surface the raw text.
+
+    Categories:
+      - music_not_running: Music.app isn't running or has crashed (-609,
+        -10810, "isn't running", "Connection is invalid")
+      - automation_denied: parent process lacks Automation permission for
+        Music.app (-1743, "Not authorized", "not allowed assistive access")
+      - timeout: our 30s subprocess timeout fired
+      - syntax: AppleScript itself rejected the script (developer bug)
+      - unknown: anything else — caller should surface raw error
+    """
+    if not text:
+        return ERROR_UNKNOWN
+    t = text.lower()
+
+    # Timeout is our own message — match exactly.
+    if "applescript timed out" in t:
+        return ERROR_TIMEOUT
+
+    # Automation permissions denied. -1743 is the canonical code; phrasings
+    # vary across macOS versions but consistently mention authorization.
+    # NOTE: bare "not allowed" is too broad — Music.app emits "operation
+    # not allowed on smart playlists" and similar logic-level errors.
+    # Match the full Automation-denial phrases instead.
+    if (
+        "-1743" in t
+        or "not authorized" in t
+        or "not allowed assistive" in t
+        or "assistive access" in t
+        or "not authorised" in t  # British English variant in some locales
+    ):
+        return ERROR_AUTOMATION_DENIED
+
+    # Music.app not running / connection invalid. -609 is "Connection is
+    # invalid"; -10810 is "Application isn't running"; phrasing variants
+    # cover both startup-time and mid-session crashes.
+    if (
+        "-609" in t
+        or "-10810" in t
+        or "isn't running" in t
+        or "is not running" in t
+        or "connection is invalid" in t
+        or "can't get application" in t
+    ):
+        return ERROR_MUSIC_NOT_RUNNING
+
+    # AppleScript-level syntax errors (means we have a bug, not the user).
+    # Parens explicit so future readers don't have to remember Python's
+    # `and` > `or` precedence rule.
+    if ("syntax error" in t) or ("expected" in t and "but found" in t):
+        return ERROR_SYNTAX
+
+    # Note: -1728 ("can't get") deliberately classifies as ERROR_UNKNOWN.
+    # It's a logic-level error (track/playlist doesn't exist) rather than
+    # an environmental one, so callers with legitimate API fallback paths
+    # should still cascade. v0.9.3 handled the broken-track iteration
+    # case at the AppleScript level, not via this classifier.
+    return ERROR_UNKNOWN
+
+
 # =============================================================================
 # Playback Control
 # =============================================================================
