@@ -28,7 +28,7 @@ The v0.9.3 sweep missed several callsites in the same bug class — tokenless ma
 
 ### Internal
 
-- 28 new unit tests across 8 new test classes covering `classify_error` categorization (codes + phrases + unknown fallback), `_format_applescript_error` per-category messaging, and regression tests confirming none of the fixed callsites (`_playlist_create`, `_playlist_list`, `_library_browse`, `_library_rate` love/dislike, `_playlist_add` track-ID path, `_playlist_add` album path, `_playlist_copy`) leak the developer-token error on AS environmental failures, plus a test for the `"not allowed"` overmatch fix in the classifier. Suite: 277 → 278 passed (was 252 baseline before v0.9.3).
+- 30 new unit tests across 8 new test classes covering `classify_error` categorization (codes + phrases + unknown fallback), `_format_applescript_error` per-category messaging, and regression tests confirming none of the fixed callsites (`_playlist_create`, `_playlist_list`, `_library_browse`, `_library_rate` love/dislike, `_playlist_add` track-ID path, `_playlist_add` album path, `_playlist_copy`) leak the developer-token error on AS environmental failures, plus a test for the `"not allowed"` overmatch fix in the classifier. Suite: 279 passed (was 252 baseline before v0.9.3).
 - Existing test `test_fallback_to_api_when_applescript_fails` was capturing the prior bad behavior — rewritten to assert the new contract: AS failure on macOS surfaces actionable error, not silent API cascade with misleading token error.
 - SKILL.md updated with a "Common Failures" categorization table aligned with `classify_error` so a Claude session reading the skill teaches its user the same env-vs-logic error categorization the package now produces.
 
