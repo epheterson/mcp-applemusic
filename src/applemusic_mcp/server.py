@@ -3887,15 +3887,17 @@ def _library_add(
     # composite flow). Albums via UI aren't supported here yet; tell the
     # user clearly rather than leaking the API token error.
     use_ui_path = not _has_developer_token() and APPLESCRIPT_AVAILABLE
-    if use_ui_path and album:
+    if use_ui_path and album and not track:
+        # Pure album-add request without a token; can't fulfill via UI.
+        # (When BOTH album and track are present, album acts as
+        # disambiguation context and the track add via UI proceeds —
+        # don't early-return in that case.)
         return (
             "Error: Adding albums to library via UI automation isn't "
             "supported yet — only individual tracks. To add this album "
             "without a token, add each track by name via "
-            "library(action='add', track='Track Name'), or use "
-            "playlist(action='add', auto_search=True) which can resolve "
-            "albums as a search query. To configure an API token: "
-            "applemusic-mcp generate-token."
+            "library(action='add', track='Track Name'). To configure "
+            "an API token: applemusic-mcp generate-token."
         )
 
     # Helper to add a song by catalog search
@@ -3931,6 +3933,18 @@ def _library_add(
 
     # Helper to add an album by catalog search
     def _add_album_by_search(name: str, search_artist: str) -> None:
+        # When use_ui_path is True (tokenless macOS) AND we got here, the
+        # caller passed BOTH track and album — the early-return for pure
+        # album-add at the top of _library_add only fires when there's no
+        # track. UI-add for albums isn't supported, but we can't leak the
+        # token error either; record a clean step-error and move on so
+        # the track loop's UI-add successes still surface.
+        if use_ui_path:
+            errors.append(
+                f"Album '{name}': UI library-add doesn't support albums "
+                "yet; tracks were added individually if provided."
+            )
+            return
         album, error, fuzzy_result = _find_matching_catalog_album(name, search_artist)
         if error:
             errors.append(f"Album '{name}': {error}")

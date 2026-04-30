@@ -3914,3 +3914,37 @@ class TestLibraryAddUiOnTokenlessMacos:
         result = server._library_add(track="1440783617")
         assert "catalog IDs require an API token" in result
         assert "pass it by name instead" in result
+
+    def test_track_with_album_disambiguation_processes_track(self, monkeypatch):
+        """Reviewer-flagged: when both track AND album are passed on
+        tokenless macOS, the album guard must NOT swallow the entire
+        request. Track should still go through the UI path; album
+        contributes a step-error but doesn't block the track add."""
+        from applemusic_mcp import applescript as real_asc
+
+        monkeypatch.setattr(server, "APPLESCRIPT_AVAILABLE", True)
+
+        mock_asc = MagicMock()
+        mock_asc.ui_search_catalog.return_value = (
+            True,
+            [{"name": "Silvera", "artist": "Gojira", "type": "Song", "index": 1}],
+        )
+        mock_asc.ui_add_to_library.return_value = (True, "Added")
+        mock_asc.ui_clear_search.return_value = None
+        mock_asc.classify_error = real_asc.classify_error
+        monkeypatch.setattr(server, "asc", mock_asc)
+        monkeypatch.setattr(server, "_has_developer_token", lambda: False)
+
+        def fail_loud():
+            raise AssertionError("get_headers() reached on tokenless macOS UI path")
+
+        monkeypatch.setattr(server, "get_headers", fail_loud)
+
+        result = server._library_add(track="Silvera", album="Magma", artist="Gojira")
+        # Track went through UI path successfully
+        assert mock_asc.ui_search_catalog.called
+        assert mock_asc.ui_add_to_library.called
+        assert "Silvera" in result
+        # Album surfaces as a step-error rather than silently swallowing
+        # the whole request or leaking the token error
+        assert "Developer token not found" not in result
