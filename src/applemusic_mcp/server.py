@@ -3847,16 +3847,21 @@ def _library_add_track_via_ui(query: str, search_artist: str) -> tuple[bool, str
         asc.ui_clear_search()
         return False, f"No catalog results for '{full_query}'"
 
-    # Pick the best Song match — same shape as ui_add_to_playlist's filter
+    # Pick the best Song match — same shape as ui_add_to_playlist's filter.
+    # Prefer a Song whose artist matches; fall back to the first Song seen
+    # (not results[0], which could be an Album/Artist entry).
     target = None
+    first_song = None
     for r in results:
         if r.get("type") == "Song":
+            if first_song is None:
+                first_song = r
             if search_artist and search_artist.lower() not in r.get("artist", "").lower():
                 continue
             target = r
             break
     if target is None:
-        target = results[0]  # fall back to first result if no Song match
+        target = first_song or results[0]
 
     target_name = target["name"]
     target_artist = target.get("artist", search_artist)

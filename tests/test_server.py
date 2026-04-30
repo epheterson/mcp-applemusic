@@ -3870,6 +3870,7 @@ class TestLibraryAddUiOnTokenlessMacos:
 
         result = server._library_add(track="ZZZNonexistentTrack")
         assert "No catalog results" in result
+        assert "Developer token not found" not in result
 
     def test_album_input_on_tokenless_macos_explains_unsupported(self, monkeypatch):
         """Albums via UI library-add aren't implemented yet — make sure
