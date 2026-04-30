@@ -1,6 +1,6 @@
 ---
 name: apple-music
-version: 0.9.4
+version: 0.9.5
 description: Apple Music integration via AppleScript, UI automation, or MusicKit API
 ---
 
@@ -363,6 +363,20 @@ end tell
 ## Fragility
 
 UI paths break when Apple updates Music.app's layout. Centralize paths as constants and test after macOS updates. Use Accessibility Inspector.app to explore the current hierarchy.
+
+## Tool routing (when to use which top-level action)
+
+When a user asks for something, the right MCP tool depends on whether they're searching their library or the catalog. Easy to confuse — gating wrong here leads users into "Developer token not found" rabbit holes when the operation could have worked tokenlessly.
+
+| Goal | Use | Notes |
+|---|---|---|
+| Find a song the user already has | `library(action='search', query='...')` | Local library only. AppleScript on macOS, API otherwise. |
+| Find a song in Apple Music's full catalog | `catalog(action='search', query='...')` | Tries API first, falls back to Music.app UI search on tokenless macOS. |
+| Add a catalog song to the user's library | `library(action='add', track='...')` | API path with token, UI automation path on tokenless macOS. |
+| Add a song (in library OR catalog) to a playlist | `playlist(action='add', track='...', auto_search=True)` | `auto_search=True` is required to reach the catalog when the song isn't already in the library. Default is False to avoid unwanted library writes — set it to True for "fill this playlist" workflows. |
+| Browse charts / recommendations | `discover` | API only. No UI fallback for this one. |
+
+If `library(action='search')` returns "No songs found in library", it is **not** a hint to set up an API token — it's a hint to try `catalog(action='search')` or `playlist(action='add', auto_search=True)` instead. The tokenless macOS path covers all of these.
 
 ## Compound flows (no API)
 

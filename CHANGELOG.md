@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.5] - 2026-04-29
+
+### Fixed
+
+- **`library(action="search")` no longer leaks "Developer token not found" on tokenless macOS when the search returns zero hits** — same bug class as v0.9.3 / v0.9.4, missed by both sweeps. The early-return guard in `_library_search` was `if success and results:`, which fails on a clean empty list and falls through to the API path. On a tokenless macOS host, that path raises `FileNotFoundError("Developer token not found...")` for what was actually just "song's not in your library." A Claude session reading the leaked error then (correctly) tells the user to run `applemusic-mcp generate-token` and `applemusic-mcp authorize` — sending tokenless users back down the developer-account rabbit hole the README explicitly says they don't need. Reported on Reddit by horrorshow75 immediately after testing v0.9.4. Fix: empty AS results now return a hint pointing to `catalog(action='search')` instead of cascading to the API. When a token IS configured the cascade still fires (the API may see cloud-synced tracks AS hasn't seen yet).
+
+### Added
+
+- **`library(action="add")` now works tokenlessly on macOS via UI automation** — the actual root cause of horrorshow75's report. His Claude session likely tried `library(action="add", track="<song>")` to add catalog tracks to library *before* adding to playlist, and the API-only `_library_add` path leaked the developer-token error. The README has always promised tokenless macOS works for "most features" — `library(action="add")` was a gap. New helper `_library_add_track_via_ui` orchestrates `asc.ui_search_catalog` + `asc.ui_add_to_library` (the same primitives `ui_add_to_playlist` already uses). For tracks by name on a tokenless macOS host, the function now actually completes the add instead of returning a misleading auth error.
+- **Tool-routing hints when error suggests user is in the wrong place** — `library(action="search")` empty-result message now points at `catalog(action='search')`. `playlist(action="add")` "Track not found" without `auto_search` now suggests setting `auto_search=True`. Tool docstrings updated so a Claude session reading the registry alone (before any error) knows when to use which action.
+- **SKILL.md "Tool routing" section** — table mapping user goals to the right MCP action, with explicit note that "No songs found in library" is NOT a hint to set up an API token.
+
+### Internal
+
+- 8 new regression tests across 2 new test classes (`TestLibrarySearchEmptyDoesNotLeakToken`, `TestLibraryAddUiOnTokenlessMacos`) covering the empty-AS cascade case, the UI library-add happy path, UI-search-empty and album-input fallbacks, and the catalog-ID-without-token guard.
+- Pre-fix sweep covered every `if APPLESCRIPT_AVAILABLE:` block in server.py for similar empty-cascade patterns (an Explore subagent did the first pass; a feature-dev:code-reviewer agent independently re-swept to verify). Only `_library_search` was vulnerable — all other sites either return "no results" directly on empty AS or have no API fallback at all.
+
 ## [0.9.4] - 2026-04-29
 
 ### Fixed

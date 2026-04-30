@@ -129,7 +129,7 @@ Add to config.json:
 }
 ```
 
-- `auto_search`: Auto-find catalog tracks not in library, for `add_to_playlist` (default: false). On macOS works without an API token by falling back to UI automation (requires display + Accessibility permissions).
+- `auto_search`: Enables catalog search + library-add fallback for `playlist(action="add")` when a track isn't already in the user's library (default: false to avoid unintended library writes — set to true for "fill this playlist" workflows). On macOS works without an API token by falling back to Music.app UI automation (requires display + Accessibility permissions for the host process).
 - `clean_only`: Filter explicit content, for `search_catalog`, `search_library`, `browse_library` (default: false)
 - `fetch_explicit`: Fetch explicit status (cached), for `get_playlist_tracks`, `search_library`, `browse_library` (default: false)
 - `reveal_on_library_miss`: Open catalog tracks in Music app, for `play` (default: false)
