@@ -14,7 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Internal
 
 - 3 new regression tests for the empty-cascade case (tokenless+empty-AS short-circuits, tokenful+empty-AS still cascades for cloud check, "No <types> found" message respects the `types` param).
-- Pre-fix sweep covered all 10 `if APPLESCRIPT_AVAILABLE:` blocks in server.py for similar empty-cascade patterns. Only `_library_search` was vulnerable — all 9 other sites either return "no results" directly on empty AS or have no API fallback.
+- Pre-fix sweep covered every `if APPLESCRIPT_AVAILABLE:` block in server.py for similar empty-cascade patterns (an Explore subagent did the first pass; a feature-dev:code-reviewer agent independently re-swept to verify). Only `_library_search` was vulnerable — all other sites either return "no results" directly on empty AS or have no API fallback at all.
 
 ## [0.9.4] - 2026-04-29
 
