@@ -3915,6 +3915,40 @@ class TestLibraryAddUiOnTokenlessMacos:
         assert "catalog IDs require an API token" in result
         assert "pass it by name instead" in result
 
+    def test_album_catalog_id_with_track_does_not_leak(self, monkeypatch):
+        """Reviewer-flagged sibling: with track + album-as-catalog-ID on
+        tokenless macOS, the album catalog-ID path also needs the
+        use_ui_path guard. Without it, _add_to_library_api would leak
+        the token error in the album step-output."""
+        from applemusic_mcp import applescript as real_asc
+
+        monkeypatch.setattr(server, "APPLESCRIPT_AVAILABLE", True)
+
+        mock_asc = MagicMock()
+        mock_asc.ui_search_catalog.return_value = (
+            True,
+            [{"name": "Silvera", "artist": "Gojira", "type": "Song", "index": 1}],
+        )
+        mock_asc.ui_add_to_library.return_value = (True, "Added")
+        mock_asc.ui_clear_search.return_value = None
+        mock_asc.classify_error = real_asc.classify_error
+        monkeypatch.setattr(server, "asc", mock_asc)
+        monkeypatch.setattr(server, "_has_developer_token", lambda: False)
+
+        def fail_loud():
+            raise AssertionError(
+                "get_headers() reached — album catalog-ID path missing the use_ui_path guard"
+            )
+
+        monkeypatch.setattr(server, "get_headers", fail_loud)
+
+        # 1440783617 looks like a numeric album catalog ID
+        result = server._library_add(track="Silvera", album="1440783617")
+        assert "Album ID 1440783617" in result
+        assert "catalog IDs require an API token" in result
+        assert "pass it by name instead" in result
+        assert "Developer token not found" not in result
+
     def test_track_with_album_disambiguation_processes_track(self, monkeypatch):
         """Reviewer-flagged: when both track AND album are passed on
         tokenless macOS, the album guard must NOT swallow the entire

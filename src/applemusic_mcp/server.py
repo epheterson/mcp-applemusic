@@ -4003,7 +4003,18 @@ def _library_add(
                 continue
 
             if r.input_type == InputType.CATALOG_ID:
-                # Direct catalog ID
+                # Direct catalog ID — same as track catalog-ID path: UI
+                # automation can't resolve opaque IDs, so on tokenless
+                # macOS surface a clear "use name instead" message
+                # rather than letting _add_to_library_api leak the
+                # token error.
+                if use_ui_path:
+                    errors.append(
+                        f"Album ID {r.value}: catalog IDs require an API "
+                        "token. To add this album without a token, pass "
+                        "it by name instead."
+                    )
+                    continue
                 success, msg = _add_to_library_api([r.value], "albums")
                 if success:
                     added.append(f"Album ID {r.value}")
