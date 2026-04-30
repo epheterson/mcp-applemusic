@@ -3786,3 +3786,131 @@ class TestLibrarySearchEmptyDoesNotLeakToken:
 
         result = server._library_search("nonexistent", types="albums")
         assert "No albums found" in result
+
+    def test_tokenless_macos_empty_hint_routes_to_catalog(self, monkeypatch):
+        """The empty-result message must hint at catalog(action='search')
+        — without this, Claude sessions reading 'No songs found in library'
+        don't know to try catalog and the user gets stuck."""
+        from applemusic_mcp import applescript as real_asc
+
+        monkeypatch.setattr(server, "APPLESCRIPT_AVAILABLE", True)
+        mock_asc = MagicMock()
+        mock_asc.search_library.return_value = (True, [])
+        mock_asc.classify_error = real_asc.classify_error
+        monkeypatch.setattr(server, "asc", mock_asc)
+        monkeypatch.setattr(server, "_has_developer_token", lambda: False)
+
+        result = server._library_search("anything")
+        assert "catalog(action='search'" in result
+
+
+class TestLibraryAddUiOnTokenlessMacos:
+    """Regression test for the bug horrorshow75 hit — Claude tried
+    library(action='add') for catalog tracks before adding to playlist,
+    saw 'Developer token not found', and concluded the whole MCP needed
+    auth. v0.9.5 routes tokenless macOS library-add through UI automation
+    using asc.ui_search_catalog + asc.ui_add_to_library — the same
+    primitives ui_add_to_playlist already uses. Makes the README's
+    'tokenless macOS works' promise true for direct library-add."""
+
+    def test_ui_path_used_when_no_token_on_macos(self, monkeypatch):
+        from applemusic_mcp import applescript as real_asc
+
+        monkeypatch.setattr(server, "APPLESCRIPT_AVAILABLE", True)
+
+        mock_asc = MagicMock()
+        mock_asc.ui_search_catalog.return_value = (
+            True,
+            [{"name": "Silvera", "artist": "Gojira", "type": "Song", "index": 1}],
+        )
+        mock_asc.ui_add_to_library.return_value = (
+            True,
+            "Added 'Silvera' to library",
+        )
+        mock_asc.ui_clear_search.return_value = None
+        mock_asc.classify_error = real_asc.classify_error
+        monkeypatch.setattr(server, "asc", mock_asc)
+
+        # No token configured. If the UI path doesn't fire, _add_to_library_api
+        # would call get_headers() and raise.
+        monkeypatch.setattr(server, "_has_developer_token", lambda: False)
+
+        def fail_loud():
+            raise AssertionError(
+                "get_headers() should not be called — UI path must handle "
+                "tokenless macOS library-add"
+            )
+
+        monkeypatch.setattr(server, "get_headers", fail_loud)
+
+        result = server._library_add(track="Silvera", artist="Gojira")
+        # Confirm UI path was actually exercised
+        assert mock_asc.ui_search_catalog.called
+        assert mock_asc.ui_add_to_library.called
+        # Result should report success in user-friendly form
+        assert "Silvera" in result
+        assert "Gojira" in result
+        # Must NOT leak the legacy error
+        assert "Developer token not found" not in result
+
+    def test_ui_path_failure_surfaces_helpful_error(self, monkeypatch):
+        """When UI search finds nothing, the user sees a useful 'no
+        catalog results' message — not a generic API error."""
+        from applemusic_mcp import applescript as real_asc
+
+        monkeypatch.setattr(server, "APPLESCRIPT_AVAILABLE", True)
+
+        mock_asc = MagicMock()
+        # UI search comes back empty
+        mock_asc.ui_search_catalog.return_value = (True, [])
+        mock_asc.ui_clear_search.return_value = None
+        mock_asc.classify_error = real_asc.classify_error
+        monkeypatch.setattr(server, "asc", mock_asc)
+        monkeypatch.setattr(server, "_has_developer_token", lambda: False)
+
+        result = server._library_add(track="ZZZNonexistentTrack")
+        assert "No catalog results" in result
+
+    def test_album_input_on_tokenless_macos_explains_unsupported(self, monkeypatch):
+        """Albums via UI library-add aren't implemented yet — make sure
+        we tell the user clearly rather than leaking the API token error."""
+        from applemusic_mcp import applescript as real_asc
+
+        monkeypatch.setattr(server, "APPLESCRIPT_AVAILABLE", True)
+        mock_asc = MagicMock()
+        mock_asc.classify_error = real_asc.classify_error
+        monkeypatch.setattr(server, "asc", mock_asc)
+        monkeypatch.setattr(server, "_has_developer_token", lambda: False)
+
+        def fail_loud():
+            raise AssertionError("get_headers() reached — album path should early-return")
+
+        monkeypatch.setattr(server, "get_headers", fail_loud)
+
+        result = server._library_add(album="Some Album")
+        assert "Adding albums to library via UI automation isn't supported" in result
+        assert "Developer token not found" not in result
+
+    def test_catalog_id_input_on_tokenless_macos_says_use_name(self, monkeypatch):
+        """Catalog IDs can't be resolved via UI search (UI needs a
+        readable query, not an opaque ID). Tell the caller to switch
+        input shape rather than leaking the token error."""
+        from applemusic_mcp import applescript as real_asc
+
+        monkeypatch.setattr(server, "APPLESCRIPT_AVAILABLE", True)
+        mock_asc = MagicMock()
+        mock_asc.classify_error = real_asc.classify_error
+        monkeypatch.setattr(server, "asc", mock_asc)
+        monkeypatch.setattr(server, "_has_developer_token", lambda: False)
+
+        def fail_loud():
+            raise AssertionError(
+                "get_headers() reached — catalog ID path should early-return on tokenless macOS"
+            )
+
+        monkeypatch.setattr(server, "get_headers", fail_loud)
+
+        # 1234567890 looks like a numeric catalog ID
+        result = server._library_add(track="1440783617")
+        assert "catalog IDs require an API token" in result
+        assert "pass it by name instead" in result

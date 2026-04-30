@@ -3059,6 +3059,15 @@ def _playlist_add(
                     added.append(search_result)
                 else:
                     errors.append(f"{name}: {search_result}")
+            elif "Track not found" in result:
+                # Library miss without auto_search — common new-user surprise.
+                # Hint at the right next step rather than just stopping at
+                # "not found" with no path forward.
+                errors.append(
+                    f"{name}: not in your library. Set auto_search=True to "
+                    "find it via the Apple Music catalog (uses API if a "
+                    "token is configured, UI automation on macOS otherwise)."
+                )
             else:
                 errors.append(f"{name}: {result}")
 
@@ -3550,7 +3559,7 @@ def playlist(
     verify: bool = True,
     auto_search: Optional[bool] = None,
 ) -> str:
-    """Playlist and folder operations. Actions: list, tracks, search, create, add, copy, move (macOS), path (macOS), remove (macOS), delete (macOS), rename (macOS). Folders support slash-separated paths (e.g. 'Summer/Chill/Deep')."""
+    """Playlist and folder operations. Actions: list, tracks, search, create, add, copy, move (macOS), path (macOS), remove (macOS), delete (macOS), rename (macOS). Folders support slash-separated paths (e.g. 'Summer/Chill/Deep'). For action='add', set auto_search=True to find tracks not already in the user's library — this is required to add catalog songs the user doesn't own."""
     action = action.lower().strip().replace("-", "_")
 
     if action == "list":
@@ -3660,7 +3669,7 @@ def library(
     rate_action: str = "",
     stars: int = 0,
 ) -> str:
-    """Your library. Actions: search, add, recently_played, recently_added, browse, rate, remove (macOS), snapshot."""
+    """Your library. Actions: search, add, recently_played, recently_added, browse, rate, remove (macOS), snapshot. action='search' searches the user's local library only — for catalog (Apple Music's full library) use catalog(action='search'). action='add' on tokenless macOS uses Music.app UI automation (Accessibility permissions required) to add catalog tracks; with an API token, uses the REST API."""
     action = action.lower().strip().replace("-", "_")
 
     if action == "search":
@@ -3767,7 +3776,11 @@ def _library_search(
             # cascade when a token is actually configured (the API may see
             # cloud-synced tracks AS hasn't seen yet).
             if not _has_developer_token():
-                return f"No {types} found in library"
+                return (
+                    f"No {types} found in library. "
+                    f"To search the Apple Music catalog instead, use "
+                    f"catalog(action='search', query='...')."
+                )
         # AppleScript failed or returned empty (and we have a token) - fall
         # through to API.
 
@@ -3815,6 +3828,46 @@ def _library_search(
         return msg
 
 
+def _library_add_track_via_ui(query: str, search_artist: str) -> tuple[bool, str]:
+    """Add a catalog song to library via Music.app's UI search.
+
+    Tokenless macOS path for ``library(action="add", track=...)``. Mirrors
+    the search-and-add half of ``asc.ui_add_to_playlist`` but stops after
+    "Add to Library" — no playlist hop. Returns (success, message).
+
+    The README promises tokenless macOS works for "most features" — this
+    is what makes that promise true for direct library-add. Without this,
+    the API path raises FileNotFoundError("Developer token not found")
+    and a Claude session leaks the legacy generate-token guidance even
+    though the operation could have succeeded via UI automation.
+    """
+    full_query = f"{query} {search_artist}".strip() if search_artist else query
+    ok, results = asc.ui_search_catalog(full_query)
+    if not ok or not results:
+        asc.ui_clear_search()
+        return False, f"No catalog results for '{full_query}'"
+
+    # Pick the best Song match — same shape as ui_add_to_playlist's filter
+    target = None
+    for r in results:
+        if r.get("type") == "Song":
+            if search_artist and search_artist.lower() not in r.get("artist", "").lower():
+                continue
+            target = r
+            break
+    if target is None:
+        target = results[0]  # fall back to first result if no Song match
+
+    target_name = target["name"]
+    target_artist = target.get("artist", search_artist)
+
+    ok, msg = asc.ui_add_to_library(target_name)
+    asc.ui_clear_search()
+    if not ok:
+        return False, f"Failed to add to library: {msg}"
+    return True, f"{target_name} by {target_artist}"
+
+
 def _library_add(
     track: str = "",
     album: str = "",
@@ -3827,8 +3880,38 @@ def _library_add(
     if not track and not album:
         return "Error: Provide track or album parameter"
 
+    # Tokenless macOS path: route to UI automation for songs (the README
+    # promises tokenless macOS works for catalog ops; the building blocks
+    # for direct library-add via UI exist in asc.ui_search_catalog +
+    # asc.ui_add_to_library — used together by ui_add_to_playlist's
+    # composite flow). Albums via UI aren't supported here yet; tell the
+    # user clearly rather than leaking the API token error.
+    use_ui_path = not _has_developer_token() and APPLESCRIPT_AVAILABLE
+    if use_ui_path and album:
+        return (
+            "Error: Adding albums to library via UI automation isn't "
+            "supported yet — only individual tracks. To add this album "
+            "without a token, add each track by name via "
+            "library(action='add', track='Track Name'), or use "
+            "playlist(action='add', auto_search=True) which can resolve "
+            "albums as a search query. To configure an API token: "
+            "applemusic-mcp generate-token."
+        )
+
     # Helper to add a song by catalog search
     def _add_track_by_search(name: str, search_artist: str) -> None:
+        # Tokenless macOS: route to UI automation. The UI search returns
+        # a single best-match name+artist; we don't get a fuzzy_result
+        # diagnostic from this path, but the alternative is "you need an
+        # API token," which is wrong on macOS.
+        if use_ui_path:
+            ok, msg = _library_add_track_via_ui(name, search_artist)
+            if ok:
+                added.append(msg)
+            else:
+                errors.append(f"{name}: {msg}")
+            return
+
         song, error, fuzzy_result = _find_matching_catalog_song(name, search_artist)
         if error:
             errors.append(f"{name}: {error}")
@@ -3874,14 +3957,24 @@ def _library_add(
                 continue
 
             if r.input_type == InputType.CATALOG_ID:
-                # Direct catalog ID
+                # Direct catalog ID — UI automation path can't use this
+                # (UI search needs a human-readable query, not an opaque
+                # catalog ID). Tell the caller to switch input shape
+                # rather than leaking the API token error.
+                if use_ui_path:
+                    errors.append(
+                        f"Track ID {r.value}: catalog IDs require an API "
+                        "token. To add this track without a token, pass "
+                        "it by name instead."
+                    )
+                    continue
                 success, msg = _add_to_library_api([r.value], "songs")
                 if success:
                     added.append(f"Track ID {r.value}")
                 else:
                     errors.append(f"Track {r.value}: {msg}")
             elif r.input_type in (InputType.NAME, InputType.JSON_OBJECT):
-                # Search by name
+                # Search by name (UI path on tokenless macOS, API otherwise)
                 _add_track_by_search(r.value, r.artist)
             else:
                 # Library ID or persistent ID - already in library
