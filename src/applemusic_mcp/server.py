@@ -3757,7 +3757,19 @@ def _library_search(
             # broke. Without this, an AS failure followed by missing-token
             # would only show "Developer token not found" — hiding the cause.
             asc_error = str(results) if results else "AppleScript search failed"
-        # AppleScript found nothing or failed - fall through to API
+        else:
+            # AS succeeded with zero results — the song is genuinely not in
+            # the user's library. On a tokenless macOS host, cascading to
+            # the API path here would raise "Developer token not found" and
+            # a Claude session reading that error would (correctly) tell
+            # the user to run generate-token+authorize — which is the EXACT
+            # misleading-message bug v0.9.3 and v0.9.4 fought against. Only
+            # cascade when a token is actually configured (the API may see
+            # cloud-synced tracks AS hasn't seen yet).
+            if not _has_developer_token():
+                return f"No {types} found in library"
+        # AppleScript failed or returned empty (and we have a token) - fall
+        # through to API.
 
     # API fallback (or primary on non-macOS)
     try:

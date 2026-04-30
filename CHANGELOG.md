@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.5] - 2026-04-29
+
+### Fixed
+
+- **`library(action="search")` no longer leaks "Developer token not found" on tokenless macOS when the search returns zero hits** — same bug class as v0.9.3 / v0.9.4, missed by both sweeps. The early-return guard in `_library_search` was `if success and results:`, which fails on a clean empty list and falls through to the API path. On a tokenless macOS host, that path raises `FileNotFoundError("Developer token not found...")` for what was actually just "song's not in your library." A Claude session reading the leaked error then (correctly) tells the user to run `applemusic-mcp generate-token` and `applemusic-mcp authorize` — sending tokenless users back down the developer-account rabbit hole the README explicitly says they don't need. Reported on Reddit by horrorshow75 immediately after testing v0.9.4. Fix: empty AS results now return "No <types> found in library" directly when no token is configured. When a token IS configured the cascade still fires (the API may see cloud-synced tracks AS hasn't seen yet) — preserves the legitimate use case.
+
+### Internal
+
+- 3 new regression tests for the empty-cascade case (tokenless+empty-AS short-circuits, tokenful+empty-AS still cascades for cloud check, "No <types> found" message respects the `types` param).
+- Pre-fix sweep covered all 10 `if APPLESCRIPT_AVAILABLE:` blocks in server.py for similar empty-cascade patterns. Only `_library_search` was vulnerable — all 9 other sites either return "no results" directly on empty AS or have no API fallback.
+
 ## [0.9.4] - 2026-04-29
 
 ### Fixed

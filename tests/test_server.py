@@ -3674,3 +3674,115 @@ class TestPlaylistCopyNoTokenLeakOnAsFailure:
         result = server._playlist_copy(source="Source Playlist", new_name="Destination")
         assert "Music.app isn't running" in result
         assert "Developer token not found" not in result
+
+
+class TestLibrarySearchEmptyDoesNotLeakToken:
+    """Regression test for the bug horrorshow75 hit on Reddit after v0.9.4
+    shipped. _library_search's AS path treats `(True, [])` (empty success)
+    differently from `(True, [results])` — the early-return guard was
+    `if success and results:`, which fails on empty lists and falls
+    through to the API path. On tokenless macOS, that path then leaks
+    'Developer token not found' even though the truth was just 'song's
+    not in your library'. v0.9.4 missed this case because the prior
+    sweeps focused on AS-FAILURE paths, not AS-empty-SUCCESS paths."""
+
+    def test_tokenless_macos_empty_as_returns_no_results_not_token_error(self, monkeypatch):
+        from applemusic_mcp import applescript as real_asc
+
+        monkeypatch.setattr(server, "APPLESCRIPT_AVAILABLE", True)
+
+        mock_asc = MagicMock()
+        # AS search succeeds but returns zero hits (song not in library)
+        mock_asc.search_library.return_value = (True, [])
+        mock_asc.classify_error = real_asc.classify_error
+        mock_asc.ERROR_UNKNOWN = real_asc.ERROR_UNKNOWN
+        mock_asc.ERROR_AUTOMATION_DENIED = real_asc.ERROR_AUTOMATION_DENIED
+        mock_asc.ERROR_MUSIC_NOT_RUNNING = real_asc.ERROR_MUSIC_NOT_RUNNING
+        mock_asc.ERROR_TIMEOUT = real_asc.ERROR_TIMEOUT
+        mock_asc.ERROR_SYNTAX = real_asc.ERROR_SYNTAX
+        monkeypatch.setattr(server, "asc", mock_asc)
+
+        # No token configured. If cascade fires, this is the misleading error.
+        monkeypatch.setattr(server, "_has_developer_token", lambda: False)
+
+        # If get_headers reaches the API, the regression has happened.
+        def fail_loud():
+            raise AssertionError(
+                "get_headers() should not be called — empty AS result on "
+                "tokenless macOS must short-circuit to 'No songs found'"
+            )
+
+        monkeypatch.setattr(server, "get_headers", fail_loud)
+
+        result = server._library_search("nonexistent track xyz")
+        assert "No songs found" in result
+        # The leak-error must NOT appear
+        assert "Developer token not found" not in result
+        assert "applemusic-mcp generate-token" not in result
+        assert "applemusic-mcp authorize" not in result
+
+    def test_tokenful_macos_empty_as_still_cascades_for_cloud_check(
+        self, mock_config_dir, mock_developer_token, mock_user_token, monkeypatch
+    ):
+        """When a token IS configured, empty AS results still cascade to API
+        — the API may see cloud-synced tracks AS hasn't seen yet. This is
+        the legitimate use case the cascade was originally designed for."""
+        import responses as resp_lib
+
+        # Configure tokens
+        dev_token_file = mock_config_dir / "developer_token.json"
+        with open(dev_token_file, "w") as f:
+            json.dump({"token": mock_developer_token, "expires": time.time() + 86400 * 30}, f)
+        user_token_file = mock_config_dir / "music_user_token.json"
+        with open(user_token_file, "w") as f:
+            json.dump({"music_user_token": mock_user_token}, f)
+
+        monkeypatch.setattr(server, "APPLESCRIPT_AVAILABLE", True)
+
+        mock_asc = MagicMock()
+        mock_asc.search_library.return_value = (True, [])  # AS empty
+        from applemusic_mcp import applescript as real_asc
+
+        mock_asc.classify_error = real_asc.classify_error
+        monkeypatch.setattr(server, "asc", mock_asc)
+
+        with resp_lib.RequestsMock() as r:
+            r.add(
+                resp_lib.GET,
+                f"{server.BASE_URL}/me/library/search",
+                json={
+                    "results": {
+                        "library-songs": {
+                            "data": [
+                                {
+                                    "id": "i.cloud123",
+                                    "attributes": {
+                                        "name": "Cloud Track",
+                                        "artistName": "Cloud Artist",
+                                        "albumName": "Cloud Album",
+                                    },
+                                }
+                            ]
+                        }
+                    }
+                },
+                status=200,
+            )
+            result = server._library_search("cloud track")
+
+        # API was reached and surfaced the cloud-synced result
+        assert "Cloud Track" in result
+
+    def test_tokenless_macos_empty_as_message_uses_types_param(self, monkeypatch):
+        """The 'No <types> found in library' message respects the types arg."""
+        from applemusic_mcp import applescript as real_asc
+
+        monkeypatch.setattr(server, "APPLESCRIPT_AVAILABLE", True)
+        mock_asc = MagicMock()
+        mock_asc.search_library.return_value = (True, [])
+        mock_asc.classify_error = real_asc.classify_error
+        monkeypatch.setattr(server, "asc", mock_asc)
+        monkeypatch.setattr(server, "_has_developer_token", lambda: False)
+
+        result = server._library_search("nonexistent", types="albums")
+        assert "No albums found" in result
