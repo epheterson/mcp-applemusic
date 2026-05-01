@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.6] - 2026-05-01
+
+### Fixed
+
+- **`_SEARCH_FIELD` path updated for macOS 26 (Tahoe)** — the search field moved from the sidebar outline row to `text field 1 of group 1 of toolbar 1 of window "Music"`. The old path caused every UI-automation search to fail silently on macOS 26, making tokenless flows (add to library, add to playlist) appear to do nothing. Diagnosed and reported by horrorshow75 on Reddit.
+- **Catalog result type-line parser handles macOS 26 extra static text node** — macOS 26 prepends an empty static text element inside each result row, shifting the type line (e.g. "Song · Radiohead") from the second to the third static text. The old code used a fixed `item 2` index; the new code iterates and picks the first static text containing the middle-dot separator `·`, making it version-agnostic.
+- **Hover dwell increased and nudge added at 3 UI-interaction sites** — on macOS 26, `CGEventMouseMoved` events posted to the same coordinates as the previous position are silently dropped, so hover-dependent buttons (Add to Library, play checkbox) never appeared. A small 2-pixel nudge move before the final position guarantees a real delta and event delivery. Dwell increased from 0.5–1.0 s to 1.5 s at all three sites.
+
 ## [0.9.5] - 2026-04-29
 
 ### Fixed

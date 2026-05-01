@@ -1371,10 +1371,7 @@ def open_catalog_song(song_url: str) -> tuple[bool, str]:
 
 _SCROLL_AREA = 'scroll area 2 of splitter group 1 of window "Music"'
 
-_SEARCH_FIELD = (
-    "text field 1 of UI element 1 of row 1 of outline 1"
-    ' of scroll area 1 of splitter group 1 of window "Music"'
-)
+_SEARCH_FIELD = 'text field 1 of group 1 of toolbar 1 of window "Music"'
 
 
 def _check_playing() -> bool:
@@ -1468,6 +1465,18 @@ delay(0.5);
         return result.returncode == 0
     except (subprocess.TimeoutExpired, Exception):
         return False
+
+
+def _hover_with_nudge(cx: float, cy: float) -> bool:
+    """Move to target with a 2-pixel nudge first to guarantee a mouseMoved event.
+
+    On macOS 26, posting a CGEventMouseMoved to the same coordinates as the
+    previous position can be silently dropped. Moving to (cx+2, cy) first forces
+    a real delta and ensures hover-dependent buttons (Add to Library, play
+    checkbox) are revealed before the 1.5-second dwell.
+    """
+    _jxa_mouse_move(cx + 2, cy)
+    return _jxa_mouse_move(cx, cy)
 
 
 def _jxa_scroll_down(x: float, y: float, amount: int = 10) -> bool:
@@ -1598,10 +1607,10 @@ def _play_specific_track() -> tuple[bool, str]:
     # Ensure Music is still frontmost (user may have clicked away during scroll)
     _ensure_music_frontmost()
 
-    # Hover to reveal the play checkbox
-    if not _jxa_mouse_move(cx, cy):
+    # Hover to reveal the play checkbox (nudge first to guarantee mouseMoved on macOS 26)
+    if not _hover_with_nudge(cx, cy):
         return False, "Failed to move mouse for hover"
-    time.sleep(0.5)
+    time.sleep(1.5)
 
     # Click the play checkbox that appears on hover
     ok, result = run_applescript("""
@@ -2250,12 +2259,17 @@ tell application "System Events"
                     set d to description of e
                     if d is not "Top Results" and d is not "group" then
                         set idx to idx + 1
-                        -- Get the type line (second static text, e.g. "Song · Radiohead")
+                        -- Get the type line (contains middle-dot, e.g. "Song · Radiohead")
+                        -- macOS 26 prepends an empty static text, so search instead of using item 2
                         set typeLine to ""
                         set stTexts to every static text of e
-                        if (count of stTexts) > 1 then
-                            set typeLine to name of item 2 of stTexts
-                        end if
+                        repeat with st in stTexts
+                            set stName to name of st
+                            if stName contains "·" then
+                                set typeLine to stName
+                                exit repeat
+                            end if
+                        end repeat
                         set r to r & idx & "|||" & d & "|||" & typeLine & return
                     end if
                 end if
@@ -2358,11 +2372,11 @@ end tell""")
     except ValueError:
         return False, f"Invalid position: {pos_str}"
 
-    # Hover to reveal the Add to Library button
+    # Hover to reveal the Add to Library button (nudge first for macOS 26)
     _ensure_music_frontmost()
-    if not _jxa_mouse_move(cx, cy):
+    if not _hover_with_nudge(cx, cy):
         return False, "Failed to move mouse for hover"
-    time.sleep(1)
+    time.sleep(1.5)
 
     # Click the Add to Library button
     ok, click_result = run_applescript(f"""
@@ -2449,11 +2463,11 @@ end tell""")
     except ValueError:
         return False, f"Invalid position: {pos_str}"
 
-    # Hover to reveal play checkbox
+    # Hover to reveal play checkbox (nudge first for macOS 26)
     _ensure_music_frontmost()
-    if not _jxa_mouse_move(cx, cy):
+    if not _hover_with_nudge(cx, cy):
         return False, "Failed to hover"
-    time.sleep(1)
+    time.sleep(1.5)
 
     # Click the play checkbox
     ok, _ = run_applescript(f"""
