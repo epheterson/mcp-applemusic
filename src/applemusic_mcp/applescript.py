@@ -1371,7 +1371,98 @@ def open_catalog_song(song_url: str) -> tuple[bool, str]:
 
 _SCROLL_AREA = 'scroll area 2 of splitter group 1 of window "Music"'
 
-_SEARCH_FIELD = 'text field 1 of group 1 of toolbar 1 of window "Music"'
+# macOS 15: search field lives in the sidebar outline hierarchy
+# macOS 26 (Tahoe): search field moved to the window toolbar group
+_SEARCH_FIELD_SIDEBAR = (
+    "text field 1 of UI element 1 of row 1 of outline 1"
+    ' of scroll area 1 of splitter group 1 of window "Music"'
+)
+_SEARCH_FIELD_TOOLBAR = 'text field 1 of group 1 of toolbar 1 of window "Music"'
+
+_search_field_cache: str | None = None
+
+
+def _get_search_field() -> str:
+    """Return the correct search field path for the running Music.app version.
+
+    Probes for the toolbar path (macOS 26+) first; falls back to the sidebar
+    path (macOS 15). Result is cached for the lifetime of the server process.
+    """
+    global _search_field_cache
+    if _search_field_cache is not None:
+        return _search_field_cache
+    ok, result = run_applescript(f"""
+tell application "System Events"
+    tell process "Music"
+        if exists ({_SEARCH_FIELD_TOOLBAR}) then
+            return "toolbar"
+        end if
+        return "sidebar"
+    end tell
+end tell""")
+    if not ok:
+        # Probe failed (Music.app not yet running, accessibility error, etc.).
+        # Don't cache — return safe default and let the next call retry, so a
+        # transient cold-start failure doesn't pin this session to the wrong path.
+        return _SEARCH_FIELD_SIDEBAR
+    _search_field_cache = (
+        _SEARCH_FIELD_TOOLBAR if result.strip() == "toolbar" else _SEARCH_FIELD_SIDEBAR
+    )
+    return _search_field_cache
+
+
+_GITHUB_ISSUES = "https://github.com/epheterson/mcp-applemusic/issues"
+
+
+def _classify_as_error(error_text: str) -> str:
+    """Map a raw AppleScript error string to a human-readable, actionable message."""
+    if "-1743" in error_text:
+        return (
+            "Accessibility permission not granted. Open System Settings → "
+            "Privacy & Security → Accessibility and enable your terminal app."
+        )
+    if "-1728" in error_text:
+        return (
+            f"Music.app UI element not found — the layout may have changed after a macOS "
+            f"update. Please file a bug at {_GITHUB_ISSUES} with your macOS version and "
+            f"Music.app version."
+        )
+    snippet = error_text.strip()[:100]
+    return (
+        f"Unexpected UI automation error: {snippet}. "
+        f"If this persists, please file a bug at {_GITHUB_ISSUES}."
+    )
+
+
+def check_ui_accessible() -> tuple[bool, str]:
+    """Check whether Music.app's UI windows are accessible via System Events.
+
+    Returns (True, "") when UI automation can proceed. Returns (False, reason)
+    with a concrete, actionable explanation when it cannot — distinguishing
+    locked screen from missing Accessibility permission from no open window.
+    """
+    ok, result = run_applescript(
+        'tell application "System Events" to tell process "Music" to return count of windows'
+    )
+    if not ok:
+        return False, _classify_as_error(result)
+    if result.strip() != "0":
+        return True, ""
+    # No visible windows — best-effort check for locked screen via loginwindow.
+    # On macOS 10–15 the lock screen runs as a window of the loginwindow process.
+    # On macOS 26+ this may live elsewhere (e.g., ScreenSaver.engine) — if the
+    # heuristic misses, the user just gets the generic "no visible windows"
+    # message instead of "screen is locked", which is degraded but not wrong.
+    ok2, lock_result = run_applescript(
+        'tell application "System Events" to tell process "loginwindow" '
+        "to return (count of windows) > 0"
+    )
+    if ok2 and lock_result.strip() == "true":
+        return False, (
+            "Music.app window not accessible — screen is locked. "
+            "UI automation requires an unlocked screen."
+        )
+    return False, "Music.app has no visible windows. Open Music.app or unminimize its window."
 
 
 def _check_playing() -> bool:
@@ -2200,7 +2291,7 @@ def get_library_stats() -> tuple[bool, dict]:
 # Music.app visible (not minimized), display attached (not headless).
 
 
-def ui_search_catalog(query: str) -> tuple[bool, list[dict]]:
+def ui_search_catalog(query: str) -> tuple[bool, list[dict], str]:
     """Search the Apple Music catalog via Music.app's search field.
 
     Types the query into the search field, submits it, and parses
@@ -2210,21 +2301,22 @@ def ui_search_catalog(query: str) -> tuple[bool, list[dict]]:
         query: Search query (e.g. "Radiohead Creep", "Taylor Swift")
 
     Returns:
-        Tuple of (success, list of result dicts).
+        Tuple of (success, results, error).
         Each result dict has: name, type ("Song", "Album", "Artist", etc.),
         artist (if applicable), and index (position in results).
+        error is an empty string on success; a human-readable message otherwise.
     """
     if not query or not query.strip():
-        return False, []
+        return False, [], "Empty query"
 
     # Focus and populate the search field
     # Ensure Music has a visible window before interacting with search
     _ensure_music_frontmost()
 
-    ok, _ = run_applescript(f"""
+    ok, err = run_applescript(f"""
 tell application "System Events"
     tell process "Music"
-        set searchField to {_SEARCH_FIELD}
+        set searchField to {_get_search_field()}
         set focused of searchField to true
         delay 0.3
         set value of searchField to "{_escape_for_applescript(query)}"
@@ -2233,7 +2325,12 @@ tell application "System Events"
     end tell
 end tell""")
     if not ok:
-        return False, []
+        # Check environmental causes first (locked screen, Accessibility) before
+        # blaming the element path — a -1728 here often means locked screen.
+        accessible, access_reason = check_ui_accessible()
+        if not accessible:
+            return False, [], access_reason
+        return False, [], _classify_as_error(err)
 
     # Wait for results to load
     time.sleep(4)
@@ -2278,8 +2375,13 @@ tell application "System Events"
         return r
     end tell
 end tell""")
-    if not ok or not raw or raw.strip() == "NO_RESULTS":
-        return False, []
+    if not ok:
+        accessible, access_reason = check_ui_accessible()
+        if not accessible:
+            return False, [], access_reason
+        return False, [], _classify_as_error(raw)
+    if not raw or raw.strip() == "NO_RESULTS":
+        return True, [], ""
 
     results = []
     for line in raw.strip().split("\n"):
@@ -2309,7 +2411,7 @@ end tell""")
                 }
             )
 
-    return True, results
+    return True, results, ""
 
 
 def ui_clear_search() -> None:
@@ -2317,7 +2419,7 @@ def ui_clear_search() -> None:
     run_applescript(f"""
 tell application "System Events"
     tell process "Music"
-        set searchField to {_SEARCH_FIELD}
+        set searchField to {_get_search_field()}
         set focused of searchField to true
         delay 0.2
         set value of searchField to ""
@@ -2508,10 +2610,10 @@ def ui_play_result_by_query(query: str) -> tuple[bool, str]:
     Returns:
         Tuple of (success, message)
     """
-    ok, results = ui_search_catalog(query)
+    ok, results, why = ui_search_catalog(query)
     if not ok or not results:
         ui_clear_search()
-        return False, f"No results found for '{query}'"
+        return False, why or f"No results found for '{query}'"
 
     # Find first song result
     target = None
@@ -2545,10 +2647,10 @@ def ui_add_to_playlist(playlist_name: str, query: str, artist: str = "") -> tupl
         Tuple of (success, message)
     """
     # Search
-    ok, results = ui_search_catalog(query)
+    ok, results, why = ui_search_catalog(query)
     if not ok or not results:
         ui_clear_search()
-        return False, f"No results found for '{query}'"
+        return False, why or f"No results found for '{query}'"
 
     # Find best song result
     target = None

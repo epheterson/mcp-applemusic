@@ -1,6 +1,6 @@
 ---
 name: apple-music
-version: 0.9.5
+version: 0.9.6
 description: Apple Music integration via AppleScript, UI automation, or MusicKit API
 ---
 
@@ -363,6 +363,8 @@ end tell
 ## Fragility
 
 UI paths break when Apple updates Music.app's layout. Centralize paths as constants and test after macOS updates. Use Accessibility Inspector.app to explore the current hierarchy.
+
+The search field location changed between macOS 15 (sidebar outline row) and macOS 26/Tahoe (toolbar group). The server probes for the toolbar element at runtime using an AppleScript `exists` check and falls back to the sidebar path — so both OS versions are supported without hardcoding. If UI search ever breaks on a new macOS version, inspect the search field path first.
 
 ## Tool routing (when to use which top-level action)
 

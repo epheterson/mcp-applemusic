@@ -864,6 +864,138 @@ class TestUISearchParsing:
             cx, cy = [float(v) for v in pos_str.strip().split(",")]
 
 
+class TestClassifyAsError:
+    """Unit tests for _classify_as_error()."""
+
+    def test_accessibility_not_granted(self):
+        import applemusic_mcp.applescript as asc
+
+        msg = asc._classify_as_error("execution error: (-1743)")
+        assert "Accessibility" in msg
+        assert "System Settings" in msg
+
+    def test_element_not_found(self):
+        import applemusic_mcp.applescript as asc
+
+        msg = asc._classify_as_error("Can't get window 1. (-1728)")
+        assert "element not found" in msg.lower() or "layout" in msg.lower()
+        assert asc._GITHUB_ISSUES in msg
+
+    def test_unknown_error_includes_issue_link(self):
+        import applemusic_mcp.applescript as asc
+
+        msg = asc._classify_as_error("something totally unexpected")
+        assert asc._GITHUB_ISSUES in msg
+
+    def test_unknown_error_truncates_long_text(self):
+        import applemusic_mcp.applescript as asc
+
+        long_err = "x" * 200
+        msg = asc._classify_as_error(long_err)
+        assert len(msg) < 300
+
+
+class TestCheckUiAccessible:
+    """Unit tests for check_ui_accessible()."""
+
+    def test_returns_ok_when_windows_visible(self, monkeypatch):
+        import applemusic_mcp.applescript as asc
+
+        monkeypatch.setattr(asc, "run_applescript", lambda _: (True, "1\n"))
+        ok, reason = asc.check_ui_accessible()
+        assert ok is True
+        assert reason == ""
+
+    def test_returns_classified_error_on_applescript_failure(self, monkeypatch):
+        import applemusic_mcp.applescript as asc
+
+        monkeypatch.setattr(asc, "run_applescript", lambda _: (False, "(-1743)"))
+        ok, reason = asc.check_ui_accessible()
+        assert ok is False
+        assert "Accessibility" in reason
+
+    def test_detects_locked_screen(self, monkeypatch):
+        import applemusic_mcp.applescript as asc
+
+        calls = {"n": 0}
+
+        def mock_run(script):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                return (True, "0")  # Music has 0 windows
+            return (True, "true")  # loginwindow has windows → locked
+
+        monkeypatch.setattr(asc, "run_applescript", mock_run)
+        ok, reason = asc.check_ui_accessible()
+        assert ok is False
+        assert "locked" in reason.lower()
+
+    def test_no_window_not_locked(self, monkeypatch):
+        import applemusic_mcp.applescript as asc
+
+        calls = {"n": 0}
+
+        def mock_run(script):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                return (True, "0")  # Music has 0 windows
+            return (True, "false")  # loginwindow also 0 → not locked, just minimized
+
+        monkeypatch.setattr(asc, "run_applescript", mock_run)
+        ok, reason = asc.check_ui_accessible()
+        assert ok is False
+        assert "no visible windows" in reason.lower() or "minimize" in reason.lower()
+
+
+class TestGetSearchField:
+    """Unit tests for the _get_search_field() dual-path probe."""
+
+    def setup_method(self):
+        """Reset the module-level cache before each test."""
+        import applemusic_mcp.applescript as asc
+
+        asc._search_field_cache = None
+
+    def test_toolbar_path_when_probe_returns_toolbar(self, monkeypatch):
+        import applemusic_mcp.applescript as asc
+
+        monkeypatch.setattr(asc, "run_applescript", lambda _: (True, "toolbar\n"))
+        result = asc._get_search_field()
+        assert result == asc._SEARCH_FIELD_TOOLBAR
+
+    def test_sidebar_path_when_probe_returns_sidebar(self, monkeypatch):
+        import applemusic_mcp.applescript as asc
+
+        monkeypatch.setattr(asc, "run_applescript", lambda _: (True, "sidebar\n"))
+        result = asc._get_search_field()
+        assert result == asc._SEARCH_FIELD_SIDEBAR
+
+    def test_sidebar_path_on_applescript_failure_does_not_cache(self, monkeypatch):
+        """Transient probe failure (e.g., Music.app still launching) returns
+        sidebar as a safe default, but does NOT cache — next call should retry
+        so we don't pin a macOS 26 user to the wrong path."""
+        import applemusic_mcp.applescript as asc
+
+        monkeypatch.setattr(asc, "run_applescript", lambda _: (False, "error"))
+        result = asc._get_search_field()
+        assert result == asc._SEARCH_FIELD_SIDEBAR
+        assert asc._search_field_cache is None  # not cached on failure
+
+    def test_result_is_cached(self, monkeypatch):
+        import applemusic_mcp.applescript as asc
+
+        call_count = {"n": 0}
+
+        def counting_run(script):
+            call_count["n"] += 1
+            return (True, "toolbar")
+
+        monkeypatch.setattr(asc, "run_applescript", counting_run)
+        asc._get_search_field()
+        asc._get_search_field()
+        assert call_count["n"] == 1  # probe ran once; second call hit cache
+
+
 @pytest.mark.skipif(
     not os.environ.get("TEST_UI"), reason="UI tests require Music.app visible. Run with TEST_UI=1"
 )
@@ -881,12 +1013,13 @@ class TestUISearchIntegration:
         import time
 
         time.sleep(2)
-        ok, results = asc.ui_search_catalog("Beatles")
+        ok, results, why = asc.ui_search_catalog("Beatles")
         asc.ui_clear_search()
         assert ok is True
         assert len(results) > 0
         assert "name" in results[0]
         assert "type" in results[0]
+        assert why == ""
 
     def test_search_clears_properly(self):
         """Should clear search without errors."""
@@ -899,6 +1032,7 @@ class TestUISearchIntegration:
 
     def test_search_empty_query(self):
         """Should reject empty queries."""
-        ok, results = asc.ui_search_catalog("")
+        ok, results, why = asc.ui_search_catalog("")
         assert ok is False
         assert results == []
+        assert why == "Empty query"

@@ -3822,6 +3822,7 @@ class TestLibraryAddUiOnTokenlessMacos:
         mock_asc.ui_search_catalog.return_value = (
             True,
             [{"name": "Silvera", "artist": "Gojira", "type": "Song", "index": 1}],
+            "",
         )
         mock_asc.ui_add_to_library.return_value = (
             True,
@@ -3862,7 +3863,7 @@ class TestLibraryAddUiOnTokenlessMacos:
 
         mock_asc = MagicMock()
         # UI search comes back empty
-        mock_asc.ui_search_catalog.return_value = (True, [])
+        mock_asc.ui_search_catalog.return_value = (True, [], "")
         mock_asc.ui_clear_search.return_value = None
         mock_asc.classify_error = real_asc.classify_error
         monkeypatch.setattr(server, "asc", mock_asc)
@@ -3929,6 +3930,7 @@ class TestLibraryAddUiOnTokenlessMacos:
         mock_asc.ui_search_catalog.return_value = (
             True,
             [{"name": "Silvera", "artist": "Gojira", "type": "Song", "index": 1}],
+            "",
         )
         mock_asc.ui_add_to_library.return_value = (True, "Added")
         mock_asc.ui_clear_search.return_value = None
@@ -3963,6 +3965,7 @@ class TestLibraryAddUiOnTokenlessMacos:
         mock_asc.ui_search_catalog.return_value = (
             True,
             [{"name": "Silvera", "artist": "Gojira", "type": "Song", "index": 1}],
+            "",
         )
         mock_asc.ui_add_to_library.return_value = (True, "Added")
         mock_asc.ui_clear_search.return_value = None

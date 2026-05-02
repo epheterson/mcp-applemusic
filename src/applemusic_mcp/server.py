@@ -3842,10 +3842,10 @@ def _library_add_track_via_ui(query: str, search_artist: str) -> tuple[bool, str
     though the operation could have succeeded via UI automation.
     """
     full_query = f"{query} {search_artist}".strip() if search_artist else query
-    ok, results = asc.ui_search_catalog(full_query)
+    ok, results, why = asc.ui_search_catalog(full_query)
     if not ok or not results:
         asc.ui_clear_search()
-        return False, f"No catalog results for '{full_query}'"
+        return False, why or f"No catalog results for '{full_query}'"
 
     # Pick the best Song match — same shape as ui_add_to_playlist's filter.
     # Prefer a Song whose artist matches; fall back to the first Song seen
@@ -5445,7 +5445,7 @@ def catalog(
             return _catalog_search(query, types, limit, format, export, full, clean_only)
         except (FileNotFoundError, ValueError):
             if APPLESCRIPT_AVAILABLE and query:
-                ok, results = asc.ui_search_catalog(query)
+                ok, results, why = asc.ui_search_catalog(query)
                 if ok and results:
                     asc.ui_clear_search()
                     lines = [f"=== UI Search: {query} (no API — results from Music.app) ===", ""]
@@ -5459,6 +5459,8 @@ def catalog(
                     )
                     return "\n".join(lines)
                 asc.ui_clear_search()
+                if why:
+                    return f"Error: UI search failed — {why}"
             return "Error: API token required for catalog search. Set up API access or use UI search on macOS."
     elif action == "album_tracks":
         return _catalog_album_tracks(album, artist, limit, offset, format, export, full)
