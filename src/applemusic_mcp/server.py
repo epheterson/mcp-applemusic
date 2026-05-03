@@ -903,7 +903,7 @@ def _apply_pagination(
     """
     total_count = len(items)
 
-    if offset >= total_count and total_count > 0:
+    if offset > total_count and total_count > 0:
         return [], total_count, f"Offset {offset} exceeds {total_count} items"
 
     if offset > 0:
@@ -4644,7 +4644,8 @@ def _library_browse(
 
     # Try AppleScript first for songs (local, instant, no auth required)
     if APPLESCRIPT_AVAILABLE and item_type == "songs":
-        success, as_songs = asc.get_library_songs(limit)
+        fetch_limit = (offset + limit) if limit > 0 else 0
+        success, as_songs = asc.get_library_songs(fetch_limit)
         if success:
             if not as_songs:
                 return f"No {item_type} in library"

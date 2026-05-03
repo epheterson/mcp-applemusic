@@ -4017,3 +4017,259 @@ class TestLibraryAddUiOnTokenlessMacos:
         # Album surfaces as a step-error rather than silently swallowing
         # the whole request or leaking the token error
         assert "Developer token not found" not in result
+
+
+class TestApplyPagination:
+    """Unit tests for the _apply_pagination helper."""
+
+    def test_offset_equals_total_returns_empty_not_error(self):
+        """Regression: offset == total_count is a valid pagination boundary; must not error."""
+        items = [{"name": f"Track {i}"} for i in range(10)]
+        result, total, error = server._apply_pagination(items, limit=10, offset=10)
+        assert error is None
+        assert result == []
+        assert total == 10
+
+    def test_offset_beyond_total_returns_error(self):
+        """offset strictly greater than total_count is clearly out of bounds."""
+        items = [{"name": f"Track {i}"} for i in range(10)]
+        result, total, error = server._apply_pagination(items, limit=10, offset=11)
+        assert error is not None
+        assert "11" in error
+        assert result == []
+        assert total == 10
+
+    def test_offset_zero_limit_zero_returns_all(self):
+        """offset=0, limit=0: returns every item unchanged."""
+        items = [{"name": f"Track {i}"} for i in range(10)]
+        result, total, error = server._apply_pagination(items, limit=0, offset=0)
+        assert error is None
+        assert result == items
+        assert total == 10
+
+    def test_empty_list_with_nonzero_offset_returns_empty_without_error(self):
+        """Empty input list with any offset yields ([], 0, None) — no error."""
+        result, total, error = server._apply_pagination([], limit=10, offset=5)
+        assert error is None
+        assert result == []
+        assert total == 0
+
+    def test_offset_midrange_limit_fits_within_remaining(self):
+        """Offset in the middle; limit does not exceed the remaining items."""
+        items = [{"name": f"Track {i}"} for i in range(25)]
+        result, total, error = server._apply_pagination(items, limit=10, offset=10)
+        assert error is None
+        assert len(result) == 10
+        assert result[0]["name"] == "Track 10"
+        assert result[-1]["name"] == "Track 19"
+        assert total == 25
+
+    def test_offset_midrange_limit_exceeds_remaining_returns_partial_page(self):
+        """Offset in the middle; limit overshoots end — returns only the remaining items."""
+        items = [{"name": f"Track {i}"} for i in range(15)]
+        result, total, error = server._apply_pagination(items, limit=10, offset=10)
+        assert error is None
+        assert len(result) == 5
+        assert result[0]["name"] == "Track 10"
+        assert total == 15
+
+
+class TestLibraryBrowsePagination:
+    """Tests for offset/limit pagination in _library_browse.
+
+    Covers both the AppleScript path (macOS, item_type=songs) and the API
+    path (APPLESCRIPT_AVAILABLE=False), for three basic scenarios each:
+    first page, second page (non-zero offset), and fetch-all (limit=0).
+    """
+
+    def _setup_tokens(self, mock_config_dir, mock_developer_token, mock_user_token):
+        dev_token_file = mock_config_dir / "developer_token.json"
+        with open(dev_token_file, "w") as f:
+            json.dump({"token": mock_developer_token, "expires": time.time() + 86400 * 60}, f)
+        user_token_file = mock_config_dir / "music_user_token.json"
+        with open(user_token_file, "w") as f:
+            json.dump({"music_user_token": mock_user_token}, f)
+
+    def _make_api_song(self, i):
+        return {
+            "id": f"i.lib{i}",
+            "attributes": {
+                "name": f"Track {i}",
+                "artistName": "Artist",
+                "albumName": "Album",
+                "contentRating": "clean",
+            },
+        }
+
+    def _make_as_song(self, i):
+        return {"name": f"Track {i}", "artist": "Artist", "album": "Album", "id": f"PID{i}"}
+
+    # ── AppleScript path ──────────────────────────────────────────────────────
+
+    def test_applescript_offset_zero_limit_ten_returns_first_page(self, monkeypatch):
+        """offset=0, limit=10: returns first 10 songs; total_count equals items fetched."""
+        monkeypatch.setattr(server, "APPLESCRIPT_AVAILABLE", True)
+        mock_asc = MagicMock()
+        mock_asc.get_library_songs.return_value = (
+            True, [self._make_as_song(i) for i in range(10)]
+        )
+        monkeypatch.setattr(server, "asc", mock_asc)
+
+        result = server._library_browse(item_type="songs", limit=10, offset=0)
+
+        assert "Track 0" in result
+        assert "Track 9" in result
+        mock_asc.get_library_songs.assert_called_once_with(10)
+
+    def test_applescript_offset_ten_limit_ten_returns_second_page(self, monkeypatch):
+        """offset=10, limit=10: fetches offset+limit=20 songs and returns the second page."""
+        monkeypatch.setattr(server, "APPLESCRIPT_AVAILABLE", True)
+        mock_asc = MagicMock()
+        mock_asc.get_library_songs.return_value = (
+            True, [self._make_as_song(i) for i in range(20)]
+        )
+        monkeypatch.setattr(server, "asc", mock_asc)
+
+        result = server._library_browse(item_type="songs", limit=10, offset=10)
+
+        mock_asc.get_library_songs.assert_called_once_with(20)
+        assert "Track 10" in result
+        assert "Track 19" in result
+        assert "Track 0" not in result
+        assert "Track 9" not in result
+
+    def test_applescript_limit_zero_returns_all(self, monkeypatch):
+        """limit=0: passes 0 to get_library_songs and returns all songs."""
+        monkeypatch.setattr(server, "APPLESCRIPT_AVAILABLE", True)
+        mock_asc = MagicMock()
+        mock_asc.get_library_songs.return_value = (
+            True, [self._make_as_song(i) for i in range(150)]
+        )
+        monkeypatch.setattr(server, "asc", mock_asc)
+
+        result = server._library_browse(item_type="songs", limit=0, offset=0)
+
+        assert "Track 0" in result
+        assert "Track 149" in result
+        mock_asc.get_library_songs.assert_called_once_with(0)
+
+    # ── API path ──────────────────────────────────────────────────────────────
+
+    @responses.activate
+    def test_api_offset_zero_limit_ten_returns_first_page(
+        self, mock_config_dir, mock_developer_token, mock_user_token, monkeypatch
+    ):
+        """offset=0, limit=10: returns first 10 items in a single API call."""
+        monkeypatch.setattr(server, "APPLESCRIPT_AVAILABLE", False)
+        self._setup_tokens(mock_config_dir, mock_developer_token, mock_user_token)
+
+        responses.add(
+            responses.GET,
+            "https://api.music.apple.com/v1/me/library/songs",
+            json={"data": [self._make_api_song(i) for i in range(10)]},
+            status=200,
+        )
+
+        result = server._library_browse(item_type="songs", limit=10, offset=0)
+
+        assert "Track 0" in result
+        assert "Track 9" in result
+        assert len(responses.calls) == 1
+
+    @responses.activate
+    def test_api_offset_ten_limit_ten_returns_second_page(
+        self, mock_config_dir, mock_developer_token, mock_user_token, monkeypatch
+    ):
+        """offset=10, limit=10: fetches offset+limit items, returns items 11-20."""
+        monkeypatch.setattr(server, "APPLESCRIPT_AVAILABLE", False)
+        self._setup_tokens(mock_config_dir, mock_developer_token, mock_user_token)
+
+        responses.add(
+            responses.GET,
+            "https://api.music.apple.com/v1/me/library/songs",
+            json={"data": [self._make_api_song(i) for i in range(20)]},
+            status=200,
+        )
+
+        result = server._library_browse(item_type="songs", limit=10, offset=10)
+
+        assert "Track 10" in result
+        assert "Track 19" in result
+        assert "Track 0" not in result
+        assert "Track 9" not in result
+        assert len(responses.calls) == 1
+
+    @responses.activate
+    def test_api_limit_zero_fetches_all_across_multiple_calls(
+        self, mock_config_dir, mock_developer_token, mock_user_token, monkeypatch
+    ):
+        """limit=0: keeps calling API until a partial batch signals the end."""
+        monkeypatch.setattr(server, "APPLESCRIPT_AVAILABLE", False)
+        self._setup_tokens(mock_config_dir, mock_developer_token, mock_user_token)
+
+        # Full batch of 100 → pagination continues
+        responses.add(
+            responses.GET,
+            "https://api.music.apple.com/v1/me/library/songs",
+            json={"data": [self._make_api_song(i) for i in range(100)]},
+            status=200,
+        )
+        # Partial batch of 50 → pagination stops
+        responses.add(
+            responses.GET,
+            "https://api.music.apple.com/v1/me/library/songs",
+            json={"data": [self._make_api_song(i) for i in range(100, 150)]},
+            status=200,
+        )
+
+        result = server._library_browse(item_type="songs", limit=0, offset=0)
+
+        assert "Track 0" in result
+        assert "Track 149" in result
+        assert len(responses.calls) == 2
+
+    # ── Regression: offset == limit on a large library ───────────────────────
+
+    def test_applescript_large_library_second_page_returns_tracks_not_error(self, monkeypatch):
+        """Regression: 1000+ song library, offset=10, limit=10 must return page 2 not an error.
+
+        Root cause: _library_browse was calling get_library_songs(limit) instead of
+        get_library_songs(offset+limit), so only 10 songs were fetched and pagination
+        failed with 'Offset 10 exceeds 10 items'.
+        """
+        monkeypatch.setattr(server, "APPLESCRIPT_AVAILABLE", True)
+        mock_asc = MagicMock()
+        mock_asc.get_library_songs.return_value = (
+            True, [self._make_as_song(i) for i in range(20)]
+        )
+        monkeypatch.setattr(server, "asc", mock_asc)
+
+        result = server._library_browse(item_type="songs", limit=10, offset=10)
+
+        mock_asc.get_library_songs.assert_called_once_with(20)
+        assert "Offset 10 exceeds" not in result
+        assert "Track 10" in result
+        assert "Track 19" in result
+        assert "Track 0" not in result
+
+    @responses.activate
+    def test_api_large_library_second_page_returns_tracks_not_error(
+        self, mock_config_dir, mock_developer_token, mock_user_token, monkeypatch
+    ):
+        """Regression: API path, 1000+ song library, offset=10, limit=10 returns page 2."""
+        monkeypatch.setattr(server, "APPLESCRIPT_AVAILABLE", False)
+        self._setup_tokens(mock_config_dir, mock_developer_token, mock_user_token)
+
+        responses.add(
+            responses.GET,
+            "https://api.music.apple.com/v1/me/library/songs",
+            json={"data": [self._make_api_song(i) for i in range(20)]},
+            status=200,
+        )
+
+        result = server._library_browse(item_type="songs", limit=10, offset=10)
+
+        assert "Offset 10 exceeds" not in result
+        assert "Track 10" in result
+        assert "Track 19" in result
+        assert "Track 0" not in result
