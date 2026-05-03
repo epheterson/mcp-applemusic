@@ -6419,15 +6419,8 @@ if APPLESCRIPT_AVAILABLE:
                                 return f"[Catalog→Library] Added but sync pending: {track_name} by {track_artist}"
                             return f"[Catalog] Failed to add: {add_msg}"
 
-                        if reveal:
-                            if song_url:
-                                success, msg = asc.open_catalog_song(song_url)
-                                if success:
-                                    return f"[Catalog] Opened: {track_name} by {track_artist} (click play)"
-                                return f"[Catalog] {msg}"
-                            return f"[Catalog] No URL available for: {track_name}"
-
-                        # Default: try UI search to play catalog track directly
+                        # UI play first — before reveal so reveal_on_library_miss
+                        # preference doesn't shadow direct playback.
                         if APPLESCRIPT_AVAILABLE:
                             ui_query = f"{track_name} {track_artist}".strip()
                             ok, msg = asc.ui_play_result_by_query(ui_query)
@@ -6437,6 +6430,14 @@ if APPLESCRIPT_AVAILABLE:
                                     {"track": track_name, "artist": track_artist, "source": "ui_catalog"},
                                 )
                                 return f"[UI Catalog] {msg}"
+
+                        if reveal:
+                            if song_url:
+                                success, msg = asc.open_catalog_song(song_url)
+                                if success:
+                                    return f"[Catalog] Opened: {track_name} by {track_artist} (click play)"
+                                return f"[Catalog] {msg}"
+                            return f"[Catalog] No URL available for: {track_name}"
 
                         return (
                             f"[Catalog] Found: {track_name} by {track_artist}. "
@@ -6514,16 +6515,9 @@ if APPLESCRIPT_AVAILABLE:
                     return f"[Catalog→Library] Added but sync pending: {song_name} by {song_artist}"
                 return f"[Catalog] Failed to add: {add_msg}"
 
-            # Option 2: Open in Music app (user must click play)
-            if reveal:
-                if song_url:
-                    success, msg = asc.open_catalog_song(song_url)
-                    if success:
-                        return f"[Catalog] Opened: {song_name} by {song_artist} (click play)"
-                    return f"[Catalog] {msg}"
-                return f"[Catalog] No URL available for: {song_name}"
-
-            # Default: try UI search to play catalog track directly (no library add needed)
+            # Option 2: UI play — works without adding to library.
+            # Runs before reveal so reveal_on_library_miss preference doesn't
+            # shadow direct playback when Music.app automation is available.
             if APPLESCRIPT_AVAILABLE:
                 ui_query = f"{song_name} {song_artist}".strip()
                 ok, msg = asc.ui_play_result_by_query(ui_query)
@@ -6533,6 +6527,17 @@ if APPLESCRIPT_AVAILABLE:
                         {"track": song_name, "artist": song_artist, "source": "ui_catalog"},
                     )
                     return f"[UI Catalog] {msg}"
+                # Surface the failure reason so it's diagnosable
+                return f"[UI Catalog failed: {msg}] Falling back — {song_name} by {song_artist}"
+
+            # Option 3: Open in Music app (user must click play)
+            if reveal:
+                if song_url:
+                    success, msg = asc.open_catalog_song(song_url)
+                    if success:
+                        return f"[Catalog] Opened: {song_name} by {song_artist} (click play)"
+                    return f"[Catalog] {msg}"
+                return f"[Catalog] No URL available for: {song_name}"
 
             return (
                 f"[Catalog] Found: {song_name} by {song_artist}. "
