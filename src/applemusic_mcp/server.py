@@ -903,6 +903,8 @@ def _apply_pagination(
     """
     total_count = len(items)
 
+    # offset == total_count means the caller has paged through everything and is
+    # requesting the next (empty) page. Only error when offset exceeds the total.
     if offset > total_count and total_count > 0:
         return [], total_count, f"Offset {offset} exceeds {total_count} items"
 
@@ -4644,6 +4646,8 @@ def _library_browse(
 
     # Try AppleScript first for songs (local, instant, no auth required)
     if APPLESCRIPT_AVAILABLE and item_type == "songs":
+        # Fetch offset+limit songs so _apply_pagination has enough to slice the
+        # correct page. When limit=0 (fetch all), pass 0 to get every song.
         fetch_limit = (offset + limit) if limit > 0 else 0
         success, as_songs = asc.get_library_songs(fetch_limit)
         if success:
