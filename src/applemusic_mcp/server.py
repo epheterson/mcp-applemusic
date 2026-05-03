@@ -4646,56 +4646,96 @@ def _library_browse(
 
     # Try AppleScript first for songs (local, instant, no auth required)
     if APPLESCRIPT_AVAILABLE and item_type == "songs":
-        # Fetch offset+limit songs so _apply_pagination has enough to slice the
-        # correct page. When limit=0 (fetch all), pass 0 to get every song.
-        fetch_limit = (offset + limit) if limit > 0 else 0
-        success, as_songs = asc.get_library_songs(fetch_limit)
-        if success:
-            if not as_songs:
-                return f"No {item_type} in library"
-            data = []
-            for s in as_songs:
-                data.append(
-                    {
-                        "name": s.get("name", ""),
-                        "artist": s.get("artist", ""),
-                        "album": s.get("album", ""),
-                        "duration": s.get("duration", ""),
-                        "genre": s.get("genre", ""),
-                        "year": s.get("year", ""),
-                        "id": s.get("id", ""),
-                        "explicit": "Unknown",
-                    }
+        if limit > 0:
+            # O(limit): fetch only the requested page and the true total count.
+            success, as_songs, true_total, as_err = asc.get_library_songs_page(offset, limit)
+            if success:
+                if true_total == 0:
+                    return f"No {item_type} in library"
+                if offset >= true_total:
+                    return f"Offset {offset} exceeds library size of {true_total} songs"
+                data = []
+                for s in as_songs:
+                    data.append(
+                        {
+                            "name": s.get("name", ""),
+                            "artist": s.get("artist", ""),
+                            "album": s.get("album", ""),
+                            "duration": s.get("duration", ""),
+                            "genre": s.get("genre", ""),
+                            "year": s.get("year", ""),
+                            "id": s.get("id", ""),
+                            "explicit": "Unknown",
+                        }
+                    )
+
+                # Enrich with explicit status if requested
+                if fetch_explicit or clean_only:
+                    cache = get_track_cache()
+                    for track in data:
+                        track_id = track.get("id", "")
+                        if track_id:
+                            cached_explicit = cache.get_explicit(track_id)
+                            if cached_explicit:
+                                track["explicit"] = cached_explicit
+
+                # Filter explicit content if clean_only
+                if clean_only:
+                    data = [t for t in data if t.get("explicit") != "Yes"]
+
+                return format_output(
+                    data, format, export, full, "songs", total_count=true_total, offset=offset
                 )
+            as_error = as_err or "AppleScript get_library_songs_page failed"
+            return f"Error browsing library: {_format_applescript_error(as_error, 'browse library')}"
+        else:
+            # limit=0: fetch all songs (O(n), unchanged path).
+            success, as_songs = asc.get_library_songs(0)
+            if success:
+                if not as_songs:
+                    return f"No {item_type} in library"
+                data = []
+                for s in as_songs:
+                    data.append(
+                        {
+                            "name": s.get("name", ""),
+                            "artist": s.get("artist", ""),
+                            "album": s.get("album", ""),
+                            "duration": s.get("duration", ""),
+                            "genre": s.get("genre", ""),
+                            "year": s.get("year", ""),
+                            "id": s.get("id", ""),
+                            "explicit": "Unknown",
+                        }
+                    )
 
-            # Enrich with explicit status if requested
-            if fetch_explicit or clean_only:
-                cache = get_track_cache()
-                for track in data:
-                    track_id = track.get("id", "")
-                    if track_id:
-                        cached_explicit = cache.get_explicit(track_id)
-                        if cached_explicit:
-                            track["explicit"] = cached_explicit
+                # Enrich with explicit status if requested
+                if fetch_explicit or clean_only:
+                    cache = get_track_cache()
+                    for track in data:
+                        track_id = track.get("id", "")
+                        if track_id:
+                            cached_explicit = cache.get_explicit(track_id)
+                            if cached_explicit:
+                                track["explicit"] = cached_explicit
 
-            # Filter explicit content if clean_only
-            if clean_only:
-                data = [t for t in data if t.get("explicit") != "Yes"]
+                # Filter explicit content if clean_only
+                if clean_only:
+                    data = [t for t in data if t.get("explicit") != "Yes"]
 
-            # Apply pagination
-            data, total_count, error = _apply_pagination(data, limit, offset)
-            if error:
-                return error
+                data, total_count, error = _apply_pagination(data, 0, 0)
+                if error:
+                    return error
 
-            return format_output(
-                data, format, export, full, "songs", total_count=total_count, offset=offset
-            )
-        # AppleScript failed on macOS — surface the actionable error
-        # instead of cascading to API and leaking "Developer token not
-        # found" when the real cause is Music.app not running or
-        # Automation permissions denied. Same defense as _playlist_list.
-        as_error = str(as_songs) if as_songs else "AppleScript get_library_songs failed"
-        return f"Error browsing library: {_format_applescript_error(as_error, 'browse library')}"
+                return format_output(
+                    data, format, export, full, "songs", total_count=total_count, offset=0
+                )
+            # AppleScript failed on macOS — surface the actionable error
+            # instead of cascading to API and leaking "Developer token not
+            # found" when the real cause is Music.app not running or
+            # Automation permissions denied. Same defense as _playlist_list.
+            as_error = str(as_songs) if as_songs else "AppleScript get_library_songs failed"
+            return f"Error browsing library: {_format_applescript_error(as_error, 'browse library')}"
 
     # Fall back to API (non-macOS, or non-songs item_type)
     try:

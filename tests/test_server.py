@@ -3082,6 +3082,53 @@ class TestAppleScriptPerTrackGuards:
         # Defensive wrap surrounds the property reads
         assert s.find("set tName to name of t") > s.find("try")
 
+    def test_get_library_songs_page_script_structure(self):
+        """get_library_songs_page uses count+range access and has defensive try/on error."""
+        from applemusic_mcp import applescript as asc
+
+        captured = {}
+
+        def fake_run(script):
+            captured["script"] = script
+            return True, "total:0\n"
+
+        with patch.object(asc, "run_applescript", fake_run):
+            asc.get_library_songs_page(offset=10, limit=5)
+
+        s = captured["script"]
+        assert "count of tracks" in s
+        assert "items 11 through" in s
+        assert "skip inaccessible tracks" in s
+        assert s.find("set tName to name of t") > s.find("try")
+
+    def test_get_library_songs_page_parses_total_and_tracks(self):
+        """get_library_songs_page parses the total: header line and track rows."""
+        from applemusic_mcp import applescript as asc
+
+        fake_output = "total:42\nAlpha|||Artist A|||Album A|||180.0|||Rock|||2020|||PID1|||false\n"
+
+        with patch.object(asc, "run_applescript", lambda _: (True, fake_output)):
+            success, tracks, total, error = asc.get_library_songs_page(offset=0, limit=10)
+
+        assert success is True
+        assert total == 42
+        assert len(tracks) == 1
+        assert tracks[0]["name"] == "Alpha"
+        assert tracks[0]["id"] == "PID1"
+        assert error == ""
+
+    def test_get_library_songs_page_applescript_error_propagates(self):
+        """get_library_songs_page returns (False, [], 0, error) on AppleScript failure."""
+        from applemusic_mcp import applescript as asc
+
+        with patch.object(asc, "run_applescript", lambda _: (False, "Music not running")):
+            success, tracks, total, error = asc.get_library_songs_page(offset=0, limit=10)
+
+        assert success is False
+        assert tracks == []
+        assert total == 0
+        assert "Music not running" in error
+
     def test_search_library_script_wraps_per_track(self):
         from applemusic_mcp import applescript as asc
 
@@ -3428,8 +3475,10 @@ class TestLibraryBrowseNoTokenLeakOnAsFailure:
         monkeypatch.setattr(server, "APPLESCRIPT_AVAILABLE", True)
 
         mock_asc = MagicMock()
-        mock_asc.get_library_songs.return_value = (
+        mock_asc.get_library_songs_page.return_value = (
             False,
+            [],
+            0,
             "execution error: Music got an error: Connection is invalid. (-609)",
         )
         mock_asc.classify_error = real_asc.classify_error
@@ -3456,8 +3505,10 @@ class TestLibraryBrowseNoTokenLeakOnAsFailure:
         monkeypatch.setattr(server, "APPLESCRIPT_AVAILABLE", True)
 
         mock_asc = MagicMock()
-        mock_asc.get_library_songs.return_value = (
+        mock_asc.get_library_songs_page.return_value = (
             False,
+            [],
+            0,
             "Not authorized to send Apple events to Music. (-1743)",
         )
         mock_asc.classify_error = real_asc.classify_error
@@ -4107,11 +4158,11 @@ class TestLibraryBrowsePagination:
     # ── AppleScript path ──────────────────────────────────────────────────────
 
     def test_applescript_offset_zero_limit_ten_returns_first_page(self, monkeypatch):
-        """offset=0, limit=10: returns first 10 songs; total_count equals items fetched."""
+        """offset=0, limit=10: calls get_library_songs_page(0, 10) and returns page."""
         monkeypatch.setattr(server, "APPLESCRIPT_AVAILABLE", True)
         mock_asc = MagicMock()
-        mock_asc.get_library_songs.return_value = (
-            True, [self._make_as_song(i) for i in range(10)]
+        mock_asc.get_library_songs_page.return_value = (
+            True, [self._make_as_song(i) for i in range(10)], 100, ""
         )
         monkeypatch.setattr(server, "asc", mock_asc)
 
@@ -4119,20 +4170,20 @@ class TestLibraryBrowsePagination:
 
         assert "Track 0" in result
         assert "Track 9" in result
-        mock_asc.get_library_songs.assert_called_once_with(10)
+        mock_asc.get_library_songs_page.assert_called_once_with(0, 10)
 
     def test_applescript_offset_ten_limit_ten_returns_second_page(self, monkeypatch):
-        """offset=10, limit=10: fetches offset+limit=20 songs and returns the second page."""
+        """offset=10, limit=10: calls get_library_songs_page(10, 10) and returns pre-sliced page."""
         monkeypatch.setattr(server, "APPLESCRIPT_AVAILABLE", True)
         mock_asc = MagicMock()
-        mock_asc.get_library_songs.return_value = (
-            True, [self._make_as_song(i) for i in range(20)]
+        mock_asc.get_library_songs_page.return_value = (
+            True, [self._make_as_song(i) for i in range(10, 20)], 100, ""
         )
         monkeypatch.setattr(server, "asc", mock_asc)
 
         result = server._library_browse(item_type="songs", limit=10, offset=10)
 
-        mock_asc.get_library_songs.assert_called_once_with(20)
+        mock_asc.get_library_songs_page.assert_called_once_with(10, 10)
         assert "Track 10" in result
         assert "Track 19" in result
         assert "Track 0" not in result
@@ -4231,22 +4282,17 @@ class TestLibraryBrowsePagination:
     # ── Regression: offset == limit on a large library ───────────────────────
 
     def test_applescript_large_library_second_page_returns_tracks_not_error(self, monkeypatch):
-        """Regression: 1000+ song library, offset=10, limit=10 must return page 2 not an error.
-
-        Root cause: _library_browse was calling get_library_songs(limit) instead of
-        get_library_songs(offset+limit), so only 10 songs were fetched and pagination
-        failed with 'Offset 10 exceeds 10 items'.
-        """
+        """Regression: 1000+ song library, offset=10, limit=10 must return page 2 not an error."""
         monkeypatch.setattr(server, "APPLESCRIPT_AVAILABLE", True)
         mock_asc = MagicMock()
-        mock_asc.get_library_songs.return_value = (
-            True, [self._make_as_song(i) for i in range(20)]
+        mock_asc.get_library_songs_page.return_value = (
+            True, [self._make_as_song(i) for i in range(10, 20)], 1000, ""
         )
         monkeypatch.setattr(server, "asc", mock_asc)
 
         result = server._library_browse(item_type="songs", limit=10, offset=10)
 
-        mock_asc.get_library_songs.assert_called_once_with(20)
+        mock_asc.get_library_songs_page.assert_called_once_with(10, 10)
         assert "Offset 10 exceeds" not in result
         assert "Track 10" in result
         assert "Track 19" in result

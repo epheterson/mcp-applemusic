@@ -1979,6 +1979,101 @@ def get_library_songs(limit: int = 100) -> tuple[bool, list[dict]]:
     return True, tracks
 
 
+def get_library_songs_page(offset: int, limit: int) -> tuple[bool, list[dict], int, str]:
+    """Get a single page of songs from the library using O(limit) range access.
+
+    Args:
+        offset: Zero-based starting position
+        limit: Number of songs to return (must be > 0)
+
+    Returns:
+        Tuple of (success, tracks, total_count, error)
+    """
+    start_pos = offset + 1
+    end_pos = offset + limit
+
+    script = f"""
+    tell application "Music"
+        set total to count of tracks of library playlist 1
+        set output to "total:" & total & "\\n"
+        if total is 0 or {offset} >= total then
+            return output
+        end if
+        set endPos to {end_pos}
+        if endPos > total then set endPos to total
+        set trackList to tracks of library playlist 1
+        repeat with t in items {start_pos} through endPos of trackList
+            try
+                set tName to name of t
+                set tArtist to artist of t
+                set tAlbum to album of t
+                set tDuration to duration of t
+                set tId to persistent ID of t
+                try
+                    set tGenre to genre of t
+                on error
+                    set tGenre to ""
+                end try
+                try
+                    set tYear to year of t as string
+                on error
+                    set tYear to ""
+                end try
+                try
+                    set tExplicit to explicit of t
+                on error
+                    set tExplicit to false
+                end try
+                set output to output & tName & "|||" & tArtist & "|||" & tAlbum & "|||" & tDuration & "|||" & tGenre & "|||" & tYear & "|||" & tId & "|||" & tExplicit & "\\n"
+            on error
+                -- skip inaccessible tracks (broken file references, error -1728)
+            end try
+        end repeat
+        return output
+    end tell
+    """
+    success, output = run_applescript(script)
+    if not success:
+        return False, [], 0, output
+
+    total = 0
+    tracks = []
+    for line in output.split("\n"):
+        if line.startswith("total:"):
+            try:
+                total = int(line[6:].strip())
+            except ValueError:
+                pass
+        elif "|||" in line:
+            parts = line.split("|||")
+            if len(parts) >= 7:
+                try:
+                    dur_sec = float(parts[3])
+                    minutes = int(dur_sec) // 60
+                    seconds = int(dur_sec) % 60
+                    duration = f"{minutes}:{seconds:02d}"
+                except (ValueError, TypeError):
+                    duration = ""
+
+                explicit = "Unknown"
+                if len(parts) >= 8:
+                    explicit = "Yes" if parts[7].lower() == "true" else "No"
+
+                tracks.append(
+                    {
+                        "name": parts[0],
+                        "artist": parts[1],
+                        "album": parts[2],
+                        "duration": duration,
+                        "genre": parts[4],
+                        "year": parts[5],
+                        "id": parts[6],
+                        "explicit": explicit,
+                    }
+                )
+    return True, tracks, total, ""
+
+
 def search_library(query: str, types: str = "all") -> tuple[bool, list[dict]]:
     """Search the local library.
 
