@@ -229,6 +229,10 @@ class TestFolderOperations:
 
     def test_create_nested_folder_path(self):
         """Should create nested folders via slash-separated path."""
+        # Pre-clean in case a prior run failed before cleanup
+        asc.delete_folder("_TEST_OUTER_/_TEST_INNER_")
+        asc.delete_folder("_TEST_OUTER_")
+
         path = "_TEST_OUTER_/_TEST_INNER_"
 
         success, folder_id = asc.create_folder_path(path)
@@ -294,6 +298,9 @@ class TestFolderOperations:
     def test_get_folder_tree(self):
         """Should return folder hierarchy text."""
         folder_name = "_TEST_TREE_FOLDER_"
+
+        # Pre-clean in case a prior run failed before cleanup
+        asc.delete_folder(folder_name)
 
         success, _ = asc.create_folder(folder_name)
         assert success is True

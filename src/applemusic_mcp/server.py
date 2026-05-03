@@ -7,6 +7,7 @@ deleting tracks from playlists, and other operations not supported by the REST A
 import csv
 import io
 import json
+import os
 import re
 import sys
 import time
@@ -821,7 +822,12 @@ def _has_developer_token() -> bool:
     fallback (e.g. AppleScript) use this for feature detection so the raw
     exception doesn't leak to users where the operation could have
     succeeded without API access.
+
+    Set APPLEMUSIC_FORCE_TOKENLESS=1 to force the tokenless path for
+    testing UI automation flows without touching your credentials.
     """
+    if os.environ.get("APPLEMUSIC_FORCE_TOKENLESS") == "1":
+        return False
     try:
         get_developer_token()
         return True
@@ -1988,9 +1994,18 @@ def _auto_search_and_add_to_playlist(
                     )
                 else:
                     steps.append(f"AppleScript playlist add failed after local sync: {as_result}")
+                # On macOS the API always returns 500 for user-created playlists.
+                # Return now so _unified_auto_search_to_playlist can try the UI path.
+                return False, "AppleScript add did not verify in playlist", steps
             else:
                 steps.append(f"Library sync did not complete in {_LIBRARY_SYNC_DEADLINE_S:.0f}s")
-            # Fall through to API attempt below for non-macOS playlist IDs
+                # Same: don't fall through to API for user-created playlists.
+                return (
+                    False,
+                    f"Library sync timed out after {_LIBRARY_SYNC_DEADLINE_S:.0f}s; "
+                    "track may have been added to your library but not to the playlist",
+                    steps,
+                )
 
         # Fall back to API playlist add (requires API-created playlist)
         if not playlist_id:
