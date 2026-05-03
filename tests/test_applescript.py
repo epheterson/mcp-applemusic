@@ -229,9 +229,11 @@ class TestFolderOperations:
 
     def test_create_nested_folder_path(self):
         """Should create nested folders via slash-separated path."""
-        # Pre-clean in case a prior run failed before cleanup
-        asc.delete_folder("_TEST_OUTER_/_TEST_INNER_")
-        asc.delete_folder("_TEST_OUTER_")
+        # Pre-clean all stale instances (multiple may accumulate from failed runs)
+        for _ in range(5):
+            asc.delete_folder("_TEST_OUTER_/_TEST_INNER_")
+            asc.delete_folder("_TEST_OUTER_")
+            asc.delete_folder("_TEST_INNER_")
 
         path = "_TEST_OUTER_/_TEST_INNER_"
 

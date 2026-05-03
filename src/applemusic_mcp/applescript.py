@@ -1385,13 +1385,19 @@ _search_field_cache: str | None = None
 def _get_search_field() -> str:
     """Return the correct search field path for the running Music.app version.
 
-    Probes for the toolbar path (macOS 26+) first; falls back to the sidebar
-    path (macOS 15). Result is cached for the lifetime of the server process.
+    macOS 15: toolbar search field is always visible — probe succeeds immediately.
+    macOS 26: search field only appears in the toolbar after the Search sidebar
+    item is clicked, so we navigate there on a probe miss before retrying.
+
+    Only caches when the toolbar path is confirmed — never caches the sidebar
+    fallback so a transient cold-start miss won't permanently pin the wrong path.
     """
     global _search_field_cache
     if _search_field_cache is not None:
         return _search_field_cache
-    ok, result = run_applescript(f"""
+
+    def _probe_toolbar() -> bool:
+        ok, result = run_applescript(f"""
 tell application "System Events"
     tell process "Music"
         if exists ({_SEARCH_FIELD_TOOLBAR}) then
@@ -1400,15 +1406,32 @@ tell application "System Events"
         return "sidebar"
     end tell
 end tell""")
-    if not ok:
-        # Probe failed (Music.app not yet running, accessibility error, etc.).
-        # Don't cache — return safe default and let the next call retry, so a
-        # transient cold-start failure doesn't pin this session to the wrong path.
-        return _SEARCH_FIELD_SIDEBAR
-    _search_field_cache = (
-        _SEARCH_FIELD_TOOLBAR if result.strip() == "toolbar" else _SEARCH_FIELD_SIDEBAR
-    )
-    return _search_field_cache
+        return ok and result.strip() == "toolbar"
+
+    if _probe_toolbar():
+        _search_field_cache = _SEARCH_FIELD_TOOLBAR
+        return _search_field_cache
+
+    # Toolbar search field not yet visible — send Cmd+F to activate search mode.
+    # On macOS 26, clicking the Search sidebar item only opens the browse view;
+    # Cmd+F is required to make the toolbar text field appear.
+    run_applescript("""
+tell application "System Events"
+    tell process "Music"
+        try
+            keystroke "f" using command down
+            delay 0.5
+        end try
+    end tell
+end tell""")
+
+    if _probe_toolbar():
+        _search_field_cache = _SEARCH_FIELD_TOOLBAR
+        return _search_field_cache
+
+    # Neither probe succeeded — return sidebar path without caching so the next
+    # call retries (handles transient Music.app startup / accessibility timing).
+    return _SEARCH_FIELD_SIDEBAR
 
 
 _GITHUB_ISSUES = "https://github.com/epheterson/mcp-applemusic/issues"
@@ -2360,8 +2383,8 @@ tell application "System Events"
                         -- macOS 26 prepends an empty static text, so search instead of using item 2
                         set typeLine to ""
                         set stTexts to every static text of e
-                        repeat with st in stTexts
-                            set stName to name of st
+                        repeat with stEl in stTexts
+                            set stName to name of stEl
                             if stName contains "·" then
                                 set typeLine to stName
                                 exit repeat
