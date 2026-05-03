@@ -1273,8 +1273,10 @@ def _resolve_input(
                 )
             ]
 
-    # 2. CSV detection (contains comma, not JSON)
-    if "," in value:
+    # 2. CSV detection (contains comma, not JSON, and no artist specified)
+    # When artist is provided the input is a single track/album name — commas
+    # are part of the title (e.g. "Take Me Home, Country Roads"), not separators.
+    if "," in value and not artist:
         for item in value.split(","):
             item = item.strip()
             if item:
@@ -6425,6 +6427,17 @@ if APPLESCRIPT_AVAILABLE:
                                 return f"[Catalog] {msg}"
                             return f"[Catalog] No URL available for: {track_name}"
 
+                        # Default: try UI search to play catalog track directly
+                        if APPLESCRIPT_AVAILABLE:
+                            ui_query = f"{track_name} {track_artist}".strip()
+                            ok, msg = asc.ui_play_result_by_query(ui_query)
+                            if ok:
+                                audit_log.log_action(
+                                    "play_track",
+                                    {"track": track_name, "artist": track_artist, "source": "ui_catalog"},
+                                )
+                                return f"[UI Catalog] {msg}"
+
                         return (
                             f"[Catalog] Found: {track_name} by {track_artist}. "
                             f"Use reveal=True to open in Music, or add_to_library=True to save & play."
@@ -6510,7 +6523,17 @@ if APPLESCRIPT_AVAILABLE:
                     return f"[Catalog] {msg}"
                 return f"[Catalog] No URL available for: {song_name}"
 
-            # Neither flag set - explain options
+            # Default: try UI search to play catalog track directly (no library add needed)
+            if APPLESCRIPT_AVAILABLE:
+                ui_query = f"{song_name} {song_artist}".strip()
+                ok, msg = asc.ui_play_result_by_query(ui_query)
+                if ok:
+                    audit_log.log_action(
+                        "play_track",
+                        {"track": song_name, "artist": song_artist, "source": "ui_catalog"},
+                    )
+                    return f"[UI Catalog] {msg}"
+
             return (
                 f"[Catalog] Found: {song_name} by {song_artist}. "
                 f"Use reveal=True to open in Music, or add_to_library=True to save & play."
