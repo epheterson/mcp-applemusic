@@ -5,6 +5,26 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.1] - 2026-05-04
+
+### Fixed
+
+- **`library(action="browse")` no longer times out on libraries larger than the page limit** — `_library_browse` was fetching only `limit` songs from the top via AppleScript and then slicing, so any request with `offset > 0` left nothing to slice (and `offset=450` on a >500-track library hit a 30s AppleScript timeout). New `get_library_songs_page(offset, limit)` uses `items N through M of trackList` for O(limit) range access (~0.6s vs ~30s for large offsets). Reported and fixed by [@mik-rzo](https://github.com/mik-rzo) in [#15](https://github.com/epheterson/mcp-applemusic/pull/15).
+- **`_apply_pagination` treats `offset == total_count` as a valid "end of list"** rather than an error — required by cursor-style pagination through full library scans. (Pre-existing semantic bug exposed by the new paginated path.)
+
+### Internal
+
+- Extracted `_build_library_track_data` helper to dedupe the track-dict construction + explicit-enrichment + clean_only filter logic that was copy-pasted across two AppleScript branches.
+- `clean_only=True` now routes through the full-fetch path so the displayed `X of Z` total reflects the post-filter count rather than the raw library size.
+- Defensive guard in `get_library_songs_page` rejects `limit <= 0` before any AppleScript runs (the implicit `items 1 through 0` range was invalid).
+
+### Documentation
+
+- Added neutral first-party badges (PyPI version, supported Python versions, monthly downloads via pepy.tech, License, macOS, MCP) to the top of the README.
+- Added `[UI Catalog]` to the documented `playback(action="play")` response prefixes (was inadvertently omitted from the v0.10.0 docs even though the prefix was wired through that release).
+- Documented the screen-unlocked requirement for UI flows.
+- Brief note in Limitations about the [known Music.app/AppleScript playlist-revert bug](https://www.macscripter.net/t/add-current-track-from-apple-music-to-playlist/72058) and how the MCP detects + reports it.
+
 ## [0.10.0] - 2026-05-04
 
 This release consolidates the macOS UI automation paths onto a small set of shared primitives and tightens every data-modifying operation with post-mutation verification. The headline outcome: no more silent false-positive success messages when AppleScript reports OK but the change doesn't actually persist (a real failure mode some user-created playlists exhibit, where iCloud-side reconciliation reverts local AppleScript edits).

@@ -1,5 +1,12 @@
 # mcp-applemusic
 
+[![PyPI](https://img.shields.io/pypi/v/mcp-applemusic.svg)](https://pypi.org/project/mcp-applemusic/)
+[![Python](https://img.shields.io/pypi/pyversions/mcp-applemusic.svg)](https://pypi.org/project/mcp-applemusic/)
+[![Downloads](https://static.pepy.tech/badge/mcp-applemusic/month)](https://pepy.tech/project/mcp-applemusic)
+[![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+[![macOS](https://img.shields.io/badge/macOS-15%20%7C%2026-blue.svg)]()
+[![MCP](https://img.shields.io/badge/MCP-server-purple.svg)](https://modelcontextprotocol.io/)
+
 [MCP](https://modelcontextprotocol.io/) server for Apple Music - lets Claude manage playlists, control playback, and browse your library.
 
 ## Features
@@ -28,7 +35,7 @@
 | Move playlists/folders | ✓ |   |
 | Folder hierarchy/paths | ✓ |   |
 
-**macOS** uses AppleScript for full local control. **API** mode enables catalog features and works cross-platform. **UI*** = UI automation fallback (requires display + Accessibility permissions; Top Results only for search).
+**macOS** uses AppleScript for full local control. **API** mode enables catalog features and works cross-platform. **UI*** = UI automation fallback (requires the screen to be unlocked, display attached, and Accessibility permissions; Top Results only for search).
 
 ---
 
@@ -295,7 +302,7 @@ discover(action="top_songs", artist="The Beatles")
 | `playback(action="settings", ...)` | Get/set volume, shuffle, repeat | AppleScript |
 | `playback(action="airplay", ...)` | List or switch AirPlay devices | AppleScript |
 
-`play` accepts ONE of: `track`, `playlist`, `album`, or `url`. Use `shuffle=True` for shuffled playback. Response shows source: `[Library]`, `[Catalog]`, `[Catalog→Library]`, or `[UI Search]` (when playing catalog tracks without API). Catalog items can be added first (`add_to_library=True`) or opened in Music (`reveal=True`).
+`play` accepts ONE of: `track`, `playlist`, `album`, or `url`. Use `shuffle=True` for shuffled playback. Response shows source: `[Library]`, `[Catalog]`, `[Catalog→Library]`, `[UI Catalog]` (UI played a track API resolved), or `[UI Search]` (UI played a track only the UI search found). Catalog items can be added first (`add_to_library=True`) or opened in Music (`reveal=True`).
 
 **URL playback** — albums, playlists (including personal `pl.u-`), and songs via `?i=`:
 ```
@@ -363,6 +370,8 @@ Exported files are accessible via MCP resources (Claude Desktop can read these):
 
 ### Both Platforms
 - **Tokens expire:** Developer token lasts 180 days. You'll see warnings starting 30 days before expiration. Run `applemusic-mcp generate-token` to renew.
+- **Screen must be unlocked for UI flows:** The catalog search / hover-to-add / play UI paths drive Music.app via System Events; a locked screen blocks them. The MCP detects this and returns a clear error.
+- **A few playlists silently revert AppleScript edits** ([known Music.app/AppleScript bug](https://www.macscripter.net/t/add-current-track-from-apple-music-to-playlist/72058)). The MCP detects the rollback automatically and returns an actionable error suggesting Music.app's right-click → Add to Playlist as a workaround.
 
 ---
 
