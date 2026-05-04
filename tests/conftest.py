@@ -25,14 +25,43 @@ def mock_audit_log_for_all_tests(tmp_path):
 # Clean up test playlists after all tests
 @pytest.fixture(scope="session", autouse=True)
 def cleanup_test_playlists():
-    """Remove test playlists created by tests."""
+    """Remove test debris from the user's Music library at session end.
+
+    Sweeps known test markers used across test classes:
+    - Single names (legacy): __TEST_PLAYLIST__, 🧪 Integration Test Playlist
+    - Prefixed: _TEST_*, _VERIFY*, _UI_TEST_, _SNAPSHOT_TEST_
+
+    Each test ideally cleans up its own debris (per-test setUp/tearDown),
+    but interrupted runs and intermittent iCloud sync hiccups leave behind
+    playlists/folders that pollute the user's library. This is the safety
+    net.
+    """
     yield  # Run tests first
 
     if not asc.is_available():
         return
 
-    # Only remove the test-specific playlist (ignore if doesn't exist)
-    asc.delete_playlist("__TEST_PLAYLIST__")
+    # Single-name targets to delete unconditionally if present.
+    for name in ("__TEST_PLAYLIST__", "🧪 Integration Test Playlist"):
+        try:
+            asc.delete_playlist(name)
+        except Exception:
+            pass
+
+    # Prefix-match targets: enumerate user playlists + folders and delete
+    # any whose name starts with a known test marker. Wrapped in a single
+    # AppleScript for efficiency (one shell-out instead of N).
+    asc.run_applescript("""
+tell application "Music"
+    repeat with p in (every user playlist)
+        set pn to name of p
+        if (pn starts with "_TEST_") or (pn starts with "_VERIFY") or (pn starts with "_UI_TEST_") or (pn starts with "_SNAPSHOT_TEST_") then
+            try
+                delete p
+            end try
+        end if
+    end repeat
+end tell""")
 
 
 @pytest.fixture
