@@ -474,7 +474,7 @@ wheels = [
 
 [[package]]
 name = "mcp-applemusic"
-version = "0.9.6"
+version = "0.10.0"
 source = { editable = "." }
 dependencies = [
     { name = "cryptography" },
