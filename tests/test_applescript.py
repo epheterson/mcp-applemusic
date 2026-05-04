@@ -345,6 +345,43 @@ class TestLibrarySearch:
             assert "id" in t
 
 
+class TestGetLibrarySongsPage:
+    """Integration tests for get_library_songs_page (O(limit) range access)."""
+
+    def test_returns_correct_shape(self):
+        success, tracks, total, error = asc.get_library_songs_page(offset=0, limit=5)
+        assert success is True
+        assert isinstance(tracks, list)
+        assert isinstance(total, int)
+        assert error == ""
+
+    def test_total_reflects_full_library(self):
+        _, _, total_page, _ = asc.get_library_songs_page(offset=0, limit=5)
+        _, _, total_all, _ = asc.get_library_songs_page(offset=0, limit=1)
+        assert total_page == total_all
+
+    def test_offset_returns_different_tracks(self):
+        _, page0, _, _ = asc.get_library_songs_page(offset=0, limit=5)
+        _, page1, _, _ = asc.get_library_songs_page(offset=5, limit=5)
+        if page0 and page1:
+            assert page0[0]["id"] != page1[0]["id"]
+
+    def test_offset_beyond_total_returns_empty(self):
+        success, tracks, total, error = asc.get_library_songs_page(offset=999999, limit=10)
+        assert success is True
+        assert tracks == []
+        assert total >= 0
+        assert error == ""
+
+    def test_track_fields_present(self):
+        success, tracks, _, _ = asc.get_library_songs_page(offset=0, limit=3)
+        assert success is True
+        if tracks:
+            t = tracks[0]
+            for field in ("name", "artist", "album", "duration", "id"):
+                assert field in t
+
+
 class TestLibraryStats:
     """Test library statistics."""
 

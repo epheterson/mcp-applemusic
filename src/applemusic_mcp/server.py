@@ -903,7 +903,9 @@ def _apply_pagination(
     """
     total_count = len(items)
 
-    if offset >= total_count and total_count > 0:
+    # offset == total_count means the caller has paged through everything and is
+    # requesting the next (empty) page. Only error when offset exceeds the total.
+    if offset > total_count and total_count > 0:
         return [], total_count, f"Offset {offset} exceeds {total_count} items"
 
     if offset > 0:
@@ -4622,6 +4624,42 @@ def _catalog_album_details(
 # ============ LIBRARY BROWSING ============
 
 
+def _build_library_track_data(
+    songs: list[dict],
+    fetch_explicit: bool,
+    clean_only: bool,
+) -> list[dict]:
+    """Build output-ready track dicts from AppleScript library song dicts.
+
+    Constructs core fields, enriches with explicit status from cache, and
+    filters out explicit tracks when clean_only is True.
+    """
+    data = [
+        {
+            "name": s.get("name", ""),
+            "artist": s.get("artist", ""),
+            "album": s.get("album", ""),
+            "duration": s.get("duration", ""),
+            "genre": s.get("genre", ""),
+            "year": s.get("year", ""),
+            "id": s.get("id", ""),
+            "explicit": "Unknown",
+        }
+        for s in songs
+    ]
+    if fetch_explicit or clean_only:
+        cache = get_track_cache()
+        for track in data:
+            track_id = track.get("id", "")
+            if track_id:
+                cached_explicit = cache.get_explicit(track_id)
+                if cached_explicit:
+                    track["explicit"] = cached_explicit
+    if clean_only:
+        data = [t for t in data if t.get("explicit") != "Yes"]
+    return data
+
+
 def _library_browse(
     item_type: str = "songs",
     limit: int = 100,
@@ -4644,53 +4682,39 @@ def _library_browse(
 
     # Try AppleScript first for songs (local, instant, no auth required)
     if APPLESCRIPT_AVAILABLE and item_type == "songs":
-        success, as_songs = asc.get_library_songs(limit)
-        if success:
-            if not as_songs:
-                return f"No {item_type} in library"
-            data = []
-            for s in as_songs:
-                data.append(
-                    {
-                        "name": s.get("name", ""),
-                        "artist": s.get("artist", ""),
-                        "album": s.get("album", ""),
-                        "duration": s.get("duration", ""),
-                        "genre": s.get("genre", ""),
-                        "year": s.get("year", ""),
-                        "id": s.get("id", ""),
-                        "explicit": "Unknown",
-                    }
+        if limit > 0 and not clean_only:
+            # O(limit): fetch only the requested page and the true total count.
+            success, as_songs, true_total, as_err = asc.get_library_songs_page(offset, limit)
+            if success:
+                if true_total == 0:
+                    return f"No {item_type} in library"
+                if offset >= true_total:
+                    return f"Offset {offset} exceeds library size of {true_total} songs"
+                data = _build_library_track_data(as_songs, fetch_explicit, clean_only)
+                return format_output(
+                    data, format, export, full, "songs", total_count=true_total, offset=offset
                 )
-
-            # Enrich with explicit status if requested
-            if fetch_explicit or clean_only:
-                cache = get_track_cache()
-                for track in data:
-                    track_id = track.get("id", "")
-                    if track_id:
-                        cached_explicit = cache.get_explicit(track_id)
-                        if cached_explicit:
-                            track["explicit"] = cached_explicit
-
-            # Filter explicit content if clean_only
-            if clean_only:
-                data = [t for t in data if t.get("explicit") != "Yes"]
-
-            # Apply pagination
-            data, total_count, error = _apply_pagination(data, limit, offset)
-            if error:
-                return error
-
-            return format_output(
-                data, format, export, full, "songs", total_count=total_count, offset=offset
-            )
-        # AppleScript failed on macOS — surface the actionable error
-        # instead of cascading to API and leaking "Developer token not
-        # found" when the real cause is Music.app not running or
-        # Automation permissions denied. Same defense as _playlist_list.
-        as_error = str(as_songs) if as_songs else "AppleScript get_library_songs failed"
-        return f"Error browsing library: {_format_applescript_error(as_error, 'browse library')}"
+            as_error = as_err or "AppleScript get_library_songs_page failed"
+            return f"Error browsing library: {_format_applescript_error(as_error, 'browse library')}"
+        else:
+            # Full fetch: limit=0 (all songs) or clean_only=True (needs post-filter total).
+            success, as_songs = asc.get_library_songs(0)
+            if success:
+                if not as_songs:
+                    return f"No {item_type} in library"
+                data = _build_library_track_data(as_songs, fetch_explicit, clean_only)
+                data, total_count, error = _apply_pagination(data, limit, offset)
+                if error:
+                    return error
+                return format_output(
+                    data, format, export, full, "songs", total_count=total_count, offset=offset
+                )
+            # AppleScript failed on macOS — surface the actionable error
+            # instead of cascading to API and leaking "Developer token not
+            # found" when the real cause is Music.app not running or
+            # Automation permissions denied. Same defense as _playlist_list.
+            as_error = str(as_songs) if as_songs else "AppleScript get_library_songs failed"
+            return f"Error browsing library: {_format_applescript_error(as_error, 'browse library')}"
 
     # Fall back to API (non-macOS, or non-songs item_type)
     try:
