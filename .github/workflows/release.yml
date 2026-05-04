@@ -1,0 +1,54 @@
+name: release
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  release:
+    name: Tag + GitHub Release on version bump
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write  # create tags and releases
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # full history so we can list commits since last tag
+
+      - name: Read version from pyproject.toml
+        id: version
+        run: |
+          # Extract `version = "X.Y.Z"` from the [project] block.
+          ver=$(grep -E '^version = ' pyproject.toml | head -1 | sed -E 's/version = "(.*)"/\1/')
+          echo "version=$ver" >> "$GITHUB_OUTPUT"
+          echo "tag=v$ver" >> "$GITHUB_OUTPUT"
+          echo "Detected version: $ver"
+
+      - name: Check if tag already exists
+        id: check
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          if git rev-parse "$TAG" >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "Tag $TAG already exists - nothing to release."
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+            echo "Tag $TAG does not exist - will create release."
+          fi
+
+      - name: Create tag + GitHub Release
+        if: steps.check.outputs.exists == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.version.outputs.tag }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          # Tag the merge commit and create the GitHub Release.
+          # --generate-notes populates the body from PR/commit messages
+          # since the previous release.
+          gh release create "$TAG" \
+            --title "v$VERSION" \
+            --generate-notes \
+            --target "$GITHUB_SHA"
+          echo "Created release $TAG"
