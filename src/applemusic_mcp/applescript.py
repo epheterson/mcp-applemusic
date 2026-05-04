@@ -2387,14 +2387,43 @@ def _focus_search_field(query: str) -> tuple[bool, str]:
 
     _ensure_music_frontmost()
 
-    # Original consolidated approach: sidebar Search-row click + Cmd+F +
-    # set value + Enter, all in one AppleScript so Music.app's window state
-    # can't drift between calls. This is the working pattern that shipped
-    # in v0.9.6 and was inadvertently broken when I tried to refactor away
-    # the sidebar click. _get_search_field() resolves the path; the
-    # AppleScript itself does the navigation + activation + typing.
-    search_field_path = _get_search_field()
-    ok, err = run_applescript(f"""
+    # Try once with the cached/probed path; on a UI element error, invalidate
+    # the cache and retry once with a fresh probe. The toolbar layout can
+    # change across Music.app navigations (sidebar vs toolbar field, group
+    # presence) and a stale cache otherwise breaks the session until restart.
+    # The script itself does sidebar Search-row click + Cmd+F + set value +
+    # Enter as one consolidated AppleScript so window state can't drift.
+    ok, err = _emit_search_applescript(_get_search_field(), query)
+    if not ok and _is_path_error(err):
+        global _search_field_cache
+        _search_field_cache = None
+        ok, err = _emit_search_applescript(_get_search_field(), query)
+    if ok:
+        return True, ""
+
+    accessible, access_reason = check_ui_accessible()
+    if not accessible:
+        return False, access_reason
+    return False, _classify_as_error(err)
+
+
+# AppleScript errors that mean "the cached UI path no longer resolves" — as
+# opposed to environmental causes (locked screen, missing Accessibility
+# permission). Used to decide when to invalidate the search-field cache.
+_PATH_ERROR_MARKERS = ("Can't get", "AppleEvent handler failed", "-10000", "-1728")
+
+
+def _is_path_error(err: str) -> bool:
+    return any(m in err for m in _PATH_ERROR_MARKERS)
+
+
+def _emit_search_applescript(search_field_path: str, query: str) -> tuple[bool, str]:
+    """Emit the consolidated search AppleScript with the resolved path.
+
+    Extracted so _focus_search_field can retry with a fresh path on cache
+    miss without duplicating the script body.
+    """
+    return run_applescript(f"""
 tell application "System Events"
     tell process "Music"
         try
@@ -2418,12 +2447,6 @@ tell application "System Events"
         key code 36
     end tell
 end tell""")
-    if not ok:
-        accessible, access_reason = check_ui_accessible()
-        if not accessible:
-            return False, access_reason
-        return False, _classify_as_error(err)
-    return True, ""
 
 
 _PARSE_TOP_RESULTS_QUERY = f"""
@@ -2497,38 +2520,38 @@ def _wait_for_top_results(timeout: float = 5.0) -> tuple[bool, str]:
     return True, ""
 
 
-def _parse_top_results(raw: str) -> list[dict]:
-    """Parse the '|||'-delimited output from _wait_for_top_results into dicts.
+# Type-line separators Apple uses inside strings like "Song · Radiohead".
+# U+2004 (three-per-em space) is the current macOS form; regular ASCII space
+# is kept as a fallback for forward/backward-compat across macOS versions.
+_TYPE_LINE_SEPS = (" · ", " · ")
 
-    Apple uses U+2004 (three-per-em space) + U+00B7 (middle dot) + U+2004
-    as the separator inside type-lines like "Song · Radiohead". Try a
-    few separator variants for forward-compatibility across macOS versions.
-    """
+
+def _parse_top_results(raw: str) -> list[dict]:
+    """Parse the '|||'-delimited output from _wait_for_top_results into dicts."""
     results = []
     for line in raw.strip().split("\n"):
         line = line.strip()
         if not line or "|||" not in line:
             continue
         parts = line.split("|||")
-        if len(parts) >= 3:
-            name = parts[1].strip()
-            type_line = parts[2].strip()
-            result_type = ""
-            artist = ""
-            for sep in [" · ", " · ", " · "]:
-                if sep in type_line:
-                    result_type, artist = type_line.split(sep, 1)
-                    break
-            else:
-                result_type = type_line
-            results.append(
-                {
-                    "name": name,
-                    "type": result_type.strip(),
-                    "artist": artist.strip(),
-                    "index": int(parts[0]),
-                }
-            )
+        if len(parts) < 3:
+            continue
+        name = parts[1].strip()
+        type_line = parts[2].strip()
+        result_type = type_line
+        artist = ""
+        for sep in _TYPE_LINE_SEPS:
+            if sep in type_line:
+                result_type, artist = type_line.split(sep, 1)
+                break
+        results.append(
+            {
+                "name": name,
+                "type": result_type.strip(),
+                "artist": artist.strip(),
+                "index": int(parts[0]),
+            }
+        )
     return results
 
 
@@ -2681,6 +2704,13 @@ def ui_search_catalog(query: str) -> tuple[bool, list[dict], str]:
     Types the query into the search field, submits it, and parses
     the "Top Results" section from the results page.
 
+    Wraps the search flow in a single transparent retry: if the first
+    attempt fails (transient UI flake — popover state, focus jitter,
+    user moved the mouse mid-flow, cached search-field path went stale),
+    sleep ~1s and try once more. Two attempts total. Real users WILL
+    interact with the keyboard/mouse during automation; this absorbs
+    the most common interference modes without surfacing as a hard fail.
+
     Args:
         query: Search query (e.g. "Radiohead Creep", "Taylor Swift")
 
@@ -2693,17 +2723,22 @@ def ui_search_catalog(query: str) -> tuple[bool, list[dict], str]:
     if not query or not query.strip():
         return False, [], "Empty query"
 
-    ok, err = _focus_search_field(query)
-    if not ok:
-        return False, [], err
-
-    ok, raw = _wait_for_top_results()
-    if not ok:
-        return False, [], raw
-    if not raw:
-        return True, [], ""
-
-    return True, _parse_top_results(raw), ""
+    last_err = ""
+    for attempt in range(2):
+        if attempt > 0:
+            time.sleep(1.0)
+        ok, err = _focus_search_field(query)
+        if not ok:
+            last_err = err
+            continue
+        ok, raw = _wait_for_top_results()
+        if not ok:
+            last_err = raw
+            continue
+        if not raw:
+            return True, [], ""
+        return True, _parse_top_results(raw), ""
+    return False, [], last_err
 
 
 def ui_clear_search() -> None:
@@ -2865,28 +2900,29 @@ def ui_add_to_playlist(playlist_name: str, query: str, artist: str = "") -> tupl
         return False, f"Added to library but sync not confirmed for '{track_name}'"
 
     # Add to playlist via existing backend, then verify the track actually
-    # persisted. Some user-created playlists silently revert AppleScript
-    # `duplicate` edits server-side; without this check the user gets a
-    # false-positive success while the playlist is unchanged.
+    # persisted. Some user-created playlists accept AppleScript `duplicate`
+    # for ~1 second, then revert the local change (Music.app local
+    # reconciliation; mechanism unknown but reproducible). Without a settle
+    # delay before the first probe, the verify lands inside the rollback
+    # transient window and returns a false-positive success.
     ok, result = add_track_to_playlist(playlist_name, track_name, track_artist)
     if not ok:
         return False, f"Added to library but failed to add to playlist: {result}"
-    # Quick post-add verify with retry; same pattern as server.py's _playlist_add.
-    exists_ok, exists = track_exists_in_playlist(playlist_name, track_name, track_artist or None)
-    if exists_ok and exists:
-        return True, f"Added {track_name} by {track_artist} to {playlist_name}"
-    time.sleep(1.0)
-    ok2, _result2 = add_track_to_playlist(playlist_name, track_name, track_artist)
-    if ok2:
+    # Sleep past the rollback window before checking. 2s covers the observed
+    # ~1s revert with headroom; matches server.py:_ROLLBACK_SETTLE_S.
+    time.sleep(2.0)
+    for _ in range(3):
         exists_ok, exists = track_exists_in_playlist(
             playlist_name, track_name, track_artist or None
         )
         if exists_ok and exists:
             return True, f"Added {track_name} by {track_artist} to {playlist_name}"
+        time.sleep(1.0)
     return False, (
-        f"Added '{track_name}' to library but it did not persist in '{playlist_name}' "
-        f"after retry. Some user-created playlists silently revert AppleScript edits "
-        f"server-side; adding manually via Music.app's right-click → Add to Playlist usually works."
+        f"Added '{track_name}' to library but it did not persist in "
+        f"'{playlist_name}' after retry. Some user-created playlists silently "
+        f"revert AppleScript edits server-side; adding manually via Music.app's "
+        f"right-click → Add to Playlist usually works."
     )
 
 

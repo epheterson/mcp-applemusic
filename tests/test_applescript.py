@@ -512,6 +512,20 @@ tell application "Music"
     end if
 end tell""")
 
+    @classmethod
+    def teardown_class(cls):
+        """Delete the test playlist after the whole class finishes so we
+        don't leave debris in the user's Music library. Best-effort."""
+        try:
+            asc.run_applescript(f"""
+tell application "Music"
+    try
+        delete (first user playlist whose name is "{cls.TEST_PLAYLIST}")
+    end try
+end tell""")
+        except Exception:
+            pass
+
     def test_artist_exact_match_preferred_over_contains(self):
         """Should prefer exact artist match over partial contains match.
 
