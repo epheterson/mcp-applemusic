@@ -5,6 +5,7 @@ import time
 from unittest.mock import patch, MagicMock
 
 import pytest
+import sys
 import responses
 
 from applemusic_mcp import server
@@ -170,6 +171,13 @@ class TestCreatePlaylist:
         assert "p.newplaylist123" in result
 
 
+@pytest.mark.skipif(
+    sys.platform != "darwin",
+    reason="_playlist_rename is defined inside `if APPLESCRIPT_AVAILABLE:` "
+    "and only materializes at import time on macOS. Tests that monkeypatch "
+    "APPLESCRIPT_AVAILABLE=True at runtime can't conjure the function on "
+    "Linux. Follow-up: move the wrapper out of the conditional block.",
+)
 class TestRenamePlaylist:
     """Tests for rename_playlist function (AppleScript path)."""
 
@@ -2140,6 +2148,9 @@ class TestAlbumDisambiguation:
 
         monkeypatch.setattr(server, "_resolve_album", tracking_resolve)
         monkeypatch.setattr(server, "APPLESCRIPT_AVAILABLE", True)
+        # Album-add path requires a developer token; mock so the test
+        # reaches _resolve_album on systems without a real token (CI).
+        monkeypatch.setattr(server, "_has_developer_token", lambda: True)
 
         mock_asc = MagicMock()
         mock_asc.get_playlists.return_value = (
