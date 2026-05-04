@@ -40,6 +40,7 @@ dependencies = [
 dev = [
     "pytest>=7.0.0",
     "pytest-mock>=3.0.0",
+    "pytest-xdist>=3.0.0",  # parallel test execution: pytest -n auto
     "responses>=0.23.0",
     "black>=23.0.0",
     "ruff>=0.1.0",
@@ -63,3 +64,12 @@ target-version = ["py310"]
 [tool.ruff]
 line-length = 100
 select = ["E", "F", "I", "W"]
+
+[tool.pytest.ini_options]
+markers = [
+    "slow: marks tests as slow (live AppleScript / Music.app I/O); deselect with '-m \"not slow\"'",
+    "ui: marks tests that drive Music.app UI automation; require TEST_UI=1 + visible Music.app",
+]
+# Default: skip slow + ui tests unless explicitly opted in. Local pre-commit
+# runs the fast subset; CI and `make test-all` run everything.
+addopts = "-m 'not slow and not ui'"

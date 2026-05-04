@@ -1,0 +1,39 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    name: pytest (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12", "3.13"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        env:
+          PYVER: ${{ matrix.python-version }}
+        run: uv python install "$PYVER"
+
+      - name: Install project
+        run: uv sync --all-extras --dev
+
+      - name: Run tests
+        # AppleScript-dependent tests (test_applescript.py) auto-skip on
+        # non-darwin via pytestmark in the file. Cross-platform mock-based
+        # tests in test_server.py / test_auth.py / test_integration.py run
+        # on every Python version.
+        run: uv run pytest tests/ -q --tb=short

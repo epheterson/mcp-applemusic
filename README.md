@@ -1,8 +1,8 @@
 # mcp-applemusic
 
-[![PyPI](https://img.shields.io/pypi/v/mcp-applemusic.svg)](https://pypi.org/project/mcp-applemusic/)
-[![Python](https://img.shields.io/pypi/pyversions/mcp-applemusic.svg)](https://pypi.org/project/mcp-applemusic/)
-[![Downloads](https://static.pepy.tech/badge/mcp-applemusic/month)](https://pepy.tech/project/mcp-applemusic)
+[![Release](https://img.shields.io/github/v/release/epheterson/mcp-applemusic.svg?label=release)](https://github.com/epheterson/mcp-applemusic/releases)
+[![Python](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
+[![Downloads](https://static.pepy.tech/badge/mcp-applemusic)](https://pepy.tech/project/mcp-applemusic)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![macOS](https://img.shields.io/badge/macOS-15%20%7C%2026-blue.svg)]()
 [![MCP](https://img.shields.io/badge/MCP-server-purple.svg)](https://modelcontextprotocol.io/)
