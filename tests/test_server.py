@@ -2244,7 +2244,12 @@ class TestAlbumDisambiguation:
             True,
             [{"name": "My Playlist", "id": "abc123", "count": 10}],
         )
-        mock_asc.track_exists_in_playlist.return_value = (True, False)
+        # First call: duplicate-check pre-add → False (not a duplicate, proceed).
+        # Subsequent calls: post-add verification → True (track now in playlist).
+        # The post-add verify was added so AppleScript false-positive successes
+        # (silent `duplicate` no-op when library sync hasn't propagated) get
+        # caught instead of returned to the user as success.
+        mock_asc.track_exists_in_playlist.side_effect = [(True, False)] + [(True, True)] * 10
         mock_asc.add_track_to_playlist.return_value = (True, "Added Hot Potato by The Wiggles")
         monkeypatch.setattr(server, "asc", mock_asc)
 

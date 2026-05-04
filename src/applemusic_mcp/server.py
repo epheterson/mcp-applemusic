@@ -3180,14 +3180,44 @@ def _playlist_add(
                         steps.append(f"Skipped duplicate: {name}")
                         continue
 
-                # Add via AppleScript
+                # Add via AppleScript, then verify the track actually landed
+                # in the playlist. The AppleScript `duplicate` operation can
+                # silently no-op when the catalog→library sync hasn't fully
+                # propagated, leaving us with a false-positive success. Other
+                # paths (_smart_as_add_track_to_playlist, _unified_auto_search_to_playlist)
+                # already verify; this API-by-name path was an audit miss.
                 success, result = asc.add_track_to_playlist(
                     resolved.applescript_name, name, artist_name if artist_name else None
                 )
-                if success:
+                if not success:
+                    errors.append(f"{name}: {result}")
+                elif not verify:
+                    added.append(f"{name} - {artist_name}" if artist_name else name)
+                elif _verify_track_in_playlist(
+                    resolved.applescript_name, name, artist_name or None
+                ):
                     added.append(f"{name} - {artist_name}" if artist_name else name)
                 else:
-                    errors.append(f"{name}: {result}")
+                    # AppleScript reported success but verify says the track
+                    # isn't in the playlist. Retry once to absorb iCloud
+                    # library sync lag, then surface the failure clearly.
+                    time.sleep(_VERIFY_DELAY_S)
+                    success2, result2 = asc.add_track_to_playlist(
+                        resolved.applescript_name,
+                        name,
+                        artist_name if artist_name else None,
+                    )
+                    if success2 and _verify_track_in_playlist(
+                        resolved.applescript_name, name, artist_name or None
+                    ):
+                        added.append(f"{name} - {artist_name}" if artist_name else name)
+                    else:
+                        errors.append(
+                            f"{name}: AppleScript reported success but track did not "
+                            f"appear in playlist after retry "
+                            f"(library sync lag, or matched a different track). "
+                            f"Detail: {result2 if not success2 else 'verify failed'}"
+                        )
 
         # Log successful adds
         if added:
