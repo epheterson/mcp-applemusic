@@ -4333,3 +4333,17 @@ class TestLibraryBrowsePagination:
         assert "Track 10" in result
         assert "Track 19" in result
         assert "Track 0" not in result
+
+    def test_applescript_clean_only_uses_full_fetch_with_accurate_count(self, monkeypatch):
+        """clean_only=True uses the full-fetch path so the reported total reflects post-filter count."""
+        monkeypatch.setattr(server, "APPLESCRIPT_AVAILABLE", True)
+        mock_asc = MagicMock()
+        songs = [self._make_as_song(i) for i in range(5)]
+        mock_asc.get_library_songs.return_value = (True, songs)
+        monkeypatch.setattr(server, "asc", mock_asc)
+
+        result = server._library_browse(item_type="songs", limit=10, offset=0, clean_only=True)
+
+        mock_asc.get_library_songs.assert_called_once_with(0)
+        mock_asc.get_library_songs_page.assert_not_called()
+        assert result is not None
