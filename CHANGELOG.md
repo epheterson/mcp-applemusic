@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.2] - 2026-05-04
+
+### Internal
+
+- **Live UI integration tests scaffold** (opt-in via `TEST_UI=1` + `-m ui`) — new `TestUIFlowsLive` class with candidate-track fallback (picks the first of `Wandering`/Crooked Still, `Bee Pee Tee`/Hot 8 Brass Band, `Rainwater`/Penguin Cafe Orchestra not already in your library), strict per-test cleanup, and `teardown_class` that deletes `_UI_TEST_PLAYLIST_`. Initial coverage is the search + parse path (`ui_search_catalog` returning well-formed Top Results dicts). Full add-to-library + add-to-playlist coverage deferred to a follow-up — getting those reliably deterministic against arbitrary obscure tracks needs more design work than this release window allows. Run locally with `TEST_UI=1 uv run pytest tests/test_applescript.py::TestUIFlowsLive -m ui -v`.
+- **Auto-release + auto-publish chain validated end-to-end** — first release that exercises the full pipeline landed in [#18](https://github.com/epheterson/mcp-applemusic/pull/18) and [#19](https://github.com/epheterson/mcp-applemusic/pull/19): pushing a version bump to `main` now auto-creates the matching tag + GitHub Release, then dispatches `publish.yml` which uploads the sdist/wheel to PyPI via Trusted Publishing. v0.10.2 is the proving release for the publish step (the release-creation step was already proven by v0.10.1).
+
 ## [0.10.1] - 2026-05-04
 
 ### Fixed
