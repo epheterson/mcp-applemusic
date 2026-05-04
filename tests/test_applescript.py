@@ -496,6 +496,22 @@ class TestAddTrackDisambiguation:
 
     TEST_PLAYLIST = "🧪 Integration Test Playlist"
 
+    def setup_method(self):
+        """Auto-create the test playlist if missing (e.g. iCloud sync deleted it).
+        Without this, all tests in this class fail with cryptic 'add failed'
+        errors when the playlist isn't present."""
+        ok, _ = asc.run_applescript(f"""
+tell application "Music"
+    set found to false
+    try
+        set p to first user playlist whose name is "{self.TEST_PLAYLIST}"
+        set found to true
+    end try
+    if not found then
+        make new playlist with properties {{name:"{self.TEST_PLAYLIST}"}}
+    end if
+end tell""")
+
     def test_artist_exact_match_preferred_over_contains(self):
         """Should prefer exact artist match over partial contains match.
 

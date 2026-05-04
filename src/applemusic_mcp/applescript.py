@@ -2386,6 +2386,13 @@ def _focus_search_field(query: str) -> tuple[bool, str]:
         return False, "Empty query"
 
     _ensure_music_frontmost()
+
+    # Original consolidated approach: sidebar Search-row click + Cmd+F +
+    # set value + Enter, all in one AppleScript so Music.app's window state
+    # can't drift between calls. This is the working pattern that shipped
+    # in v0.9.6 and was inadvertently broken when I tried to refactor away
+    # the sidebar click. _get_search_field() resolves the path; the
+    # AppleScript itself does the navigation + activation + typing.
     search_field_path = _get_search_field()
     ok, err = run_applescript(f"""
 tell application "System Events"
@@ -2402,6 +2409,12 @@ tell application "System Events"
         delay 0.2
         set value of searchField to "{_escape_for_applescript(query)}"
         delay 1.0
+        -- Two Enters: first commits the search (navigates to results page);
+        -- second dismisses the autocomplete popover that lingers and blocks
+        -- subsequent hover-to-click on result rows. Eric's manual workflow
+        -- requires two Enters to clear the popover; mirroring that here.
+        key code 36
+        delay 0.4
         key code 36
     end tell
 end tell""")
