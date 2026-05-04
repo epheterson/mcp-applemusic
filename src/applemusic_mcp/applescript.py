@@ -2751,11 +2751,20 @@ end tell"""
     inner_pos = ""
     deadline = time.monotonic() + max_wait
     found = False
+    rehover_at = time.monotonic() + (max_wait / 2)  # re-hover halfway through
     while time.monotonic() < deadline:
         ok, inner_pos = run_applescript(poll_query)
         if ok and inner_pos and inner_pos.strip() not in ("NOT_FOUND", "NO_RESULTS"):
             found = True
             break
+        # If the first hover didn't take (macOS 26 sometimes drops mouseMoved
+        # events even with the nudge), try once more partway through the
+        # polling window. This is the difference between a flaky test and a
+        # reliable one — the button reveal is hover-event-dependent and a
+        # single hover isn't always enough.
+        if time.monotonic() > rehover_at:
+            _hover_with_nudge(cx, cy)
+            rehover_at = float("inf")  # only retry once
         time.sleep(0.1)
     if not found:
         return False, "sub-element not visible after hover"
@@ -2961,18 +2970,68 @@ def ui_add_to_playlist(playlist_name: str, query: str, artist: str = "") -> tupl
         ui_clear_search()
         return False, why or f"No results found for '{query}'"
 
-    # Find best song result
+    # Find best song result. STRICT matching on BOTH name and artist —
+    # never silently substitute a wildly different result. Earlier behavior
+    # (`target = results[0]` on no match) caused real wrong-track adds that
+    # verify couldn't catch because the wrong track DID land in the playlist.
+    # We also reject same-artist different-track substitutions (e.g. picking
+    # "Undone In Sorrow" by Crooked Still when the user asked for "Wandering"
+    # by Crooked Still).
+    #
+    # Strategy: derive the track-name portion of the query by stripping the
+    # artist (if provided) and require Song results to contain at least one
+    # significant token from that portion in their name.
+    if artist:
+        track_query_part = query.lower().replace(artist.lower(), "").strip()
+    else:
+        track_query_part = query.lower().strip()
+    # Ignore very short tokens ("a", "to", "by") — they'd match almost anything.
+    name_tokens = [t for t in track_query_part.split() if len(t) >= 3]
+
+    def _name_matches(result_name: str) -> bool:
+        if not name_tokens:
+            # Caller gave only an artist (no track query content) — accept any
+            # Song by that artist. Rare but legitimate ("add me anything by X").
+            return True
+        rname = result_name.lower()
+        return any(tok in rname for tok in name_tokens)
+
     target = None
+    first_song = None
     for r in results:
         if r["type"] == "Song":
+            if first_song is None:
+                first_song = r
             if artist and artist.lower() not in r.get("artist", "").lower():
+                continue
+            if not _name_matches(r.get("name", "")):
                 continue
             target = r
             break
 
     if target is None:
-        # Fall back to first result if no Song type match
-        target = results[0]
+        # No Song result matched both name and artist. Surface the closest
+        # candidate so the caller can see why we declined to substitute.
+        closest = first_song.get("name") if first_song else None
+        closest_artist = first_song.get("artist", "?") if first_song else None
+        if artist and closest:
+            return False, (
+                f"No Song result for {query!r} by {artist!r} in Top Results. "
+                f"Closest Song was {closest!r} by {closest_artist!r}; not "
+                f"adding because name/artist don't match the request."
+            )
+        if first_song is None:
+            return False, (
+                f"No Song-type Top Result for {query!r} (only Albums/Artists "
+                f"surfaced). Try a more specific query."
+            )
+        # No artist supplied and the first Song's name didn't match query
+        # tokens — still fail loudly rather than substitute.
+        return False, (
+            f"Top Results for {query!r} did not include a Song whose name "
+            f"matched the query. Closest was {closest!r}; refusing to "
+            f"silently substitute."
+        )
 
     # Add to library
     ok, msg = ui_add_to_library(target["name"])
