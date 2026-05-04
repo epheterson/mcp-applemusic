@@ -2851,11 +2851,30 @@ def ui_add_to_playlist(playlist_name: str, query: str, artist: str = "") -> tupl
     else:
         return False, f"Added to library but sync not confirmed for '{track_name}'"
 
-    # Add to playlist via existing backend
+    # Add to playlist via existing backend, then verify the track actually
+    # persisted. Some user-created playlists silently revert AppleScript
+    # `duplicate` edits server-side; without this check the user gets a
+    # false-positive success while the playlist is unchanged.
     ok, result = add_track_to_playlist(playlist_name, track_name, track_artist)
-    if ok:
+    if not ok:
+        return False, f"Added to library but failed to add to playlist: {result}"
+    # Quick post-add verify with retry; same pattern as server.py's _playlist_add.
+    exists_ok, exists = track_exists_in_playlist(playlist_name, track_name, track_artist or None)
+    if exists_ok and exists:
         return True, f"Added {track_name} by {track_artist} to {playlist_name}"
-    return False, f"Added to library but failed to add to playlist: {result}"
+    time.sleep(1.0)
+    ok2, _result2 = add_track_to_playlist(playlist_name, track_name, track_artist)
+    if ok2:
+        exists_ok, exists = track_exists_in_playlist(
+            playlist_name, track_name, track_artist or None
+        )
+        if exists_ok and exists:
+            return True, f"Added {track_name} by {track_artist} to {playlist_name}"
+    return False, (
+        f"Added '{track_name}' to library but it did not persist in '{playlist_name}' "
+        f"after retry. Some user-created playlists silently revert AppleScript edits "
+        f"server-side; adding manually via Music.app's right-click → Add to Playlist usually works."
+    )
 
 
 # =============================================================================

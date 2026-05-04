@@ -1762,6 +1762,30 @@ def _smart_as_add_track_to_playlist(
     return False, result, None
 
 
+def _verify_track_not_in_playlist(
+    playlist_name: str,
+    track_name: str,
+    artist: str,
+) -> bool:
+    """Confirm a track is NOT in a playlist, with retries.
+
+    Inverse of _verify_track_in_playlist — used after remove operations to
+    catch the symmetric false-positive: AppleScript reports successful
+    removal but the track is still there (server-side state didn't accept
+    the local edit). Retries to absorb propagation lag in the success case
+    where removal is genuine but the local query is stale.
+    """
+    if not APPLESCRIPT_AVAILABLE or not track_name:
+        return False
+    for i in range(_VERIFY_ATTEMPTS):
+        if i > 0:
+            time.sleep(_VERIFY_DELAY_S)
+        ok, exists = asc.track_exists_in_playlist(playlist_name, track_name, artist or None)
+        if ok and not exists:
+            return True
+    return False
+
+
 def _verify_track_in_playlist(
     playlist_name: str,
     track_name: str,
@@ -3067,6 +3091,36 @@ def _playlist_add(
             success, result, split_match = _smart_as_add_track_to_playlist(
                 resolved.applescript_name, name, track_artist or None, track_album or None
             )
+            # Verify the add actually persisted. AppleScript `duplicate` can
+            # return success while iCloud Library silently rolls back the
+            # local edit on user-created (non-API) playlists. Without this
+            # check the user gets a false-positive "Added 1 track(s)" while
+            # the playlist is unchanged. _smart_as_add_track_to_playlist's
+            # split-recovery path already verifies; the primary attempt does
+            # not (deliberate latency choice — see test_first_attempt_success_does_not_verify).
+            if success and split_match is None and verify:
+                v_name, v_artist = name, track_artist or ""
+                if not _verify_track_in_playlist(
+                    resolved.applescript_name, v_name, v_artist
+                ):
+                    time.sleep(_VERIFY_DELAY_S)
+                    success, result, split_match = _smart_as_add_track_to_playlist(
+                        resolved.applescript_name,
+                        name,
+                        track_artist or None,
+                        track_album or None,
+                    )
+                    if success and not _verify_track_in_playlist(
+                        resolved.applescript_name, v_name, v_artist
+                    ):
+                        success = False
+                        result = (
+                            f"AppleScript reported success but the track did not "
+                            f"persist in '{resolved.applescript_name}' after retry. "
+                            f"Some user-created playlists silently revert "
+                            f"AppleScript edits server-side; adding manually via "
+                            f"Music.app's right-click → Add to Playlist usually works."
+                        )
             if success:
                 if split_match:
                     s_name, s_artist = split_match
@@ -3214,8 +3268,10 @@ def _playlist_add(
                     else:
                         errors.append(
                             f"{name}: AppleScript reported success but track did not "
-                            f"appear in playlist after retry "
-                            f"(library sync lag, or matched a different track). "
+                            f"persist in playlist after retry. Some user-created "
+                            f"playlists silently revert AppleScript edits server-side; "
+                            f"adding manually via Music.app's right-click → Add to "
+                            f"Playlist usually works. "
                             f"Detail: {result2 if not success2 else 'verify failed'}"
                         )
 
@@ -3926,7 +3982,21 @@ def _library_add_track_via_ui(query: str, search_artist: str) -> tuple[bool, str
     asc.ui_clear_search()
     if not ok:
         return False, f"Failed to add to library: {msg}"
-    return True, f"{target_name} by {target_artist}"
+    # Verify the track actually appears in the local library before reporting
+    # success. iCloud sync from the UI add is normally near-instantaneous,
+    # but a brief poll covers slow sync. Without this, a downstream playlist-
+    # add would fail with the more confusing "Track not found in library" error.
+    for attempt in range(3):
+        if attempt > 0:
+            time.sleep(1.0)
+        lib_ok, lib_results = asc.search_library(target_name, "songs")
+        if lib_ok and lib_results:
+            return True, f"{target_name} by {target_artist}"
+    return False, (
+        f"Add to Library button was clicked for '{target_name}' but the track "
+        f"did not appear in the local library after retry. iCloud Library sync "
+        f"may be paused or this track may not be available for library-add."
+    )
 
 
 def _library_add(
@@ -6739,6 +6809,7 @@ if APPLESCRIPT_AVAILABLE:
         playlist: str = "",
         track: str = "",
         artist: str = "",
+        verify: bool = True,
     ) -> str:
         """Remove track(s) from a playlist (macOS). Removes from playlist only, not library."""
         # Resolve playlist (name-based only for removal)
@@ -6756,6 +6827,32 @@ if APPLESCRIPT_AVAILABLE:
         results = []
         errors = []
 
+        def _record(ok: bool, msg: str, name: Optional[str], track_artist: Optional[str], err_prefix: str):
+            """Record an asc.remove_track_from_playlist outcome with verify-after-remove.
+
+            On success, confirms the track is genuinely gone from the playlist —
+            same false-positive class as add (some user-created playlists
+            silently revert AppleScript edits server-side). On verify miss,
+            returns the action to errors with a clear caveat.
+            """
+            if not ok:
+                errors.append(f"{err_prefix}: {msg}")
+                return
+            if not verify or name is None:
+                results.append(msg)
+                return
+            if _verify_track_not_in_playlist(
+                resolved.applescript_name, name, track_artist or ""
+            ):
+                results.append(msg)
+            else:
+                errors.append(
+                    f"{err_prefix}: AppleScript reported success but track still "
+                    f"appears in '{resolved.applescript_name}'. Some user-created "
+                    f"playlists silently revert AppleScript edits server-side; "
+                    f"removing manually via Music.app usually works."
+                )
+
         # Resolve track input
         track_resolved = _resolve_track(track, artist)
 
@@ -6765,17 +6862,14 @@ if APPLESCRIPT_AVAILABLE:
                 continue
 
             if r.input_type == InputType.PERSISTENT_ID:
-                # Remove by persistent ID
+                # Remove by persistent ID — verify by name/artist requires a
+                # name lookup we don't have here; verify is skipped.
                 success, result = asc.remove_track_from_playlist(
                     resolved.applescript_name, track_id=r.value
                 )
-                if success:
-                    results.append(result)
-                else:
-                    errors.append(f"ID {r.value}: {result}")
+                _record(success, result, name=None, track_artist=None, err_prefix=f"ID {r.value}")
 
             elif r.input_type == InputType.CATALOG_ID:
-                # Try cache lookup to get track name
                 cache = get_track_cache()
                 info = cache.get_track_info(r.value)
                 if info and info.get("name"):
@@ -6784,15 +6878,17 @@ if APPLESCRIPT_AVAILABLE:
                         track_name=info["name"],
                         artist=info.get("artist") or None,
                     )
-                    if success:
-                        results.append(result)
-                    else:
-                        errors.append(f"{info['name']}: {result}")
+                    _record(
+                        success,
+                        result,
+                        name=info["name"],
+                        track_artist=info.get("artist"),
+                        err_prefix=info["name"],
+                    )
                 else:
                     errors.append(f"Catalog ID {r.value}: Not in cache - use track name instead")
 
             elif r.input_type == InputType.LIBRARY_ID:
-                # Try cache lookup to get track name
                 cache = get_track_cache()
                 info = cache.get_track_info(r.value)
                 if info and info.get("name"):
@@ -6801,22 +6897,21 @@ if APPLESCRIPT_AVAILABLE:
                         track_name=info["name"],
                         artist=info.get("artist") or None,
                     )
-                    if success:
-                        results.append(result)
-                    else:
-                        errors.append(f"{info['name']}: {result}")
+                    _record(
+                        success,
+                        result,
+                        name=info["name"],
+                        track_artist=info.get("artist"),
+                        err_prefix=info["name"],
+                    )
                 else:
                     errors.append(f"Library ID {r.value}: Not in cache - use track name instead")
 
             elif r.input_type in (InputType.NAME, InputType.JSON_OBJECT):
-                # Remove by name
                 success, result = asc.remove_track_from_playlist(
                     resolved.applescript_name, track_name=r.value, artist=r.artist or None
                 )
-                if success:
-                    results.append(result)
-                else:
-                    errors.append(f"{r.value}: {result}")
+                _record(success, result, name=r.value, track_artist=r.artist, err_prefix=r.value)
 
         # Log successful removes
         if results:
@@ -6835,6 +6930,7 @@ if APPLESCRIPT_AVAILABLE:
     def _library_remove(
         track: str = "",
         artist: str = "",
+        verify: bool = True,
     ) -> str:
         """Remove track(s) from your library entirely (macOS). PERMANENT deletion."""
         if not track:
@@ -6842,6 +6938,42 @@ if APPLESCRIPT_AVAILABLE:
 
         results = []
         errors = []
+
+        def _verify_gone(name: str, track_artist: Optional[str]) -> bool:
+            """Confirm a track is no longer searchable in the local library."""
+            for attempt in range(_VERIFY_ATTEMPTS):
+                if attempt > 0:
+                    time.sleep(_VERIFY_DELAY_S)
+                ok, lib_results = asc.search_library(name, "songs")
+                if not ok or not lib_results:
+                    return True
+                # If we got results but none match the artist filter, treat as gone
+                if track_artist:
+                    matches = [
+                        t for t in lib_results
+                        if track_artist.lower() in (t.get("artist") or "").lower()
+                    ]
+                    if not matches:
+                        return True
+            return False
+
+        def _record(ok: bool, msg: str, name: Optional[str], track_artist: Optional[str], err_prefix: str):
+            """Record an asc.remove_from_library outcome with verify-after-remove."""
+            if not ok:
+                errors.append(f"{err_prefix}: {msg}")
+                return
+            if not verify or name is None:
+                results.append(msg)
+                return
+            if _verify_gone(name, track_artist):
+                results.append(msg)
+            else:
+                errors.append(
+                    f"{err_prefix}: AppleScript reported success but the track "
+                    f"is still in the library after retry. Some tracks resist "
+                    f"library removal (iCloud Music Library re-syncs them); "
+                    f"removing manually via Music.app may be required."
+                )
 
         # Resolve track input
         resolved = _resolve_track(track, artist)
@@ -6852,52 +6984,50 @@ if APPLESCRIPT_AVAILABLE:
                 continue
 
             if r.input_type == InputType.PERSISTENT_ID:
-                # Remove by persistent ID
                 success, result = asc.remove_from_library(track_id=r.value)
-                if success:
-                    results.append(result)
-                else:
-                    errors.append(f"ID {r.value}: {result}")
+                # Persistent ID removal — verify by name requires a lookup we
+                # don't have here. Skip verify (best-effort).
+                _record(success, result, name=None, track_artist=None, err_prefix=f"ID {r.value}")
 
             elif r.input_type == InputType.CATALOG_ID:
-                # Try cache lookup to get track name
                 cache = get_track_cache()
                 info = cache.get_track_info(r.value)
                 if info and info.get("name"):
                     success, result = asc.remove_from_library(
                         track_name=info["name"], artist=info.get("artist") or None
                     )
-                    if success:
-                        results.append(result)
-                    else:
-                        errors.append(f"{info['name']}: {result}")
+                    _record(
+                        success,
+                        result,
+                        name=info["name"],
+                        track_artist=info.get("artist"),
+                        err_prefix=info["name"],
+                    )
                 else:
                     errors.append(f"Catalog ID {r.value}: Not in cache - use track name instead")
 
             elif r.input_type == InputType.LIBRARY_ID:
-                # Try cache lookup to get track name
                 cache = get_track_cache()
                 info = cache.get_track_info(r.value)
                 if info and info.get("name"):
                     success, result = asc.remove_from_library(
                         track_name=info["name"], artist=info.get("artist") or None
                     )
-                    if success:
-                        results.append(result)
-                    else:
-                        errors.append(f"{info['name']}: {result}")
+                    _record(
+                        success,
+                        result,
+                        name=info["name"],
+                        track_artist=info.get("artist"),
+                        err_prefix=info["name"],
+                    )
                 else:
                     errors.append(f"Library ID {r.value}: Not in cache - use track name instead")
 
             elif r.input_type in (InputType.NAME, InputType.JSON_OBJECT):
-                # Remove by name
                 success, result = asc.remove_from_library(
                     track_name=r.value, artist=r.artist or None
                 )
-                if success:
-                    results.append(result)
-                else:
-                    errors.append(f"{r.value}: {result}")
+                _record(success, result, name=r.value, track_artist=r.artist, err_prefix=r.value)
 
         # Log successful removes - this is destructive, important for audit
         if results:
