@@ -52,3 +52,16 @@ jobs:
             --generate-notes \
             --target "$GITHUB_SHA"
           echo "Created release $TAG"
+
+      - name: Trigger publish workflow
+        if: steps.check.outputs.exists == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Tag pushes made with the default GITHUB_TOKEN do NOT trigger
+          # other workflows (loop-prevention safeguard). workflow_dispatch
+          # IS exempt from that rule, so explicitly dispatch publish.yml
+          # to upload to PyPI. publish.yml checks out the default branch
+          # which now has the just-created tag pointing to the same SHA.
+          gh workflow run publish.yml --ref main
+          echo "Dispatched publish.yml"
