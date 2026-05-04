@@ -1989,6 +1989,8 @@ def get_library_songs_page(offset: int, limit: int) -> tuple[bool, list[dict], i
     Returns:
         Tuple of (success, tracks, total_count, error)
     """
+    if limit <= 0:
+        return False, [], 0, "limit must be > 0"
     start_pos = offset + 1
     end_pos = offset + limit
 

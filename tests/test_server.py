@@ -3129,6 +3129,20 @@ class TestAppleScriptPerTrackGuards:
         assert total == 0
         assert "Music not running" in error
 
+    def test_get_library_songs_page_guards_invalid_applescript_range(self):
+        """get_library_songs_page with limit <= 0 returns error without running AppleScript."""
+        from applemusic_mcp import applescript as asc
+
+        ran = []
+        with patch.object(asc, "run_applescript", lambda _: ran.append(True) or (True, "")):
+            success, tracks, total, error = asc.get_library_songs_page(offset=0, limit=0)
+
+        assert success is False
+        assert tracks == []
+        assert total == 0
+        assert "limit must be > 0" in error
+        assert ran == [], "AppleScript must not run when limit <= 0"
+
     def test_search_library_script_wraps_per_track(self):
         from applemusic_mcp import applescript as asc
 
