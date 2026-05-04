@@ -2428,7 +2428,12 @@ def _playlist_tracks(
         # Use playlist_track_count for total if available
         can_optimize = not filter and limit > 0
         if can_optimize:
-            # Fetch only offset+limit tracks
+            # Fetch only offset+limit tracks. Capture meta.total from the
+            # first response so the header can show "1-200 of 436" rather
+            # than masking truncation when limit is set. The library-playlists
+            # endpoint omits trackCount, but the /tracks endpoint returns
+            # meta.total on every page — no extra API call needed.
+            true_total = None
             needed = offset + limit
             api_offset = 0
             while len(all_tracks) < needed:
@@ -2443,7 +2448,12 @@ def _playlist_tracks(
                 if response.status_code == 404:
                     break
                 response.raise_for_status()
-                tracks = response.json().get("data", [])
+                payload = response.json()
+                if true_total is None:
+                    meta_total = payload.get("meta", {}).get("total")
+                    if isinstance(meta_total, int) and meta_total >= 0:
+                        true_total = meta_total
+                tracks = payload.get("data", [])
                 if not tracks:
                     break
                 all_tracks.extend(tracks)
@@ -2461,8 +2471,7 @@ def _playlist_tracks(
                 track_data = track_data[offset:]
             track_data = track_data[:limit]
 
-            # In optimized path, we don't know total count - use fetched count
-            total_count = len(all_tracks)
+            total_count = true_total if true_total is not None else len(all_tracks)
 
             safe_id = resolved.api_id.replace(".", "_")
             result = format_output(
@@ -6208,6 +6217,37 @@ if APPLESCRIPT_AVAILABLE:
             pass
         return None
 
+    def _try_ui_catalog_play(
+        track_name: str,
+        track_artist: str,
+        source_label: str = "ui_catalog",
+        prefix: str = "[UI Catalog]",
+    ) -> tuple[bool, Optional[str]]:
+        """Try to play a catalog track via Music.app UI automation.
+
+        Centralizes the APPLESCRIPT_AVAILABLE gating, audit logging, and
+        success-message formatting that was previously duplicated across
+        three call sites in this function.
+
+        Returns:
+            (True, formatted_message) on success.
+            (False, raw_error_message) on UI failure (caller can choose
+                whether to surface the failure inline or fall through).
+            (False, None) when APPLESCRIPT_AVAILABLE is False — caller
+                should fall through to the next path.
+        """
+        if not APPLESCRIPT_AVAILABLE:
+            return False, None
+        ui_query = f"{track_name} {track_artist}".strip()
+        ok, msg = asc.ui_play_result_by_query(ui_query)
+        if ok:
+            audit_log.log_action(
+                "play_track",
+                {"track": track_name, "artist": track_artist, "source": source_label},
+            )
+            return True, f"{prefix} {msg}"
+        return False, msg
+
     def _playback_play(
         track: str = "",
         playlist: str = "",
@@ -6421,15 +6461,9 @@ if APPLESCRIPT_AVAILABLE:
 
                         # UI play first — before reveal so reveal_on_library_miss
                         # preference doesn't shadow direct playback.
-                        if APPLESCRIPT_AVAILABLE:
-                            ui_query = f"{track_name} {track_artist}".strip()
-                            ok, msg = asc.ui_play_result_by_query(ui_query)
-                            if ok:
-                                audit_log.log_action(
-                                    "play_track",
-                                    {"track": track_name, "artist": track_artist, "source": "ui_catalog"},
-                                )
-                                return f"[UI Catalog] {msg}"
+                        ui_ok, ui_msg = _try_ui_catalog_play(track_name, track_artist)
+                        if ui_ok:
+                            return ui_msg
 
                         if reveal:
                             if song_url:
@@ -6518,17 +6552,14 @@ if APPLESCRIPT_AVAILABLE:
             # Option 2: UI play — works without adding to library.
             # Runs before reveal so reveal_on_library_miss preference doesn't
             # shadow direct playback when Music.app automation is available.
-            if APPLESCRIPT_AVAILABLE:
-                ui_query = f"{song_name} {song_artist}".strip()
-                ok, msg = asc.ui_play_result_by_query(ui_query)
-                if ok:
-                    audit_log.log_action(
-                        "play_track",
-                        {"track": song_name, "artist": song_artist, "source": "ui_catalog"},
-                    )
-                    return f"[UI Catalog] {msg}"
-                # Surface the failure reason so it's diagnosable
-                return f"[UI Catalog failed: {msg}] Falling back — {song_name} by {song_artist}"
+            ui_ok, ui_msg = _try_ui_catalog_play(song_name, song_artist)
+            if ui_ok:
+                return ui_msg
+            if ui_msg is not None:
+                # UI was attempted and failed — surface the reason rather than
+                # falling through to reveal/error. APPLESCRIPT_AVAILABLE=False
+                # returns (False, None), in which case we do fall through.
+                return f"[UI Catalog failed: {ui_msg}] Falling back — {song_name} by {song_artist}"
 
             # Option 3: Open in Music app (user must click play)
             if reveal:
@@ -6544,16 +6575,14 @@ if APPLESCRIPT_AVAILABLE:
                 f"Use reveal=True to open in Music, or add_to_library=True to save & play."
             )
 
-        # API catalog search found nothing — try UI search as last resort
-        if APPLESCRIPT_AVAILABLE:
-            search_term = f"{track_name} {track_artist}".strip() if track_artist else track_name
-            ok, msg = asc.ui_play_result_by_query(search_term)
-            if ok:
-                audit_log.log_action(
-                    "play_track",
-                    {"track": track_name, "artist": track_artist, "source": "ui_search"},
-                )
-                return f"[UI Search] {msg}"
+        # API catalog search found nothing — try UI search as last resort.
+        # Different prefix ([UI Search] vs [UI Catalog]) signals to the user
+        # that this matched only via UI search, not via API confirmation.
+        ui_ok, ui_msg = _try_ui_catalog_play(
+            track_name, track_artist, source_label="ui_search", prefix="[UI Search]"
+        )
+        if ui_ok:
+            return ui_msg
 
         return f"Track not found in library or catalog: {track_name}"
 
