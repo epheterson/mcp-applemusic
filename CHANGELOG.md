@@ -5,6 +5,41 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.0] - 2026-05-04
+
+This release consolidates the macOS UI automation paths onto a small set of shared primitives and tightens every data-modifying operation with post-mutation verification. The headline outcome: no more silent false-positive success messages when AppleScript reports OK but the change doesn't actually persist (a real failure mode some user-created playlists exhibit, where iCloud-side reconciliation reverts local AppleScript edits).
+
+### Added
+
+- **Verify-after-modify on every playlist + library data path** — `_playlist_add` (both names path and IDs path), `ui_add_to_playlist`'s final step, `_playlist_remove` (all 4 input-type branches), `_library_remove` (all 4 input-type branches), and `_library_add_track_via_ui` now confirm the change actually persisted before reporting success. On verify miss the call retries once with sync-lag delay; if still missing, the user sees a clear actionable error ("Some user-created playlists silently revert AppleScript edits server-side; adding manually via Music.app's right-click → Add to Playlist usually works") instead of a misleading "Added 1 track(s)" with nothing in the playlist. The previous behavior could return success three times in a row for the same track that never actually landed (caught during live testing — Lionel Richie "Hello" added to a `canEdit:false` user-created playlist).
+- **`playlist_tracks` paginated header now shows true total on the API path** — when a `limit` is set on the API-optimized branch (used when both `api_id` and `applescript_name` resolve, or when only `api_id` is available), the header now reads `=== 1-200 of 436 tracks ===` rather than `=== 200 tracks ===`. Captured from `meta.total` on the first /tracks API response — no extra API call. The AppleScript-only branch (used in tokenless mode and for playlists with no API ID) was already correct: it fetches the full list, then `_apply_pagination` records the pre-slice count, so the header has always shown the true total there. This fix closes the API-path gap. Prevents callers (including AI agents) from treating a partial view as authoritative when surveying playlist contents. Same hard-rule lesson Eric called out: "don't define a limit, and even if a limit is defined the true count is returned."
+- **`_SEARCH_FIELD_TOOLBAR_FLAT` variant** — third toolbar layout for macOS 26 builds where the search text field sits directly under `toolbar 1` without a wrapping `group 1`. The dual-path probe in `_get_search_field()` now tries grouped → flat → sidebar in order, caches the first hit, and picks up future toolbar variants without code changes if needed.
+- **TestUIPrimitives** — 13 new mock-based unit tests covering each new internal primitive (`_focus_search_field`, `_wait_for_top_results`, `_parse_top_results`, `_find_top_result_position`, `_hover_then_click_subelement`, `_verify_track_playing`).
+
+### Changed
+
+- **UI automation refactored onto shared primitives** — `applescript.py` now exposes a small set of internal primitives that compose into every `ui_*` public entrypoint. Each macOS-specific quirk (toolbar layout variants, autocomplete popover dismissal, hover-then-click row mismatches, post-click verification timing) gets fixed in exactly one place. Public API is unchanged. `ui_search_catalog` shrank from ~150 lines to ~12; `ui_play_result` and `ui_add_to_library` are now thin wrappers around `_hover_then_click_subelement` (which polls for the inner sub-element to appear and CoreGraphics-clicks its exact pixel position — solving the play-checkbox-clicks-wrong-row bug along the way).
+- **`_try_ui_catalog_play` helper extracted** — three duplicated UI-Catalog play branches in `_play_from_catalog` (server.py) collapsed into one helper with `source_label` + `prefix` parameters. The `(False, msg)` vs `(False, None)` return discriminates "UI tried and failed" (surface the inline `[UI Catalog failed: ... ] Falling back —` reason) from "UI not available" (fall through to next path) — preserving exact previous behavior of all three call sites.
+- **Search popover self-heal** — when results don't appear within ~1.2s after Enter, the autocomplete popover may still be covering them; the poll loop now sends one recovery Enter to dismiss it (matches the manual "two Enters" Eric observed). Replaces the previous fixed 4-second sleep, so search returns as soon as results render.
+
+### Fixed
+
+- **Search field path discovery now used everywhere** — `ui_search_catalog`'s consolidated AppleScript previously hardcoded `text field 1 of group 1 of toolbar 1 of window "Music"` instead of calling `_get_search_field()`. On macOS 26 builds where the toolbar lacks `group 1` (the new flat variant above), the search would error immediately with no fallback. Search now resolves the path at call time using the same probe everything else uses.
+- **Race-resistant catalog play** — `ui_play_result` previously re-found the result row by description in a second AppleScript and called `click checkbox 1 of e`, which sometimes landed on the wrong row when descriptions were similar (resulting in "Clicked play but got 'Other Track' instead of 'Target Track'"). The new path queries the play checkbox's exact pixel position after hover and CoreGraphics-clicks at that pixel — deterministic, no AppleScript element-resolution ambiguity. Verified: same flow that intermittently played the wrong track now plays the requested one reliably.
+- **Result waits are now poll loops** — fixed sleeps of 1.5s (post-hover) and 2.0s (post-click) replaced with poll-for-state loops. Best case 10× faster on a responsive Music.app; worst case identical to the old fixed sleep.
+
+### Internal
+
+- Net code change: ~+961 / −193 across `applescript.py`, `server.py`, and the test suite. `applescript.py` UI-automation section is materially smaller and more readable after the duplication collapse. Test count: 301 → 315 (+13 new + 1 toolbar variant).
+
+## [0.9.6] - 2026-05-01
+
+### Fixed
+
+- **Dual-path search-field probe supports both macOS 15 and macOS 26 (Tahoe)** — on macOS 26, the Music.app search field moved from the sidebar outline row to `text field 1 of group 1 of toolbar 1 of window "Music"`. Rather than hardcoding either path, `_get_search_field()` probes for the toolbar element at runtime using an AppleScript `exists` check and falls back to the sidebar path when not found. Result is cached per server session so the probe runs at most once. Verified on macOS 15 (sidebar path correctly detected); toolbar path validated by horrorshow75 on macOS 26 (Tahoe). Diagnosed and reported by horrorshow75 on Reddit.
+- **Catalog result type-line parser handles macOS 26 extra static text node** — macOS 26 prepends an empty static text element inside each result row, shifting the type line (e.g. "Song · Radiohead") from the second to the third static text. The old code used a fixed `item 2` index; the new code iterates and picks the first static text containing the middle-dot separator `·`, making it version-agnostic.
+- **Hover dwell increased and nudge added at 3 UI-interaction sites** — on macOS 26, `CGEventMouseMoved` events posted to the same coordinates as the previous position are silently dropped, so hover-dependent buttons (Add to Library, play checkbox) never appeared. A small 2-pixel nudge move before the final position guarantees a real delta and event delivery. Dwell increased from 0.5–1.0 s to 1.5 s at all three sites.
+
 ## [0.9.5] - 2026-04-29
 
 ### Fixed

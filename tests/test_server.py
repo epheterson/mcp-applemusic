@@ -2204,7 +2204,14 @@ class TestAlbumDisambiguation:
             True,
             [{"name": "Test Playlist", "id": "test123", "count": 0}],
         )
-        mock_asc.track_exists_in_playlist.return_value = (True, False)
+        # First call: pre-add duplicate-check → False (not duplicate, proceed).
+        # Subsequent calls: post-add verification → True (track now in playlist).
+        # The post-add verify catches AppleScript false-positive successes
+        # (some user-created playlists silently revert AppleScript edits
+        # server-side); without the side_effect, mocked verify would always
+        # return False and the post-add verify retry would consume two calls
+        # to add_track_to_playlist instead of one.
+        mock_asc.track_exists_in_playlist.side_effect = [(True, False)] + [(True, True)] * 10
         mock_asc.add_track_to_playlist.return_value = (
             True,
             "Added Hot Potato (Ready, Steady, Wiggle!) by The Wiggles",
@@ -2244,7 +2251,12 @@ class TestAlbumDisambiguation:
             True,
             [{"name": "My Playlist", "id": "abc123", "count": 10}],
         )
-        mock_asc.track_exists_in_playlist.return_value = (True, False)
+        # First call: duplicate-check pre-add → False (not a duplicate, proceed).
+        # Subsequent calls: post-add verification → True (track now in playlist).
+        # The post-add verify was added so AppleScript false-positive successes
+        # (silent `duplicate` no-op when library sync hasn't propagated) get
+        # caught instead of returned to the user as success.
+        mock_asc.track_exists_in_playlist.side_effect = [(True, False)] + [(True, True)] * 10
         mock_asc.add_track_to_playlist.return_value = (True, "Added Hot Potato by The Wiggles")
         monkeypatch.setattr(server, "asc", mock_asc)
 
@@ -3822,10 +3834,18 @@ class TestLibraryAddUiOnTokenlessMacos:
         mock_asc.ui_search_catalog.return_value = (
             True,
             [{"name": "Silvera", "artist": "Gojira", "type": "Song", "index": 1}],
+            "",
         )
         mock_asc.ui_add_to_library.return_value = (
             True,
             "Added 'Silvera' to library",
+        )
+        # Post-add verify polls search_library until the new track is
+        # visible. Mock it to return success on first poll so we don't
+        # spend the full retry budget in the test.
+        mock_asc.search_library.return_value = (
+            True,
+            [{"name": "Silvera", "artist": "Gojira"}],
         )
         mock_asc.ui_clear_search.return_value = None
         mock_asc.classify_error = real_asc.classify_error
@@ -3847,6 +3867,8 @@ class TestLibraryAddUiOnTokenlessMacos:
         # Confirm UI path was actually exercised
         assert mock_asc.ui_search_catalog.called
         assert mock_asc.ui_add_to_library.called
+        # Verify ran (post-add library check)
+        assert mock_asc.search_library.called
         # Result should report success in user-friendly form
         assert "Silvera" in result
         assert "Gojira" in result
@@ -3862,7 +3884,7 @@ class TestLibraryAddUiOnTokenlessMacos:
 
         mock_asc = MagicMock()
         # UI search comes back empty
-        mock_asc.ui_search_catalog.return_value = (True, [])
+        mock_asc.ui_search_catalog.return_value = (True, [], "")
         mock_asc.ui_clear_search.return_value = None
         mock_asc.classify_error = real_asc.classify_error
         monkeypatch.setattr(server, "asc", mock_asc)
@@ -3929,8 +3951,14 @@ class TestLibraryAddUiOnTokenlessMacos:
         mock_asc.ui_search_catalog.return_value = (
             True,
             [{"name": "Silvera", "artist": "Gojira", "type": "Song", "index": 1}],
+            "",
         )
         mock_asc.ui_add_to_library.return_value = (True, "Added")
+        # Post-add verify polls search_library; mock to succeed.
+        mock_asc.search_library.return_value = (
+            True,
+            [{"name": "Silvera", "artist": "Gojira"}],
+        )
         mock_asc.ui_clear_search.return_value = None
         mock_asc.classify_error = real_asc.classify_error
         monkeypatch.setattr(server, "asc", mock_asc)
@@ -3963,8 +3991,14 @@ class TestLibraryAddUiOnTokenlessMacos:
         mock_asc.ui_search_catalog.return_value = (
             True,
             [{"name": "Silvera", "artist": "Gojira", "type": "Song", "index": 1}],
+            "",
         )
         mock_asc.ui_add_to_library.return_value = (True, "Added")
+        # Post-add verify polls search_library; mock to succeed.
+        mock_asc.search_library.return_value = (
+            True,
+            [{"name": "Silvera", "artist": "Gojira"}],
+        )
         mock_asc.ui_clear_search.return_value = None
         mock_asc.classify_error = real_asc.classify_error
         monkeypatch.setattr(server, "asc", mock_asc)

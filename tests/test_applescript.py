@@ -229,6 +229,12 @@ class TestFolderOperations:
 
     def test_create_nested_folder_path(self):
         """Should create nested folders via slash-separated path."""
+        # Pre-clean all stale instances (multiple may accumulate from failed runs)
+        for _ in range(5):
+            asc.delete_folder("_TEST_OUTER_/_TEST_INNER_")
+            asc.delete_folder("_TEST_OUTER_")
+            asc.delete_folder("_TEST_INNER_")
+
         path = "_TEST_OUTER_/_TEST_INNER_"
 
         success, folder_id = asc.create_folder_path(path)
@@ -294,6 +300,9 @@ class TestFolderOperations:
     def test_get_folder_tree(self):
         """Should return folder hierarchy text."""
         folder_name = "_TEST_TREE_FOLDER_"
+
+        # Pre-clean in case a prior run failed before cleanup
+        asc.delete_folder(folder_name)
 
         success, _ = asc.create_folder(folder_name)
         assert success is True
@@ -486,6 +495,36 @@ class TestAddTrackDisambiguation:
     """
 
     TEST_PLAYLIST = "🧪 Integration Test Playlist"
+
+    def setup_method(self):
+        """Auto-create the test playlist if missing (e.g. iCloud sync deleted it).
+        Without this, all tests in this class fail with cryptic 'add failed'
+        errors when the playlist isn't present."""
+        ok, _ = asc.run_applescript(f"""
+tell application "Music"
+    set found to false
+    try
+        set p to first user playlist whose name is "{self.TEST_PLAYLIST}"
+        set found to true
+    end try
+    if not found then
+        make new playlist with properties {{name:"{self.TEST_PLAYLIST}"}}
+    end if
+end tell""")
+
+    @classmethod
+    def teardown_class(cls):
+        """Delete the test playlist after the whole class finishes so we
+        don't leave debris in the user's Music library. Best-effort."""
+        try:
+            asc.run_applescript(f"""
+tell application "Music"
+    try
+        delete (first user playlist whose name is "{cls.TEST_PLAYLIST}")
+    end try
+end tell""")
+        except Exception:
+            pass
 
     def test_artist_exact_match_preferred_over_contains(self):
         """Should prefer exact artist match over partial contains match.
@@ -864,6 +903,361 @@ class TestUISearchParsing:
             cx, cy = [float(v) for v in pos_str.strip().split(",")]
 
 
+class TestClassifyAsError:
+    """Unit tests for _classify_as_error()."""
+
+    def test_accessibility_not_granted(self):
+        import applemusic_mcp.applescript as asc
+
+        msg = asc._classify_as_error("execution error: (-1743)")
+        assert "Accessibility" in msg
+        assert "System Settings" in msg
+
+    def test_element_not_found(self):
+        import applemusic_mcp.applescript as asc
+
+        msg = asc._classify_as_error("Can't get window 1. (-1728)")
+        assert "element not found" in msg.lower() or "layout" in msg.lower()
+        assert asc._GITHUB_ISSUES in msg
+
+    def test_unknown_error_includes_issue_link(self):
+        import applemusic_mcp.applescript as asc
+
+        msg = asc._classify_as_error("something totally unexpected")
+        assert asc._GITHUB_ISSUES in msg
+
+    def test_unknown_error_truncates_long_text(self):
+        import applemusic_mcp.applescript as asc
+
+        long_err = "x" * 200
+        msg = asc._classify_as_error(long_err)
+        assert len(msg) < 300
+
+
+class TestCheckUiAccessible:
+    """Unit tests for check_ui_accessible()."""
+
+    def test_returns_ok_when_windows_visible(self, monkeypatch):
+        import applemusic_mcp.applescript as asc
+
+        monkeypatch.setattr(asc, "run_applescript", lambda _: (True, "1\n"))
+        ok, reason = asc.check_ui_accessible()
+        assert ok is True
+        assert reason == ""
+
+    def test_returns_classified_error_on_applescript_failure(self, monkeypatch):
+        import applemusic_mcp.applescript as asc
+
+        monkeypatch.setattr(asc, "run_applescript", lambda _: (False, "(-1743)"))
+        ok, reason = asc.check_ui_accessible()
+        assert ok is False
+        assert "Accessibility" in reason
+
+    def test_detects_locked_screen(self, monkeypatch):
+        import applemusic_mcp.applescript as asc
+
+        calls = {"n": 0}
+
+        def mock_run(script):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                return (True, "0")  # Music has 0 windows
+            return (True, "true")  # loginwindow has windows → locked
+
+        monkeypatch.setattr(asc, "run_applescript", mock_run)
+        ok, reason = asc.check_ui_accessible()
+        assert ok is False
+        assert "locked" in reason.lower()
+
+    def test_no_window_not_locked(self, monkeypatch):
+        import applemusic_mcp.applescript as asc
+
+        calls = {"n": 0}
+
+        def mock_run(script):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                return (True, "0")  # Music has 0 windows
+            return (True, "false")  # loginwindow also 0 → not locked, just minimized
+
+        monkeypatch.setattr(asc, "run_applescript", mock_run)
+        ok, reason = asc.check_ui_accessible()
+        assert ok is False
+        assert "no visible windows" in reason.lower() or "minimize" in reason.lower()
+
+
+class TestGetSearchField:
+    """Unit tests for the _get_search_field() dual-path probe."""
+
+    def setup_method(self):
+        """Reset the module-level cache before each test."""
+        import applemusic_mcp.applescript as asc
+
+        asc._search_field_cache = None
+
+    def test_toolbar_grouped_path_when_probe_returns_grouped(self, monkeypatch):
+        import applemusic_mcp.applescript as asc
+
+        monkeypatch.setattr(asc, "run_applescript", lambda _: (True, "grouped\n"))
+        result = asc._get_search_field()
+        assert result == asc._SEARCH_FIELD_TOOLBAR
+
+    def test_toolbar_flat_path_when_probe_returns_flat(self, monkeypatch):
+        """macOS 26 build variant: text field is directly under toolbar with
+        no wrapping `group 1`. Probe should return the flat path."""
+        import applemusic_mcp.applescript as asc
+
+        monkeypatch.setattr(asc, "run_applescript", lambda _: (True, "flat\n"))
+        result = asc._get_search_field()
+        assert result == asc._SEARCH_FIELD_TOOLBAR_FLAT
+
+    def test_sidebar_path_when_no_toolbar_variant_found(self, monkeypatch):
+        """If neither toolbar variant exists even after Cmd+F, fall back to
+        the macOS 15 sidebar path."""
+        import applemusic_mcp.applescript as asc
+
+        monkeypatch.setattr(asc, "run_applescript", lambda _: (True, "none\n"))
+        result = asc._get_search_field()
+        assert result == asc._SEARCH_FIELD_SIDEBAR
+
+    def test_sidebar_path_on_applescript_failure_does_not_cache(self, monkeypatch):
+        """Transient probe failure (e.g., Music.app still launching) returns
+        sidebar as a safe default, but does NOT cache — next call should retry
+        so we don't pin a macOS 26 user to the wrong path."""
+        import applemusic_mcp.applescript as asc
+
+        monkeypatch.setattr(asc, "run_applescript", lambda _: (False, "error"))
+        result = asc._get_search_field()
+        assert result == asc._SEARCH_FIELD_SIDEBAR
+        assert asc._search_field_cache is None  # not cached on failure
+
+    def test_result_is_cached(self, monkeypatch):
+        import applemusic_mcp.applescript as asc
+
+        call_count = {"n": 0}
+
+        def counting_run(script):
+            call_count["n"] += 1
+            return (True, "grouped")
+
+        monkeypatch.setattr(asc, "run_applescript", counting_run)
+        asc._get_search_field()
+        asc._get_search_field()
+        assert call_count["n"] == 1  # probe ran once; second call hit cache
+
+
+class TestUIPrimitives:
+    """Unit tests for the unified UI automation primitives.
+
+    These verify the contract of each primitive (return shapes, error
+    classifications, polling behavior) without touching Music.app. Live
+    integration is covered by TestUISearchIntegration below.
+    """
+
+    def setup_method(self):
+        """Reset the search-field cache before each test so monkeypatched
+        run_applescript can deterministically influence the path."""
+        import applemusic_mcp.applescript as asc
+
+        asc._search_field_cache = None
+
+    # --- _focus_search_field -------------------------------------------------
+
+    def test_focus_search_field_rejects_empty_query(self):
+        import applemusic_mcp.applescript as asc
+
+        ok, err = asc._focus_search_field("")
+        assert ok is False
+        assert err == "Empty query"
+
+        ok, err = asc._focus_search_field("   ")
+        assert ok is False
+        assert err == "Empty query"
+
+    def test_focus_search_field_success_path(self, monkeypatch):
+        """On AppleScript success, returns (True, ""). The query is escaped
+        and embedded in the consolidated AppleScript that the helper emits."""
+        import applemusic_mcp.applescript as asc
+
+        captured_scripts: list[str] = []
+
+        def fake_run(script: str):
+            captured_scripts.append(script)
+            return (True, "")
+
+        monkeypatch.setattr(asc, "run_applescript", fake_run)
+        monkeypatch.setattr(asc, "_ensure_music_frontmost", lambda: None)
+        monkeypatch.setattr(asc, "_get_search_field", lambda: asc._SEARCH_FIELD_TOOLBAR)
+
+        ok, err = asc._focus_search_field("Radiohead")
+        assert ok is True
+        assert err == ""
+        # The injected script contains the resolved field path AND the query
+        emitted = captured_scripts[-1]
+        assert asc._SEARCH_FIELD_TOOLBAR in emitted
+        assert "Radiohead" in emitted
+
+    def test_focus_search_field_classifies_environmental_failure(self, monkeypatch):
+        """When AppleScript fails AND check_ui_accessible reports a problem,
+        the user-facing reason should be the access reason, not the raw
+        AppleScript error — same behavior the original ui_search_catalog had."""
+        import applemusic_mcp.applescript as asc
+
+        monkeypatch.setattr(asc, "run_applescript", lambda _: (False, "execution error"))
+        monkeypatch.setattr(asc, "_ensure_music_frontmost", lambda: None)
+        monkeypatch.setattr(asc, "_get_search_field", lambda: asc._SEARCH_FIELD_TOOLBAR)
+        monkeypatch.setattr(
+            asc, "check_ui_accessible", lambda: (False, "Music.app not running")
+        )
+
+        ok, err = asc._focus_search_field("anything")
+        assert ok is False
+        assert err == "Music.app not running"
+
+    # --- _wait_for_top_results ----------------------------------------------
+
+    def test_wait_for_top_results_returns_immediately_on_success(self, monkeypatch):
+        import applemusic_mcp.applescript as asc
+
+        monkeypatch.setattr(asc, "run_applescript", lambda _: (True, "1|||Track|||Song"))
+        ok, raw = asc._wait_for_top_results(timeout=2.0)
+        assert ok is True
+        assert "1|||Track" in raw
+
+    def test_wait_for_top_results_empty_on_clean_timeout(self, monkeypatch):
+        """If results never appear but AppleScript itself succeeds with
+        NO_RESULTS, returns (True, "") to signal empty results — not error."""
+        import applemusic_mcp.applescript as asc
+
+        monkeypatch.setattr(asc, "run_applescript", lambda _: (True, "NO_RESULTS"))
+        ok, raw = asc._wait_for_top_results(timeout=0.5)
+        assert ok is True
+        assert raw == ""
+
+    # --- _parse_top_results -------------------------------------------------
+
+    def test_parse_top_results_handles_unicode_separators(self):
+        import applemusic_mcp.applescript as asc
+
+        raw = (
+            "1|||Creep|||Song · Radiohead\n"
+            "2|||OK Computer|||Album · Radiohead\n"
+            "3|||Radiohead|||Artist\n"
+        )
+        results = asc._parse_top_results(raw)
+        assert len(results) == 3
+        assert results[0] == {"name": "Creep", "type": "Song", "artist": "Radiohead", "index": 1}
+        assert results[1] == {
+            "name": "OK Computer",
+            "type": "Album",
+            "artist": "Radiohead",
+            "index": 2,
+        }
+        assert results[2] == {"name": "Radiohead", "type": "Artist", "artist": "", "index": 3}
+
+    def test_parse_top_results_skips_malformed_lines(self):
+        import applemusic_mcp.applescript as asc
+
+        raw = "1|||Good|||Song · A\n||\nbroken_line_no_separator\n2|||Also Good|||Song · B"
+        results = asc._parse_top_results(raw)
+        assert len(results) == 2
+        assert results[0]["name"] == "Good"
+        assert results[1]["name"] == "Also Good"
+
+    # --- _find_top_result_position ------------------------------------------
+
+    def test_find_top_result_position_parses_csv(self, monkeypatch):
+        import applemusic_mcp.applescript as asc
+
+        monkeypatch.setattr(asc, "run_applescript", lambda _: (True, "1883.0,686.0"))
+        pos = asc._find_top_result_position("Some Track")
+        assert pos == (1883.0, 686.0)
+
+    def test_find_top_result_position_returns_none_on_not_found(self, monkeypatch):
+        import applemusic_mcp.applescript as asc
+
+        monkeypatch.setattr(asc, "run_applescript", lambda _: (True, "NOT_FOUND"))
+        assert asc._find_top_result_position("Missing") is None
+
+    # --- _hover_then_click_subelement ---------------------------------------
+
+    def test_hover_then_click_succeeds(self, monkeypatch):
+        """Full success path: row found, hover succeeds, sub-element appears
+        on first poll, CoreGraphics click succeeds."""
+        import applemusic_mcp.applescript as asc
+
+        click_calls: list[tuple[float, float]] = []
+
+        # AppleScript is called twice in this path:
+        # 1. _find_top_result_position → returns row pos
+        # 2. inner sub-element poll → returns inner pos
+        responses = iter([(True, "100.0,200.0"), (True, "55.0,77.0")])
+
+        monkeypatch.setattr(asc, "run_applescript", lambda _: next(responses))
+        monkeypatch.setattr(asc, "_ensure_music_frontmost", lambda: None)
+        monkeypatch.setattr(asc, "_hover_with_nudge", lambda cx, cy: True)
+        monkeypatch.setattr(
+            asc,
+            "_jxa_mouse_click",
+            lambda x, y: (click_calls.append((x, y)), True)[1],
+        )
+
+        ok, err = asc._hover_then_click_subelement("Track", "set inner to checkbox 1 of e")
+        assert ok is True
+        assert err == ""
+        # Click landed at the inner element's center, not the row's center
+        assert click_calls == [(55.0, 77.0)]
+
+    def test_hover_then_click_returns_not_visible_marker(self, monkeypatch):
+        """When the inner sub-element never becomes queryable within max_wait,
+        the helper returns the reserved 'sub-element not visible after hover'
+        string so wrappers can map it to a domain-specific message
+        (e.g. ui_play_result → 'Play checkbox not visible after hover')."""
+        import applemusic_mcp.applescript as asc
+
+        # Row found, but sub-element poll always returns NOT_FOUND
+        responses = [(True, "100.0,200.0")] + [(True, "NOT_FOUND")] * 50
+
+        idx = {"i": 0}
+
+        def fake_run(_):
+            r = responses[min(idx["i"], len(responses) - 1)]
+            idx["i"] += 1
+            return r
+
+        monkeypatch.setattr(asc, "run_applescript", fake_run)
+        monkeypatch.setattr(asc, "_ensure_music_frontmost", lambda: None)
+        monkeypatch.setattr(asc, "_hover_with_nudge", lambda cx, cy: True)
+        monkeypatch.setattr(asc, "_jxa_mouse_click", lambda x, y: True)
+
+        ok, err = asc._hover_then_click_subelement(
+            "Track", "set inner to checkbox 1 of e", max_wait=0.3
+        )
+        assert ok is False
+        assert err == "sub-element not visible after hover"
+
+    # --- _verify_track_playing ----------------------------------------------
+
+    def test_verify_track_playing_match_on_first_poll(self, monkeypatch):
+        import applemusic_mcp.applescript as asc
+
+        monkeypatch.setattr(asc, "run_applescript", lambda _: (True, "Sweet Baby James (Remastered)"))
+        ok, name = asc._verify_track_playing("Sweet Baby James", timeout=1.0)
+        assert ok is True
+        assert "Sweet Baby James" in name
+
+    def test_verify_track_playing_returns_false_on_mismatch(self, monkeypatch):
+        """When the current track never matches within timeout, returns
+        (False, last_known_track) so the caller can distinguish 'wrong
+        track playing' from 'nothing playing'."""
+        import applemusic_mcp.applescript as asc
+
+        monkeypatch.setattr(asc, "run_applescript", lambda _: (True, "Different Song"))
+        ok, name = asc._verify_track_playing("Sweet Baby James", timeout=0.4)
+        assert ok is False
+        assert name == "Different Song"
+
+
 @pytest.mark.skipif(
     not os.environ.get("TEST_UI"), reason="UI tests require Music.app visible. Run with TEST_UI=1"
 )
@@ -881,12 +1275,13 @@ class TestUISearchIntegration:
         import time
 
         time.sleep(2)
-        ok, results = asc.ui_search_catalog("Beatles")
+        ok, results, why = asc.ui_search_catalog("Beatles")
         asc.ui_clear_search()
         assert ok is True
         assert len(results) > 0
         assert "name" in results[0]
         assert "type" in results[0]
+        assert why == ""
 
     def test_search_clears_properly(self):
         """Should clear search without errors."""
@@ -899,6 +1294,7 @@ class TestUISearchIntegration:
 
     def test_search_empty_query(self):
         """Should reject empty queries."""
-        ok, results = asc.ui_search_catalog("")
+        ok, results, why = asc.ui_search_catalog("")
         assert ok is False
         assert results == []
+        assert why == "Empty query"
