@@ -1378,6 +1378,9 @@ _SEARCH_FIELD_SIDEBAR = (
     ' of scroll area 1 of splitter group 1 of window "Music"'
 )
 _SEARCH_FIELD_TOOLBAR = 'text field 1 of group 1 of toolbar 1 of window "Music"'
+# macOS 26 build variant: some builds put the text field directly under the
+# toolbar with no wrapping group element.
+_SEARCH_FIELD_TOOLBAR_FLAT = 'text field 1 of toolbar 1 of window "Music"'
 
 _search_field_cache: str | None = None
 
@@ -1389,32 +1392,46 @@ def _get_search_field() -> str:
     macOS 26: search field only appears in the toolbar after the Search sidebar
     item is clicked, so we navigate there on a probe miss before retrying.
 
-    Only caches when the toolbar path is confirmed — never caches the sidebar
-    fallback so a transient cold-start miss won't permanently pin the wrong path.
+    Tries multiple toolbar element-path variants (some macOS 26 builds skip
+    the wrapping `group 1`), then falls back to the sidebar layout. Only
+    caches when a toolbar path is confirmed — never caches the sidebar
+    fallback so a transient cold-start miss won't permanently pin the wrong
+    path.
     """
     global _search_field_cache
     if _search_field_cache is not None:
         return _search_field_cache
 
-    def _probe_toolbar() -> bool:
+    def _probe() -> str | None:
+        """Return the first toolbar variant that exists, or None."""
         ok, result = run_applescript(f"""
 tell application "System Events"
     tell process "Music"
         if exists ({_SEARCH_FIELD_TOOLBAR}) then
-            return "toolbar"
+            return "grouped"
         end if
-        return "sidebar"
+        if exists ({_SEARCH_FIELD_TOOLBAR_FLAT}) then
+            return "flat"
+        end if
+        return "none"
     end tell
 end tell""")
-        return ok and result.strip() == "toolbar"
+        if not ok:
+            return None
+        kind = result.strip()
+        if kind == "grouped":
+            return _SEARCH_FIELD_TOOLBAR
+        if kind == "flat":
+            return _SEARCH_FIELD_TOOLBAR_FLAT
+        return None
 
-    if _probe_toolbar():
-        _search_field_cache = _SEARCH_FIELD_TOOLBAR
-        return _search_field_cache
+    found = _probe()
+    if found:
+        _search_field_cache = found
+        return found
 
     # Toolbar search field not yet visible — send Cmd+F to activate search mode.
-    # On macOS 26, clicking the Search sidebar item only opens the browse view;
-    # Cmd+F is required to make the toolbar text field appear.
+    # On macOS 26, Cmd+F from the Search view activates the toolbar text field.
     run_applescript("""
 tell application "System Events"
     tell process "Music"
@@ -1425,9 +1442,10 @@ tell application "System Events"
     end tell
 end tell""")
 
-    if _probe_toolbar():
-        _search_field_cache = _SEARCH_FIELD_TOOLBAR
-        return _search_field_cache
+    found = _probe()
+    if found:
+        _search_field_cache = found
+        return found
 
     # Neither probe succeeded — return sidebar path without caching so the next
     # call retries (handles transient Music.app startup / accessibility timing).
@@ -1568,6 +1586,36 @@ var p = $.CGPointMake({x}, {y});
 var e = $.CGEventCreateMouseEvent($(), $.kCGEventMouseMoved, p, 0);
 $.CGEventPost($.kCGHIDEventTap, e);
 delay(0.5);
+"ok"'''
+    try:
+        result = subprocess.run(
+            ["osascript", "-l", "JavaScript", "-e", script],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        return result.returncode == 0
+    except (subprocess.TimeoutExpired, Exception):
+        return False
+
+
+def _jxa_mouse_click(x: float, y: float) -> bool:
+    """Left-click at coordinates via CoreGraphics (JXA).
+
+    Posts down+up CGEvents at the given pixel. Bypasses AppleScript's
+    element resolution — useful when re-finding an element by description
+    is unreliable (duplicate descriptions, re-ordered elements).
+
+    Returns True if the command succeeded.
+    """
+    script = f'''ObjC.import("CoreGraphics");
+var p = $.CGPointMake({x}, {y});
+var down = $.CGEventCreateMouseEvent($(), $.kCGEventLeftMouseDown, p, $.kCGMouseButtonLeft);
+$.CGEventPost($.kCGHIDEventTap, down);
+delay(0.05);
+var up = $.CGEventCreateMouseEvent($(), $.kCGEventLeftMouseUp, p, $.kCGMouseButtonLeft);
+$.CGEventPost($.kCGHIDEventTap, up);
+delay(0.2);
 "ok"'''
     try:
         result = subprocess.run(
@@ -2312,6 +2360,306 @@ def get_library_stats() -> tuple[bool, dict]:
 #
 # Requirements: macOS, Accessibility permissions for System Events,
 # Music.app visible (not minimized), display attached (not headless).
+#
+# Architecture: every public ui_* entrypoint is a thin composition of the
+# private primitives below. Each macOS-specific quirk (toolbar layout
+# variants, autocomplete popover dismissal, hover-then-click row mismatches)
+# gets fixed in exactly one place.
+
+# -----------------------------------------------------------------------------
+# Internal primitives — do not call directly from server.py.
+# -----------------------------------------------------------------------------
+
+
+def _focus_search_field(query: str) -> tuple[bool, str]:
+    """Navigate to Search view, activate the search field, type query, commit.
+
+    Single consolidated AppleScript so window state can't drift between calls.
+    On macOS 26 the sidebar click switches context from playlist→Search and
+    Cmd+F makes the toolbar text field appear; on macOS 15 the toolbar field
+    is always visible so the sidebar click and Cmd+F are harmless no-ops.
+
+    Returns (ok, error). On error, environmental causes (locked screen,
+    Accessibility) are checked first so the user gets the right diagnosis.
+    """
+    if not query or not query.strip():
+        return False, "Empty query"
+
+    _ensure_music_frontmost()
+    search_field_path = _get_search_field()
+    ok, err = run_applescript(f"""
+tell application "System Events"
+    tell process "Music"
+        try
+            set sg to splitter group 1 of window 1
+            click UI element 1 of row 1 of outline 1 of scroll area 1 of sg
+            delay 0.4
+        end try
+        keystroke "f" using command down
+        delay 0.5
+        set searchField to {search_field_path}
+        set focused of searchField to true
+        delay 0.2
+        set value of searchField to "{_escape_for_applescript(query)}"
+        delay 1.0
+        key code 36
+    end tell
+end tell""")
+    if not ok:
+        accessible, access_reason = check_ui_accessible()
+        if not accessible:
+            return False, access_reason
+        return False, _classify_as_error(err)
+    return True, ""
+
+
+_PARSE_TOP_RESULTS_QUERY = f"""
+tell application "System Events"
+    tell process "Music"
+        set sa to {_SCROLL_AREA}
+        set resultList to list 1 of sa
+        try
+            set topResults to list 1 of resultList
+        on error
+            return "NO_RESULTS"
+        end try
+        set ec to every UI element of topResults
+        set r to ""
+        set idx to 0
+        repeat with e in ec
+            try
+                set c to class of e as text
+                if c is "UI element" then
+                    set d to description of e
+                    if d is not "Top Results" and d is not "group" then
+                        set idx to idx + 1
+                        -- macOS 26 prepends an empty static text, so search instead of using item 2
+                        set typeLine to ""
+                        set stTexts to every static text of e
+                        repeat with stEl in stTexts
+                            set stName to name of stEl
+                            if stName contains "·" then
+                                set typeLine to stName
+                                exit repeat
+                            end if
+                        end repeat
+                        set r to r & idx & "|||" & d & "|||" & typeLine & return
+                    end if
+                end if
+            end try
+        end repeat
+        return r
+    end tell
+end tell"""
+
+
+def _wait_for_top_results(timeout: float = 5.0) -> tuple[bool, str]:
+    """Poll for Top Results to render. Returns (ok, raw_text_or_error).
+
+    If results don't appear within ~1.2s the autocomplete popover may still
+    be covering them; sends one recovery Enter to dismiss it (matches the
+    manual "two Enters" pattern Eric observed). On AppleScript failure,
+    classifies environmental causes (locked screen, Accessibility) before
+    blaming the element path. On clean timeout with no results, returns
+    (True, "") to signal an empty result set rather than an error.
+    """
+    ok, raw = False, ""
+    start = time.monotonic()
+    second_enter_sent = False
+    while time.monotonic() - start < timeout:
+        ok, raw = run_applescript(_PARSE_TOP_RESULTS_QUERY)
+        if ok and raw and raw.strip() != "NO_RESULTS":
+            return True, raw
+        if not second_enter_sent and time.monotonic() - start > 1.2:
+            run_applescript(
+                'tell application "System Events" to tell process "Music" to key code 36'
+            )
+            second_enter_sent = True
+        time.sleep(0.3)
+    if not ok:
+        accessible, access_reason = check_ui_accessible()
+        if not accessible:
+            return False, access_reason
+        return False, _classify_as_error(raw)
+    return True, ""
+
+
+def _parse_top_results(raw: str) -> list[dict]:
+    """Parse the '|||'-delimited output from _wait_for_top_results into dicts.
+
+    Apple uses U+2004 (three-per-em space) + U+00B7 (middle dot) + U+2004
+    as the separator inside type-lines like "Song · Radiohead". Try a
+    few separator variants for forward-compatibility across macOS versions.
+    """
+    results = []
+    for line in raw.strip().split("\n"):
+        line = line.strip()
+        if not line or "|||" not in line:
+            continue
+        parts = line.split("|||")
+        if len(parts) >= 3:
+            name = parts[1].strip()
+            type_line = parts[2].strip()
+            result_type = ""
+            artist = ""
+            for sep in [" · ", " · ", " · "]:
+                if sep in type_line:
+                    result_type, artist = type_line.split(sep, 1)
+                    break
+            else:
+                result_type = type_line
+            results.append(
+                {
+                    "name": name,
+                    "type": result_type.strip(),
+                    "artist": artist.strip(),
+                    "index": int(parts[0]),
+                }
+            )
+    return results
+
+
+def _find_top_result_position(name: str) -> Optional[tuple[float, float]]:
+    """Find the row in Top Results matching `name` (by description) and
+    return its center (cx, cy). Returns None if not found.
+    """
+    safe_name = _escape_for_applescript(name)
+    ok, pos_str = run_applescript(f"""
+tell application "System Events"
+    tell process "Music"
+        set sa to {_SCROLL_AREA}
+        set resultList to list 1 of sa
+        try
+            set topResults to list 1 of resultList
+        on error
+            return "NOT_FOUND"
+        end try
+        repeat with e in (every UI element of topResults)
+            try
+                if description of e is "{safe_name}" then
+                    set {{x, y}} to position of e
+                    set {{w, h}} to size of e
+                    return ((x + w / 2) as text) & "," & ((y + h / 2) as text)
+                end if
+            end try
+        end repeat
+        return "NOT_FOUND"
+    end tell
+end tell""")
+    if not ok or not pos_str or pos_str.strip() in ("NOT_FOUND", "NO_RESULTS"):
+        return None
+    try:
+        cx, cy = [float(v) for v in pos_str.strip().split(",")]
+        return cx, cy
+    except ValueError:
+        return None
+
+
+def _hover_then_click_subelement(
+    name: str,
+    inner_setter: str,
+    max_wait: float = 1.5,
+) -> tuple[bool, str]:
+    """Hover the result row matching `name`, poll for an inner sub-element to
+    become queryable, then CoreGraphics-click its center.
+
+    CoreGraphics is used (not AppleScript `click`) because re-finding a row
+    by description in a separate AppleScript can land on the wrong row when
+    descriptions are similar — the play-checkbox row-mismatch bug.
+
+    Args:
+        name: result name (matched against description in Top Results).
+        inner_setter: AppleScript fragment that, in the scope where `e` is
+            the row UI element, sets the variable `inner` to the target
+            sub-element. Examples:
+              ``"set inner to checkbox 1 of e"``
+              ``'set inner to (first button of e whose description is "Add to Library")'``
+        max_wait: max seconds to poll for the inner element after hover.
+
+    Returns:
+        (True, "") on successful click; (False, error) otherwise. The error
+        string ``"sub-element not visible after hover"`` is reserved for the
+        common "row found but inner element didn't appear" case so callers
+        can map it to a domain-specific message.
+    """
+    pos = _find_top_result_position(name)
+    if pos is None:
+        return False, f"Could not find '{name}' in search results"
+    cx, cy = pos
+
+    _ensure_music_frontmost()
+    if not _hover_with_nudge(cx, cy):
+        return False, "Failed to hover"
+
+    safe_name = _escape_for_applescript(name)
+    poll_query = f"""
+tell application "System Events"
+    tell process "Music"
+        set sa to {_SCROLL_AREA}
+        set resultList to list 1 of sa
+        try
+            set topResults to list 1 of resultList
+        on error
+            return "NOT_FOUND"
+        end try
+        repeat with e in (every UI element of topResults)
+            try
+                if description of e is "{safe_name}" then
+                    {inner_setter}
+                    set {{ix, iy}} to position of inner
+                    set {{iw, ih}} to size of inner
+                    return ((ix + iw / 2) as text) & "," & ((iy + ih / 2) as text)
+                end if
+            end try
+        end repeat
+        return "NOT_FOUND"
+    end tell
+end tell"""
+    inner_pos = ""
+    deadline = time.monotonic() + max_wait
+    found = False
+    while time.monotonic() < deadline:
+        ok, inner_pos = run_applescript(poll_query)
+        if ok and inner_pos and inner_pos.strip() not in ("NOT_FOUND", "NO_RESULTS"):
+            found = True
+            break
+        time.sleep(0.1)
+    if not found:
+        return False, "sub-element not visible after hover"
+
+    try:
+        ix, iy = [float(v) for v in inner_pos.strip().split(",")]
+    except ValueError:
+        return False, f"Invalid sub-element position: {inner_pos}"
+
+    if not _jxa_mouse_click(ix, iy):
+        return False, "CoreGraphics click failed"
+    return True, ""
+
+
+def _verify_track_playing(name: str, timeout: float = 2.0) -> tuple[bool, str]:
+    """Poll for Music.app's current track name to contain `name` (case-insensitive).
+
+    Returns (True, current_track_name) on match; (False, last_known_name) on
+    timeout. The (False, ...) case lets callers distinguish "playing the
+    wrong track" from "not playing at all" via a follow-up _check_playing().
+    """
+    target = name.lower()
+    now_playing = ""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        ok, now_playing = run_applescript(
+            'tell application "Music" to get name of current track'
+        )
+        if ok and now_playing and target in now_playing.lower():
+            return True, now_playing.strip()
+        time.sleep(0.15)
+    return False, now_playing.strip() if now_playing else ""
+
+
+# -----------------------------------------------------------------------------
+# Public ui_* entrypoints — thin compositions of the primitives above.
+# -----------------------------------------------------------------------------
 
 
 def ui_search_catalog(query: str) -> tuple[bool, list[dict], str]:
@@ -2332,109 +2680,17 @@ def ui_search_catalog(query: str) -> tuple[bool, list[dict], str]:
     if not query or not query.strip():
         return False, [], "Empty query"
 
-    # Focus and populate the search field
-    # Ensure Music has a visible window before interacting with search
-    _ensure_music_frontmost()
-
-    ok, err = run_applescript(f"""
-tell application "System Events"
-    tell process "Music"
-        set searchField to {_get_search_field()}
-        set focused of searchField to true
-        delay 0.3
-        set value of searchField to "{_escape_for_applescript(query)}"
-        delay 0.5
-        key code 36
-    end tell
-end tell""")
+    ok, err = _focus_search_field(query)
     if not ok:
-        # Check environmental causes first (locked screen, Accessibility) before
-        # blaming the element path — a -1728 here often means locked screen.
-        accessible, access_reason = check_ui_accessible()
-        if not accessible:
-            return False, [], access_reason
-        return False, [], _classify_as_error(err)
+        return False, [], err
 
-    # Wait for results to load
-    time.sleep(4)
-
-    # Parse the Top Results section
-    ok, raw = run_applescript(f"""
-tell application "System Events"
-    tell process "Music"
-        set sa to {_SCROLL_AREA}
-        set resultList to list 1 of sa
-        try
-            set topResults to list 1 of resultList
-        on error
-            return "NO_RESULTS"
-        end try
-        set ec to every UI element of topResults
-        set r to ""
-        set idx to 0
-        repeat with e in ec
-            try
-                set c to class of e as text
-                if c is "UI element" then
-                    set d to description of e
-                    if d is not "Top Results" and d is not "group" then
-                        set idx to idx + 1
-                        -- Get the type line (contains middle-dot, e.g. "Song · Radiohead")
-                        -- macOS 26 prepends an empty static text, so search instead of using item 2
-                        set typeLine to ""
-                        set stTexts to every static text of e
-                        repeat with stEl in stTexts
-                            set stName to name of stEl
-                            if stName contains "·" then
-                                set typeLine to stName
-                                exit repeat
-                            end if
-                        end repeat
-                        set r to r & idx & "|||" & d & "|||" & typeLine & return
-                    end if
-                end if
-            end try
-        end repeat
-        return r
-    end tell
-end tell""")
+    ok, raw = _wait_for_top_results()
     if not ok:
-        accessible, access_reason = check_ui_accessible()
-        if not accessible:
-            return False, [], access_reason
-        return False, [], _classify_as_error(raw)
-    if not raw or raw.strip() == "NO_RESULTS":
+        return False, [], raw
+    if not raw:
         return True, [], ""
 
-    results = []
-    for line in raw.strip().split("\n"):
-        line = line.strip()
-        if not line or "|||" not in line:
-            continue
-        parts = line.split("|||")
-        if len(parts) >= 3:
-            name = parts[1].strip()
-            type_line = parts[2].strip()
-            # Parse "Song · Radiohead" or "Album · Radiohead" etc.
-            # Apple uses U+2004 (three-per-em space) + U+00B7 (middle dot) + U+2004
-            result_type = ""
-            artist = ""
-            for sep in ["\u2004\u00b7\u2004", " \u00b7 ", " · "]:
-                if sep in type_line:
-                    result_type, artist = type_line.split(sep, 1)
-                    break
-            else:
-                result_type = type_line
-            results.append(
-                {
-                    "name": name,
-                    "type": result_type.strip(),
-                    "artist": artist.strip(),
-                    "index": int(parts[0]),
-                }
-            )
-
-    return True, results, ""
+    return True, _parse_top_results(raw), ""
 
 
 def ui_clear_search() -> None:
@@ -2464,83 +2720,18 @@ def ui_add_to_library(result_name: str) -> tuple[bool, str]:
     Returns:
         Tuple of (success, message)
     """
-    safe_name = _escape_for_applescript(result_name)
-
-    # Find the result's position
-    ok, pos_str = run_applescript(f"""
-tell application "System Events"
-    tell process "Music"
-        set sa to {_SCROLL_AREA}
-        set resultList to list 1 of sa
-        try
-            set topResults to list 1 of resultList
-        on error
-            return "NO_RESULTS"
-        end try
-        repeat with e in (every UI element of topResults)
-            try
-                if description of e is "{safe_name}" then
-                    set {{x, y}} to position of e
-                    set {{w, h}} to size of e
-                    return ((x + w / 2) as text) & "," & ((y + h / 2) as text)
-                end if
-            end try
-        end repeat
-        return "NOT_FOUND"
-    end tell
-end tell""")
-    if not ok or not pos_str or pos_str.strip() in ("NOT_FOUND", "NO_RESULTS"):
-        return False, f"Could not find '{result_name}' in search results"
-
-    try:
-        cx, cy = [float(v) for v in pos_str.strip().split(",")]
-    except ValueError:
-        return False, f"Invalid position: {pos_str}"
-
-    # Hover to reveal the Add to Library button (nudge first for macOS 26)
-    _ensure_music_frontmost()
-    if not _hover_with_nudge(cx, cy):
-        return False, "Failed to move mouse for hover"
-    time.sleep(1.5)
-
-    # Click the Add to Library button
-    ok, click_result = run_applescript(f"""
-tell application "System Events"
-    tell process "Music"
-        set sa to {_SCROLL_AREA}
-        set resultList to list 1 of sa
-        try
-            set topResults to list 1 of resultList
-        on error
-            return "NO_RESULTS"
-        end try
-        repeat with e in (every UI element of topResults)
-            try
-                if description of e is "{safe_name}" then
-                    -- Look for Add to Library button
-                    repeat with btn in (every button of e)
-                        if description of btn is "Add to Library" then
-                            click btn
-                            return "ADDED"
-                        end if
-                    end repeat
-                    return "NO_ADD_BUTTON"
-                end if
-            end try
-        end repeat
-        return "NOT_FOUND"
-    end tell
-end tell""")
-    if ok and click_result and click_result.strip() == "ADDED":
+    ok, err = _hover_then_click_subelement(
+        result_name,
+        'set inner to (first button of e whose description is "Add to Library")',
+    )
+    if ok:
         return True, f"Added '{result_name}' to library"
-
-    if click_result and "NO_ADD_BUTTON" in click_result:
-        return (
-            False,
-            f"No 'Add to Library' button found — may already be in library, or hover didn't reveal it",
+    if err == "sub-element not visible after hover":
+        return False, (
+            f"No 'Add to Library' button found for '{result_name}' — may "
+            "already be in library, or hover didn't reveal it"
         )
-
-    return False, f"Failed to add: {click_result}"
+    return False, err
 
 
 def ui_play_result(result_name: str) -> tuple[bool, str]:
@@ -2555,70 +2746,20 @@ def ui_play_result(result_name: str) -> tuple[bool, str]:
     Returns:
         Tuple of (success, message)
     """
-    safe_name = _escape_for_applescript(result_name)
+    ok, err = _hover_then_click_subelement(
+        result_name,
+        "set inner to checkbox 1 of e",
+    )
+    if not ok:
+        if err == "sub-element not visible after hover":
+            return False, f"Play checkbox not visible after hover for '{result_name}'"
+        return False, err
 
-    # Find position
-    ok, pos_str = run_applescript(f"""
-tell application "System Events"
-    tell process "Music"
-        set sa to {_SCROLL_AREA}
-        set resultList to list 1 of sa
-        try
-            set topResults to list 1 of resultList
-        on error
-            return "NOT_FOUND"
-        end try
-        repeat with e in (every UI element of topResults)
-            try
-                if description of e is "{safe_name}" then
-                    set {{x, y}} to position of e
-                    set {{w, h}} to size of e
-                    return ((x + w / 2) as text) & "," & ((y + h / 2) as text)
-                end if
-            end try
-        end repeat
-        return "NOT_FOUND"
-    end tell
-end tell""")
-    if not ok or not pos_str or pos_str.strip() == "NOT_FOUND":
-        return False, f"Could not find '{result_name}' in search results"
-
-    try:
-        cx, cy = [float(v) for v in pos_str.strip().split(",")]
-    except ValueError:
-        return False, f"Invalid position: {pos_str}"
-
-    # Hover to reveal play checkbox (nudge first for macOS 26)
-    _ensure_music_frontmost()
-    if not _hover_with_nudge(cx, cy):
-        return False, "Failed to hover"
-    time.sleep(1.5)
-
-    # Click the play checkbox
-    ok, _ = run_applescript(f"""
-tell application "System Events"
-    tell process "Music"
-        set sa to {_SCROLL_AREA}
-        set resultList to list 1 of sa
-        try
-            set topResults to list 1 of resultList
-        on error
-            return "NOT_FOUND"
-        end try
-        repeat with e in (every UI element of topResults)
-            try
-                if description of e is "{safe_name}" then
-                    click checkbox 1 of e
-                    return "CLICKED"
-                end if
-            end try
-        end repeat
-        return "NOT_FOUND"
-    end tell
-end tell""")
-    time.sleep(2)
-    if _check_playing():
+    playing, now_playing = _verify_track_playing(result_name)
+    if playing:
         return True, f"Playing: {result_name}"
+    if _check_playing():
+        return False, f"Clicked play but got '{now_playing}' instead of '{result_name}'"
     return False, f"Clicked play on '{result_name}' but playback didn't start"
 
 
