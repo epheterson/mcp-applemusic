@@ -1786,27 +1786,43 @@ def _verify_track_not_in_playlist(
     return False
 
 
+_ROLLBACK_SETTLE_S = 2.0  # wait for Music.app's local reconciliation (~1s observed)
+
+
 def _verify_track_in_playlist(
     playlist_name: str,
     track_name: str,
     artist: str,
 ) -> bool:
-    """Confirm a track matching (name, artist) is in a playlist, with retries.
+    """Confirm a track matching (name, artist) is STABLY in a playlist.
 
-    Catches two failure modes the racy auto-search flow exposes:
+    Catches three failure modes:
 
     - AppleScript add-to-playlist reports success but local state hasn't
       propagated yet (re-query after a short sleep).
     - UI automation adds the wrong track silently (e.g. clicked a non-Song
       result with stale search state). If what ends up in the playlist
-      doesn't match what the caller asked for, verification fails — caller
-      then fails loudly instead of claiming a false success.
+      doesn't match what the caller asked for, verification fails.
+    - **Music.app server-side rollback** (the J&N class of bug): some
+      user-created playlists (e.g. those with `canEdit:false` in the
+      Apple Music REST API metadata) accept AppleScript `duplicate`
+      LOCALLY for ~1 second — track visible in the playlist UI — then
+      the change reverts. A naive "is the track there now?" check
+      returns True during the transient window and misses the rollback
+      entirely. To catch this, sleep ~2s first (covers the observed
+      ~1s revert window with headroom), THEN check. Mechanism unknown
+      (Apple's local de-dup / auto-curation / canEdit enforcement —
+      not iCloud sync, the timing is too fast); the symptom is what
+      we're protecting against.
 
     Uses ``track_exists_in_playlist``'s ``name contains`` + ``artist contains``
     match, which tolerates mild name/artist punctuation differences.
     """
     if not APPLESCRIPT_AVAILABLE or not track_name:
         return False
+    # Settle delay first — covers the rollback window. Then a short retry
+    # chain to absorb local-state propagation lag.
+    time.sleep(_ROLLBACK_SETTLE_S)
     for i in range(_VERIFY_ATTEMPTS):
         if i > 0:
             time.sleep(_VERIFY_DELAY_S)
