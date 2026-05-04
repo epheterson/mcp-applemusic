@@ -8,7 +8,11 @@ import os
 import pytest
 import sys
 
-# Skip all tests if not on macOS
+# Skip all tests if not on macOS. Most tests in this file shell out to
+# osascript and exercise live Music.app state — they're necessarily slow
+# and macOS-only. Specific test classes that DON'T require live state
+# (TestUISearchParsing, TestUIPrimitives, TestClassifyAsError, TestGetSearchField,
+# TestCheckUiAccessible, etc.) override this with their own faster marker.
 pytestmark = pytest.mark.skipif(
     sys.platform != "darwin", reason="AppleScript tests only run on macOS"
 )
@@ -80,6 +84,8 @@ class TestPlaybackControl:
 
 class TestPlaylistOperations:
     """Test playlist operations."""
+    pytestmark = pytest.mark.slow
+
 
     def test_get_playlists(self):
         """Should get list of playlists."""
@@ -163,6 +169,8 @@ class TestPlaylistOperations:
 
 class TestFolderOperations:
     """Test folder operations."""
+    pytestmark = pytest.mark.slow
+
 
     def test_create_and_delete_folder(self):
         """Should create and delete a folder playlist."""
@@ -317,6 +325,8 @@ class TestFolderOperations:
 
 class TestLibrarySearch:
     """Test library search functions."""
+    pytestmark = pytest.mark.slow
+
 
     def test_search_library_all(self):
         """Should search entire library."""
@@ -384,6 +394,8 @@ class TestGetLibrarySongsPage:
 
 class TestLibraryStats:
     """Test library statistics."""
+    pytestmark = pytest.mark.slow
+
 
     def test_get_library_stats(self):
         """Should get library statistics."""
@@ -461,6 +473,8 @@ class TestInputSanitization:
 
 class TestRemoveFromLibrary:
     """Test remove_from_library function."""
+    pytestmark = pytest.mark.slow
+
 
     def test_remove_nonexistent_track(self):
         """Should return error for track not in library."""
@@ -477,6 +491,8 @@ class TestRemoveFromLibrary:
 
 class TestOpenCatalogSong:
     """Test open_catalog_song function."""
+    pytestmark = pytest.mark.slow
+
 
     def test_open_catalog_song_returns_tuple(self, monkeypatch):
         """Should return (success, message) tuple for valid Apple Music URL."""
@@ -530,6 +546,8 @@ class TestAddTrackDisambiguation:
     - Hot Potato by The Wiggles (Ready, Steady, Wiggle!)
     - Hot Potato by Dorothy the Dinosaur & The Wiggles (Dorothy The Dinosaur's Travelling Show)
     """
+    pytestmark = pytest.mark.slow
+
 
     TEST_PLAYLIST = "🧪 Integration Test Playlist"
 
@@ -615,6 +633,8 @@ end tell""")
 
 class TestOpenCatalogAndPlay:
     """Test open_catalog_and_play function."""
+    pytestmark = pytest.mark.slow
+
 
     def _mock_subprocess(self, monkeypatch):
         """Mock subprocess.run for open_catalog_song."""
@@ -763,6 +783,8 @@ class TestOpenCatalogAndPlay:
 
 class TestLibrarySnapshot:
     """Test library_snapshot and library_diff functions."""
+    pytestmark = pytest.mark.slow
+
 
     def _make_snapshot(self, track_count=100, playlists=None, playback=None):
         """Build a snapshot dict for testing."""
