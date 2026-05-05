@@ -3996,7 +3996,10 @@ def _library_add_track_via_ui(query: str, search_artist: str) -> tuple[bool, str
     target_name = target["name"]
     target_artist = target.get("artist", search_artist)
 
-    ok, msg = asc.ui_add_to_library(target_name)
+    # New popover-canonical flow: pass artist explicitly so the popover-
+    # row matcher can pick the exact (name, artist) match instead of the
+    # first Song-prefix row by that title.
+    ok, msg = asc.ui_add_to_library(target_name, target_artist)
     asc.ui_clear_search()
     if not ok:
         return False, f"Failed to add to library: {msg}"

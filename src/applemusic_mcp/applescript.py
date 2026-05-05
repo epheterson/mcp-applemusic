@@ -2800,6 +2800,309 @@ def _verify_track_playing(name: str, timeout: float = 2.0) -> tuple[bool, str]:
 
 
 # -----------------------------------------------------------------------------
+# Popover-canonical-match primitives (validate-before-act flow)
+# -----------------------------------------------------------------------------
+#
+# When you type into Music.app's search field, an autocomplete pop-over
+# appears at the PROCESS level (not inside any window) with structured
+# rows. Each row exposes:
+#   - text[0] = result name (e.g. "Holocene")
+#   - text[1] = "{Type} · {Artist}" (e.g. "Song · Bon Iver", "Album · X")
+#
+# This is THE canonical match path: we walk the popover rows, find the one
+# whose name and artist match exactly, click it via CoreGraphics — Music.app
+# navigates to the song detail page where the per-row "Add to Library"
+# button is reliably labeled.
+#
+# This bypasses Top Results' opaque ranking and the row-substitution bugs
+# that hardened ui_add_to_playlist with strict matching but couldn't fully
+# eliminate.
+
+
+def _open_search_popover(query: str) -> tuple[bool, str]:
+    """Activate Music, navigate to Search, type the query, validate the
+    autocomplete pop-over appeared.
+
+    Validate-before-act: returns (True, "") only when the pop-over is
+    confirmed visible. Caller can then walk it via _find_popover_song_row.
+    """
+    if not query or not query.strip():
+        return False, "Empty query"
+
+    _ensure_music_frontmost()
+
+    # Sidebar Search-row click forces global Search context (so Cmd+F
+    # opens the catalog search, not a per-playlist filter).
+    search_field_path = _get_search_field()
+    ok, err = run_applescript(f"""
+tell application "System Events"
+    tell process "Music"
+        try
+            set sg to splitter group 1 of window 1
+            click UI element 1 of row 1 of outline 1 of scroll area 1 of sg
+            delay 0.4
+        end try
+        keystroke "f" using command down
+        delay 0.5
+        click {search_field_path}
+        delay 0.3
+        -- Use keystroke (not `set value of`) so the autocomplete pop-over
+        -- actually fires; `set value` updates the field silently and
+        -- doesn't trigger the suggestions provider.
+        keystroke "{_escape_for_applescript(query)}"
+    end tell
+end tell""")
+    if not ok:
+        accessible, access_reason = check_ui_accessible()
+        if not accessible:
+            return False, access_reason
+        return False, _classify_as_error(err)
+
+    # Validate: poll for pop-over to appear (up to ~2.5s — Apple's autocomplete
+    # is usually <1s but can lag on cold queries).
+    deadline = time.monotonic() + 2.5
+    while time.monotonic() < deadline:
+        ok, has = run_applescript(
+            'tell application "System Events" to tell process "Music" '
+            "to return (exists (first pop over))"
+        )
+        if ok and has.strip() == "true":
+            return True, ""
+        time.sleep(0.1)
+    return False, "Search popover did not appear within 2.5s"
+
+
+def _find_popover_song_row(
+    name: str, artist: str = ""
+) -> Optional[tuple[int, str]]:
+    """Walk the autocomplete pop-over for a canonical Song-row match.
+
+    Two modes:
+      - With artist: row must satisfy name contains AND label starts with
+        "Song <middle-dot> " AND label contains the requested artist (all
+        case-insensitive). Refuses Album/Artist/MusicVideo rows.
+      - Without artist: find the FIRST row whose name matches AND label
+        starts with "Song <middle-dot> ". Apple's autocomplete ranks the
+        most-popular match first - this is the canonical interpretation
+        when caller didn't disambiguate.
+
+    Returns (row_index_1based, resolved_artist) - the resolved artist is
+    extracted from the matched row's label so the caller can use it
+    downstream (e.g. for playlist-add verification). None if no match.
+    """
+    safe_name = name.lower()
+    safe_artist = artist.lower()
+    ok, raw = run_applescript("""
+tell application "System Events"
+    tell process "Music"
+        try
+            set t to table 1 of scroll area 1 of (first pop over)
+        on error
+            return "NO_POPOVER"
+        end try
+        set acc to ""
+        set i to 0
+        repeat with r in (rows of t)
+            set i to i + 1
+            try
+                set cell to UI element 1 of r
+                set txts to (every static text of cell)
+                if (count of txts) >= 2 then
+                    set v1 to (value of (item 1 of txts)) as text
+                    set v2 to (value of (item 2 of txts)) as text
+                    set acc to acc & i & "|||" & v1 & "|||" & v2 & linefeed
+                end if
+            end try
+        end repeat
+        return acc
+    end tell
+end tell""")
+    if not ok or not raw or raw.strip() == "NO_POPOVER":
+        return None
+    # The middle-dot separator is U+00B7. Apple wraps it with U+2004
+    # (THREE-PER-EM SPACE) on both sides, sometimes U+00A0 (NBSP).
+    # Normalize all space variants to a regular space first, then match.
+    SONG_PREFIX = "song · "
+    for line in raw.strip().split("\n"):
+        parts = line.split("|||")
+        if len(parts) < 3:
+            continue
+        try:
+            idx = int(parts[0])
+        except ValueError:
+            continue
+        v1 = parts[1].lower()
+        # Normalize space variants surrounding the middle dot.
+        v2_norm = (
+            parts[2]
+            .replace(" ", " ")
+            .replace(" ", " ")
+            .strip()
+        )
+        v2_lower = v2_norm.lower()
+        if not v2_lower.startswith(SONG_PREFIX):
+            continue
+        if safe_name not in v1:
+            continue
+        if safe_artist and safe_artist not in v2_lower:
+            continue
+        # Match. Extract the resolved artist (everything after "Song <dot> ").
+        resolved_artist = v2_norm[len(SONG_PREFIX):].strip()
+        return idx, resolved_artist
+    return None
+
+
+def _click_popover_row(idx: int) -> tuple[bool, str]:
+    """CoreGraphics-click the center of pop-over row ``idx`` (1-based).
+
+    AppleScript's ``click row N`` has been observed to behave differently
+    than a real human click on this UI — CoreGraphics events match the
+    real-click behavior of NAVIGATING to the song page (rather than
+    starting playback).
+    """
+    ok, pos = run_applescript(f"""
+tell application "System Events"
+    tell process "Music"
+        try
+            set t to table 1 of scroll area 1 of (first pop over)
+            set rp to position of (row {idx} of t)
+            set rs to size of (row {idx} of t)
+            set cx to (item 1 of rp) + (item 1 of rs) / 2
+            set cy to (item 2 of rp) + (item 2 of rs) / 2
+            return (cx as text) & "," & (cy as text)
+        on error
+            return "ERR"
+        end try
+    end tell
+end tell""")
+    if not ok or pos.strip() == "ERR":
+        return False, f"Could not get position of pop-over row {idx}"
+    try:
+        cx, cy = [float(v) for v in pos.strip().split(",")]
+    except ValueError:
+        return False, f"Invalid row position: {pos}"
+    if not _jxa_mouse_click(cx, cy):
+        return False, "CoreGraphics click failed"
+    return True, ""
+
+
+def _wait_for_song_page(name: str, timeout: float = 5.0) -> Optional[str]:
+    """After clicking a pop-over Song row, poll for the song detail page
+    to render — confirmed by the presence of a track group whose description
+    matches ``name`` inside the album-context list.
+
+    Returns the AppleScript path to the matched track group, or None on
+    timeout. The path is suitable for subsequent position/hover queries.
+    """
+    safe_name = _escape_for_applescript(name)
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        # Section index varies by page layout (sometimes album section is
+        # list 1, sometimes list 2 with header sections preceding it).
+        # Search every list and return the index of the one containing our
+        # track. Returns "0" if no section has the track yet.
+        ok, found_idx = run_applescript(f"""
+tell application "System Events"
+    tell process "Music"
+        try
+            set lst to list 1 of scroll area 2 of splitter group 1 of window 1
+            set sectionCount to count of lists of lst
+            repeat with i from 1 to sectionCount
+                try
+                    set sec to list i of lst
+                    if exists (first group of sec whose description is "{safe_name}") then
+                        return i as text
+                    end if
+                end try
+            end repeat
+            return "0"
+        on error
+            return "0"
+        end try
+    end tell
+end tell""")
+        if ok and found_idx.strip().isdigit() and int(found_idx.strip()) > 0:
+            i = int(found_idx.strip())
+            return (
+                f'first group of list {i} of list 1 of scroll area 2 of '
+                f'splitter group 1 of window 1 whose description is "{safe_name}"'
+            )
+        time.sleep(0.2)
+    return None
+
+
+def _hover_and_find_button(
+    group_path: str,
+    expected_desc: str,
+    max_wait: float = 2.0,
+) -> tuple[bool, Optional[tuple[float, float]]]:
+    """Hover the center of the row at ``group_path``, then poll for a
+    button whose description EXACTLY matches ``expected_desc``. Returns
+    (True, (x, y)) with the button's center coords on success, or
+    (False, None) if the button never becomes visible.
+
+    This is the validate-before-act primitive: we don't click until we've
+    confirmed the right element is there. Lets callers distinguish a
+    stale-state miss (no Add to Library button → track may already be in
+    library) from a real failure.
+    """
+    # First get the row position so we know where to hover.
+    ok, pos = run_applescript(f"""
+tell application "System Events"
+    tell process "Music"
+        try
+            set g to {group_path}
+            set gp to position of g
+            set gs to size of g
+            return ((item 1 of gp) + (item 1 of gs) / 2 as text) & "," & ((item 2 of gp) + (item 2 of gs) / 2 as text)
+        on error
+            return "ERR"
+        end try
+    end tell
+end tell""")
+    if not ok or pos.strip() == "ERR":
+        return False, None
+    try:
+        hcx, hcy = [float(v) for v in pos.strip().split(",")]
+    except ValueError:
+        return False, None
+
+    if not _hover_with_nudge(hcx, hcy):
+        return False, None
+
+    # Poll for the expected button to appear with the correct description.
+    deadline = time.monotonic() + max_wait
+    rehovered = False
+    while time.monotonic() < deadline:
+        ok, bpos = run_applescript(f"""
+tell application "System Events"
+    tell process "Music"
+        try
+            set g to {group_path}
+            set b to (first button of g whose description is "{expected_desc}")
+            set bp to position of b
+            set bs to size of b
+            return ((item 1 of bp) + (item 1 of bs) / 2 as text) & "," & ((item 2 of bp) + (item 2 of bs) / 2 as text)
+        on error
+            return "NOT_FOUND"
+        end try
+    end tell
+end tell""")
+        if ok and bpos.strip() != "NOT_FOUND":
+            try:
+                bx, by = [float(v) for v in bpos.strip().split(",")]
+                return True, (bx, by)
+            except ValueError:
+                pass
+        # Re-hover halfway through if button hasn't appeared.
+        if not rehovered and time.monotonic() > deadline - max_wait / 2:
+            _hover_with_nudge(hcx, hcy)
+            rehovered = True
+        time.sleep(0.15)
+    return False, None
+
+
+# -----------------------------------------------------------------------------
 # Public ui_* entrypoints — thin compositions of the primitives above.
 # -----------------------------------------------------------------------------
 
@@ -2862,30 +3165,86 @@ tell application "System Events"
 end tell""")
 
 
-def ui_add_to_library(result_name: str) -> tuple[bool, str]:
-    """Add a catalog item to library via Music.app UI.
+def ui_add_to_library(name: str, artist: str = "") -> tuple[bool, str]:
+    """Add a catalog track to library via Music.app UI — popover-canonical flow.
 
-    Must be called after ui_search_catalog() with results visible.
-    Hovers over the result to reveal the "Add to Library" button and clicks it.
+    The flow is validate-before-act at every step:
+    1. Foreground Music + open search popover with "{name} {artist}" query
+    2. Validate popover appeared
+    3. Walk popover rows for canonical "Song · {artist}" match (refuses
+       Album/Artist/MusicVideo rows since those navigate to non-track pages)
+    4. CoreGraphics-click the matched row → song detail page
+    5. Validate navigation: track group with `name` exists in album list
+    6. Hover the track row, validate "Add to Library" button (exact desc)
+       appears — refuses to click anything else (Favorite, Download, More)
+    7. CoreGraphics-click the validated button
 
-    Args:
-        result_name: Exact name of the result to add (as returned by ui_search_catalog)
+    Replaces the previous Top Results-based approach which suffered from
+    Apple's opaque ranking lottery (track sometimes only surfaces as Album
+    row, "Hong Kong"-style B-sides exposing no Add to Library button on
+    Top Results rows, etc.).
+
+    ``artist`` is required for canonical matching. Empty artist falls back
+    to picking the first Song-prefix row, but with a warning in the result
+    message — caller should provide artist whenever known.
 
     Returns:
         Tuple of (success, message)
     """
-    ok, err = _hover_then_click_subelement(
-        result_name,
-        'set inner to (first button of e whose description is "Add to Library")',
-    )
-    if ok:
-        return True, f"Added '{result_name}' to library"
-    if err == "sub-element not visible after hover":
+    if not name.strip():
+        return False, "Empty track name"
+
+    query = f"{name} {artist}".strip()
+
+    # Step 1+2: open popover with validation
+    ok, err = _open_search_popover(query)
+    if not ok:
+        return False, f"Popover did not appear: {err}"
+
+    # Step 3: find canonical Song row (also resolves artist if not given)
+    match = _find_popover_song_row(name, artist)
+    if match is None:
+        ui_clear_search()
+        suffix = f" by {artist!r}" if artist else ""
         return False, (
-            f"No 'Add to Library' button found for '{result_name}' — may "
-            "already be in library, or hover didn't reveal it"
+            f"No Song-row match in autocomplete pop-over for {name!r}{suffix}. "
+            f"Track may not exist on Apple Music or pop-over hasn't surfaced "
+            f"it. Try a more specific query."
         )
-    return False, err
+    idx, resolved_artist = match
+    # Adopt the popover's resolved artist when caller didn't supply one,
+    # so downstream messages and verification use the canonical name.
+    if not artist:
+        artist = resolved_artist
+
+    # Step 4: click row → navigates
+    ok, err = _click_popover_row(idx)
+    if not ok:
+        return False, f"Failed to click pop-over row: {err}"
+
+    # Step 5: validate landing on song page
+    group_path = _wait_for_song_page(name)
+    if group_path is None:
+        return False, (
+            f"Pop-over navigation didn't reach a song page with track "
+            f"{name!r} — Music.app may have shown a different view"
+        )
+
+    # Step 6: hover + validate Add to Library button is present
+    ok, btn_pos = _hover_and_find_button(group_path, "Add to Library")
+    if not ok:
+        return False, (
+            f"'Add to Library' button not visible after hover on {name!r}. "
+            f"Track may already be in library (button would be 'Download' "
+            f"instead) — try search_library to confirm."
+        )
+
+    # Step 7: click validated button
+    bx, by = btn_pos
+    if not _jxa_mouse_click(bx, by):
+        return False, "CoreGraphics click on Add to Library button failed"
+
+    return True, f"Added '{name}' by '{artist}' to library"
 
 
 def ui_play_result(result_name: str) -> tuple[bool, str]:
@@ -2950,122 +3309,77 @@ def ui_play_result_by_query(query: str) -> tuple[bool, str]:
 def ui_add_to_playlist(playlist_name: str, query: str, artist: str = "") -> tuple[bool, str]:
     """Add a catalog track to a playlist via UI automation (no API required).
 
-    Composite flow:
-    1. Search catalog via Music.app UI
-    2. Add the best matching song to library via hover+click
-    3. Wait for iCloud sync
-    4. Add to playlist via existing AppleScript backend
+    Composite flow that uses popover-canonical-match for the catalog lookup,
+    so we never substitute a wrong track:
+
+    1. Parse query into (name, artist) — split on " - " when artist not given
+    2. ui_add_to_library(name, artist) — popover -> song page -> per-row "+"
+    3. Wait for iCloud sync, verify track is in library
+    4. add_track_to_playlist (AppleScript backend)
+    5. Verify track lands in playlist (sleep past Music.app's local-reconcile
+       rollback window, then poll)
 
     Args:
         playlist_name: Target playlist name
-        query: Search query (e.g. "Artist Song")
-        artist: Optional artist filter for result matching
+        query: Search query (e.g. "Track Name" or "Track Name - Artist")
+        artist: Optional artist; recommended for canonical matching
 
     Returns:
         Tuple of (success, message)
     """
-    # Search
-    ok, results, why = ui_search_catalog(query)
-    if not ok or not results:
-        ui_clear_search()
-        return False, why or f"No results found for '{query}'"
-
-    # Find best song result. STRICT matching on BOTH name and artist —
-    # never silently substitute a wildly different result. Earlier behavior
-    # (`target = results[0]` on no match) caused real wrong-track adds that
-    # verify couldn't catch because the wrong track DID land in the playlist.
-    # We also reject same-artist different-track substitutions (e.g. picking
-    # "Undone In Sorrow" by Crooked Still when the user asked for "Wandering"
-    # by Crooked Still).
-    #
-    # Strategy: derive the track-name portion of the query by stripping the
-    # artist (if provided) and require Song results to contain at least one
-    # significant token from that portion in their name.
+    # Derive (name, artist). Two common caller patterns:
+    #   (a) query="Track Name Artist Name", artist="Artist Name" —
+    #       strip the artist token from the end of query so name is
+    #       just the track title (the popover row labels track names
+    #       only, not "Track - Artist").
+    #   (b) query="Track - Artist", no artist — split on " - ".
+    name = query.strip()
     if artist:
-        track_query_part = query.lower().replace(artist.lower(), "").strip()
-    else:
-        track_query_part = query.lower().strip()
-    # Ignore very short tokens ("a", "to", "by") — they'd match almost anything.
-    name_tokens = [t for t in track_query_part.split() if len(t) >= 3]
+        artist_lc = artist.lower()
+        if name.lower().endswith(" " + artist_lc):
+            name = name[: -(len(artist) + 1)].strip()
+        elif name.lower() == artist_lc:
+            return False, f"Query {query!r} is just the artist; need a track name too"
+    elif " - " in query:
+        parts = query.split(" - ", 1)
+        if len(parts) == 2:
+            name, artist = parts[0].strip(), parts[1].strip()
 
-    def _name_matches(result_name: str) -> bool:
-        if not name_tokens:
-            # Caller gave only an artist (no track query content) — accept any
-            # Song by that artist. Rare but legitimate ("add me anything by X").
-            return True
-        rname = result_name.lower()
-        return any(tok in rname for tok in name_tokens)
-
-    target = None
-    first_song = None
-    for r in results:
-        if r["type"] == "Song":
-            if first_song is None:
-                first_song = r
-            if artist and artist.lower() not in r.get("artist", "").lower():
-                continue
-            if not _name_matches(r.get("name", "")):
-                continue
-            target = r
-            break
-
-    if target is None:
-        # No Song result matched both name and artist. Surface the closest
-        # candidate so the caller can see why we declined to substitute.
-        closest = first_song.get("name") if first_song else None
-        closest_artist = first_song.get("artist", "?") if first_song else None
-        if artist and closest:
-            return False, (
-                f"No Song result for {query!r} by {artist!r} in Top Results. "
-                f"Closest Song was {closest!r} by {closest_artist!r}; not "
-                f"adding because name/artist don't match the request."
-            )
-        if first_song is None:
-            return False, (
-                f"No Song-type Top Result for {query!r} (only Albums/Artists "
-                f"surfaced). Try a more specific query."
-            )
-        # No artist supplied and the first Song's name didn't match query
-        # tokens — still fail loudly rather than substitute.
-        return False, (
-            f"Top Results for {query!r} did not include a Song whose name "
-            f"matched the query. Closest was {closest!r}; refusing to "
-            f"silently substitute."
-        )
-
-    # Add to library
-    ok, msg = ui_add_to_library(target["name"])
+    # Step 1+2: Add to library via popover-canonical flow
+    ok, msg = ui_add_to_library(name, artist)
     if not ok:
-        ui_clear_search()
         return False, f"Failed to add to library: {msg}"
 
-    ui_clear_search()
-
-    # Wait for iCloud sync
-    track_name = target["name"]
-    track_artist = target.get("artist", artist)
-    time.sleep(8)
-
-    # Verify it's in library
-    for attempt in range(3):
+    # Step 3: Wait for iCloud sync; verify track in library before playlist add
+    track_name = name
+    track_artist = artist
+    time.sleep(2)
+    library_visible = False
+    for _ in range(8):
         ok, lib_results = search_library(track_name.replace("\u0301", ""), "songs")
         if ok and lib_results:
-            break
-        time.sleep(3)
-    else:
-        return False, f"Added to library but sync not confirmed for '{track_name}'"
+            # Confirm the artist matches too (strict)
+            if not track_artist or any(
+                track_artist.lower() in (t.get("artist") or "").lower()
+                for t in lib_results
+            ):
+                library_visible = True
+                break
+        time.sleep(1.5)
+    if not library_visible:
+        return False, (
+            f"Added '{track_name}' to library but it didn't appear in local "
+            f"library search within ~14s — iCloud sync may be delayed."
+        )
 
-    # Add to playlist via existing backend, then verify the track actually
-    # persisted. Some user-created playlists accept AppleScript `duplicate`
-    # for ~1 second, then revert the local change (Music.app local
-    # reconciliation; mechanism unknown but reproducible). Without a settle
-    # delay before the first probe, the verify lands inside the rollback
-    # transient window and returns a false-positive success.
+    # Step 4: Add to playlist via existing AppleScript backend
     ok, result = add_track_to_playlist(playlist_name, track_name, track_artist)
     if not ok:
         return False, f"Added to library but failed to add to playlist: {result}"
-    # Sleep past the rollback window before checking. 2s covers the observed
-    # ~1s revert with headroom; matches server.py:_ROLLBACK_SETTLE_S.
+
+    # Step 5: Verify it persisted (some user-created playlists silently revert
+    # local AppleScript edits server-side). Sleep past the rollback window
+    # before the first probe.
     time.sleep(2.0)
     for _ in range(3):
         exists_ok, exists = track_exists_in_playlist(
