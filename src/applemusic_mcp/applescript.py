@@ -130,7 +130,7 @@ def _track_filter_clause(
     caller didn't provide anything to match on.
     """
     if track_id:
-        return f'whose persistent ID is "{track_id}"'
+        return f'whose persistent ID is "{_escape_for_applescript(track_id)}"'
     if track_name:
         safe_track = _escape_for_applescript(track_name)
         if artist:
@@ -3019,7 +3019,12 @@ end tell""")
         return False, None
 
     # Poll for the expected button to appear with the correct description.
-    deadline = time.monotonic() + max_wait
+    # Capture both `start` and `deadline` separately so the re-hover trigger
+    # below ("halfway through max_wait") doesn't fire spuriously early on
+    # tight timeouts (was `deadline - max_wait/2`, which collapses against
+    # the loop's first-iteration latency on fast machines).
+    start = time.monotonic()
+    deadline = start + max_wait
     rehovered = False
     while time.monotonic() < deadline:
         ok, bpos = run_applescript(f"""
@@ -3042,8 +3047,8 @@ end tell""")
                 return True, (bx, by)
             except ValueError:
                 pass
-        # Re-hover halfway through if button hasn't appeared.
-        if not rehovered and time.monotonic() > deadline - max_wait / 2:
+        # Re-hover at the halfway point if button hasn't appeared.
+        if not rehovered and time.monotonic() > start + max_wait / 2:
             _hover_with_nudge(hcx, hcy)
             rehovered = True
         time.sleep(0.15)
