@@ -81,6 +81,84 @@ def _find_playlist_applescript(safe_name: str) -> str:
         end try"""
 
 
+def _parse_library_track_line(line: str) -> Optional[dict]:
+    """Parse one ``|||``-delimited library track line into a dict.
+
+    Format produced by the AppleScript blocks in get_library_songs /
+    get_library_songs_page / search_library:
+        name|||artist|||album|||duration_seconds|||genre|||year|||id|||explicit
+    Returns None when the line is malformed (skipped by callers).
+    The 8th `explicit` field is recent; older outputs may stop at 7 fields.
+    """
+    if "|||" not in line:
+        return None
+    parts = line.split("|||")
+    if len(parts) < 7:
+        return None
+    try:
+        dur_sec = float(parts[3])
+        minutes = int(dur_sec) // 60
+        seconds = int(dur_sec) % 60
+        duration = f"{minutes}:{seconds:02d}"
+    except (ValueError, TypeError):
+        duration = ""
+    explicit = "Unknown"
+    if len(parts) >= 8:
+        explicit = "Yes" if parts[7].lower() == "true" else "No"
+    return {
+        "name": parts[0],
+        "artist": parts[1],
+        "album": parts[2],
+        "duration": duration,
+        "genre": parts[4],
+        "year": parts[5],
+        "id": parts[6],
+        "explicit": explicit,
+    }
+
+
+def _track_filter_clause(
+    track_name: str = "", artist: Optional[str] = None, track_id: Optional[str] = None
+) -> Optional[str]:
+    """Build the ``whose ...`` AppleScript clause that selects one track.
+
+    Used by remove_track_from_playlist / remove_from_library — both want
+    "match by persistent ID exactly, or fall back to name (+ optional
+    artist) contains".
+
+    Returns the clause (without leading/trailing space) or None when the
+    caller didn't provide anything to match on.
+    """
+    if track_id:
+        return f'whose persistent ID is "{track_id}"'
+    if track_name:
+        safe_track = _escape_for_applescript(track_name)
+        if artist:
+            safe_artist = _escape_for_applescript(artist)
+            return f'whose name contains "{safe_track}" and artist contains "{safe_artist}"'
+        return f'whose name contains "{safe_track}"'
+    return None
+
+
+def _library_track_query(track_name: str, artist: Optional[str] = None) -> str:
+    """Build the AppleScript fragment that resolves a single library track.
+
+    Used by play/love/dislike/rating/reveal — all of them want the same
+    "first track in library playlist 1 matching name (and optionally artist)"
+    selector. Centralizing avoids drift between callers.
+
+    Both inputs are escaped here; callers pass raw user-supplied strings.
+    """
+    safe_track = _escape_for_applescript(track_name)
+    if artist:
+        safe_artist = _escape_for_applescript(artist)
+        return (
+            f'first track of library playlist 1 whose name contains "{safe_track}" '
+            f'and artist contains "{safe_artist}"'
+        )
+    return f'first track of library playlist 1 whose name contains "{safe_track}"'
+
+
 def run_applescript(script: str) -> tuple[bool, str]:
     """Execute AppleScript and return (success, output/error).
 
@@ -963,7 +1041,8 @@ def add_track_to_playlist(
     safe_playlist = _escape_for_applescript(playlist_name)
     safe_track = _escape_for_applescript(track_name)
 
-    # Build filter conditions
+    # Primary query uses `artist is` (exact); fallback (when artist is given)
+    # relaxes to `artist contains` so partial matches still resolve.
     conditions = [f'name contains "{safe_track}"']
     if artist:
         safe_artist = _escape_for_applescript(artist)
@@ -974,23 +1053,14 @@ def add_track_to_playlist(
 
     track_query = f'first track of library playlist 1 whose {" and ".join(conditions)}'
 
-    # If artist provided, try exact match first, then fall back to contains
-    if artist and not album:
+    fallback_query = None
+    if artist:
         fallback_conditions = [f'name contains "{safe_track}"', f'artist contains "{safe_artist}"']
+        if album:
+            fallback_conditions.append(f'album contains "{safe_album}"')
         fallback_query = (
             f'first track of library playlist 1 whose {" and ".join(fallback_conditions)}'
         )
-    elif artist and album:
-        fallback_conditions = [
-            f'name contains "{safe_track}"',
-            f'artist contains "{safe_artist}"',
-            f'album contains "{safe_album}"',
-        ]
-        fallback_query = (
-            f'first track of library playlist 1 whose {" and ".join(fallback_conditions)}'
-        )
-    else:
-        fallback_query = None
 
     if fallback_query:
         script = f"""
@@ -1046,20 +1116,8 @@ def remove_track_from_playlist(
         Tuple of (success, message or error)
     """
     safe_playlist = _escape_for_applescript(playlist_name)
-
-    # Build track filter
-    if track_id:
-        # Remove by ID (exact match)
-        track_filter = f'whose persistent ID is "{track_id}"'
-    elif track_name:
-        # Remove by name (partial match)
-        safe_track = _escape_for_applescript(track_name)
-        if artist:
-            safe_artist = _escape_for_applescript(artist)
-            track_filter = f'whose name contains "{safe_track}" and artist contains "{safe_artist}"'
-        else:
-            track_filter = f'whose name contains "{safe_track}"'
-    else:
+    track_filter = _track_filter_clause(track_name, artist, track_id)
+    if track_filter is None:
         return False, "Must provide track_name or track_id"
 
     script = f"""
@@ -1095,19 +1153,8 @@ def remove_from_library(
     Returns:
         Tuple of (success, message or error)
     """
-    # Build track filter
-    if track_id:
-        # Remove by ID (exact match)
-        track_filter = f'whose persistent ID is "{track_id}"'
-    elif track_name:
-        # Remove by name (partial match)
-        safe_track = _escape_for_applescript(track_name)
-        if artist:
-            safe_artist = _escape_for_applescript(artist)
-            track_filter = f'whose name contains "{safe_track}" and artist contains "{safe_artist}"'
-        else:
-            track_filter = f'whose name contains "{safe_track}"'
-    else:
+    track_filter = _track_filter_clause(track_name, artist, track_id)
+    if track_filter is None:
         return False, "Must provide track_name or track_id"
 
     script = f"""
@@ -1292,12 +1339,7 @@ def play_track(track_name: str, artist: Optional[str] = None) -> tuple[bool, str
         Tuple of (success, message or error)
     """
     safe_track = _escape_for_applescript(track_name)
-
-    if artist:
-        safe_artist = _escape_for_applescript(artist)
-        track_query = f'first track of library playlist 1 whose name contains "{safe_track}" and artist contains "{safe_artist}"'
-    else:
-        track_query = f'first track of library playlist 1 whose name contains "{safe_track}"'
+    track_query = _library_track_query(track_name, artist)
 
     script = f"""
     tell application "Music"
@@ -1946,36 +1988,7 @@ def get_library_songs(limit: int = 100) -> tuple[bool, list[dict]]:
     if not success:
         return False, output
 
-    tracks = []
-    for line in output.split("\n"):
-        if "|||" in line:
-            parts = line.split("|||")
-            if len(parts) >= 7:
-                try:
-                    dur_sec = float(parts[3])
-                    minutes = int(dur_sec) // 60
-                    seconds = int(dur_sec) % 60
-                    duration = f"{minutes}:{seconds:02d}"
-                except (ValueError, TypeError):
-                    duration = ""
-
-                # Parse explicit field (added in 8th position)
-                explicit = "Unknown"
-                if len(parts) >= 8:
-                    explicit = "Yes" if parts[7].lower() == "true" else "No"
-
-                tracks.append(
-                    {
-                        "name": parts[0],
-                        "artist": parts[1],
-                        "album": parts[2],
-                        "duration": duration,
-                        "genre": parts[4],
-                        "year": parts[5],
-                        "id": parts[6],
-                        "explicit": explicit,
-                    }
-                )
+    tracks = [t for t in (_parse_library_track_line(line) for line in output.split("\n")) if t]
     return True, tracks
 
 
@@ -2046,33 +2059,10 @@ def get_library_songs_page(offset: int, limit: int) -> tuple[bool, list[dict], i
                 total = int(line[6:].strip())
             except ValueError:
                 pass
-        elif "|||" in line:
-            parts = line.split("|||")
-            if len(parts) >= 7:
-                try:
-                    dur_sec = float(parts[3])
-                    minutes = int(dur_sec) // 60
-                    seconds = int(dur_sec) % 60
-                    duration = f"{minutes}:{seconds:02d}"
-                except (ValueError, TypeError):
-                    duration = ""
-
-                explicit = "Unknown"
-                if len(parts) >= 8:
-                    explicit = "Yes" if parts[7].lower() == "true" else "No"
-
-                tracks.append(
-                    {
-                        "name": parts[0],
-                        "artist": parts[1],
-                        "album": parts[2],
-                        "duration": duration,
-                        "genre": parts[4],
-                        "year": parts[5],
-                        "id": parts[6],
-                        "explicit": explicit,
-                    }
-                )
+            continue
+        parsed = _parse_library_track_line(line)
+        if parsed:
+            tracks.append(parsed)
     return True, tracks, total, ""
 
 
@@ -2139,36 +2129,7 @@ def search_library(query: str, types: str = "all") -> tuple[bool, list[dict]]:
     if not success:
         return False, output
 
-    tracks = []
-    for line in output.split("\n"):
-        if "|||" in line:
-            parts = line.split("|||")
-            if len(parts) >= 7:
-                try:
-                    dur_sec = float(parts[3])
-                    minutes = int(dur_sec) // 60
-                    seconds = int(dur_sec) % 60
-                    duration = f"{minutes}:{seconds:02d}"
-                except (ValueError, TypeError):
-                    duration = ""
-
-                # Parse explicit field (added in 8th position)
-                explicit = "Unknown"
-                if len(parts) >= 8:
-                    explicit = "Yes" if parts[7].lower() == "true" else "No"
-
-                tracks.append(
-                    {
-                        "name": parts[0],
-                        "artist": parts[1],
-                        "album": parts[2],
-                        "duration": duration,
-                        "genre": parts[4],
-                        "year": parts[5],
-                        "id": parts[6],
-                        "explicit": explicit,
-                    }
-                )
+    tracks = [t for t in (_parse_library_track_line(line) for line in output.split("\n")) if t]
     return True, tracks
 
 
@@ -2188,12 +2149,7 @@ def love_track(track_name: str, artist: Optional[str] = None) -> tuple[bool, str
         Tuple of (success, message or error)
     """
     safe_track = _escape_for_applescript(track_name)
-
-    if artist:
-        safe_artist = _escape_for_applescript(artist)
-        track_query = f'first track of library playlist 1 whose name contains "{safe_track}" and artist contains "{safe_artist}"'
-    else:
-        track_query = f'first track of library playlist 1 whose name contains "{safe_track}"'
+    track_query = _library_track_query(track_name, artist)
 
     script = f"""
     tell application "Music"
@@ -2224,12 +2180,7 @@ def dislike_track(track_name: str, artist: Optional[str] = None) -> tuple[bool, 
         Tuple of (success, message or error)
     """
     safe_track = _escape_for_applescript(track_name)
-
-    if artist:
-        safe_artist = _escape_for_applescript(artist)
-        track_query = f'first track of library playlist 1 whose name contains "{safe_track}" and artist contains "{safe_artist}"'
-    else:
-        track_query = f'first track of library playlist 1 whose name contains "{safe_track}"'
+    track_query = _library_track_query(track_name, artist)
 
     script = f"""
     tell application "Music"
@@ -2260,12 +2211,7 @@ def get_rating(track_name: str, artist: Optional[str] = None) -> tuple[bool, int
         Tuple of (success, rating 0-100 or error message string)
     """
     safe_track = _escape_for_applescript(track_name)
-
-    if artist:
-        safe_artist = _escape_for_applescript(artist)
-        track_query = f'first track of library playlist 1 whose name contains "{safe_track}" and artist contains "{safe_artist}"'
-    else:
-        track_query = f'first track of library playlist 1 whose name contains "{safe_track}"'
+    track_query = _library_track_query(track_name, artist)
 
     script = f"""
     tell application "Music"
@@ -2299,12 +2245,7 @@ def set_rating(track_name: str, rating: int, artist: Optional[str] = None) -> tu
     """
     safe_track = _escape_for_applescript(track_name)
     rating = max(0, min(100, rating))
-
-    if artist:
-        safe_artist = _escape_for_applescript(artist)
-        track_query = f'first track of library playlist 1 whose name contains "{safe_track}" and artist contains "{safe_artist}"'
-    else:
-        track_query = f'first track of library playlist 1 whose name contains "{safe_track}"'
+    track_query = _library_track_query(track_name, artist)
 
     script = f"""
     tell application "Music"
@@ -2392,12 +2333,7 @@ def reveal_track(track_name: str, artist: Optional[str] = None) -> tuple[bool, s
         Tuple of (success, message or error)
     """
     safe_track = _escape_for_applescript(track_name)
-
-    if artist:
-        safe_artist = _escape_for_applescript(artist)
-        track_query = f'first track of library playlist 1 whose name contains "{safe_track}" and artist contains "{safe_artist}"'
-    else:
-        track_query = f'first track of library playlist 1 whose name contains "{safe_track}"'
+    track_query = _library_track_query(track_name, artist)
 
     script = f"""
     tell application "Music"
@@ -2831,10 +2767,12 @@ def _open_search_popover(query: str) -> tuple[bool, str]:
 
     _ensure_music_frontmost()
 
-    # Sidebar Search-row click forces global Search context (so Cmd+F
-    # opens the catalog search, not a per-playlist filter).
-    search_field_path = _get_search_field()
-    ok, err = run_applescript(f"""
+    # Step 1: navigate to Search context FIRST. Sidebar click forces global
+    # Search (so Cmd+F opens catalog search, not a per-playlist filter).
+    # Don't resolve the search field path yet — when Music is on a song-
+    # detail page the toolbar layout is different and the path probe would
+    # return the wrong fallback.
+    run_applescript("""
 tell application "System Events"
     tell process "Music"
         try
@@ -2843,12 +2781,22 @@ tell application "System Events"
             delay 0.4
         end try
         keystroke "f" using command down
-        delay 0.5
+        delay 0.6
+    end tell
+end tell""")
+
+    # Step 2: NOW resolve the search field path. Music is in Search view,
+    # so the toolbar variants probe should hit on this macOS build.
+    search_field_path = _get_search_field()
+
+    # Step 3: focus the field + type via keystroke (not `set value of`,
+    # which silently updates the field without triggering the autocomplete
+    # suggestions provider).
+    ok, err = run_applescript(f"""
+tell application "System Events"
+    tell process "Music"
         click {search_field_path}
         delay 0.3
-        -- Use keystroke (not `set value of`) so the autocomplete pop-over
-        -- actually fires; `set value` updates the field silently and
-        -- doesn't trigger the suggestions provider.
         keystroke "{_escape_for_applescript(query)}"
     end tell
 end tell""")

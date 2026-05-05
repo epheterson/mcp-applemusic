@@ -916,58 +916,6 @@ def _apply_pagination(
     return items, total_count, None
 
 
-def _split_csv(value: str) -> list[str]:
-    """Split comma-separated string into list of trimmed non-empty values.
-
-    Args:
-        value: Comma-separated string (e.g., "a, b, c")
-
-    Returns:
-        List of trimmed values, excluding empty strings
-    """
-    return [s.strip() for s in value.split(",") if s.strip()]
-
-
-def _parse_tracks_json(tracks: str) -> tuple[list[dict], str | None]:
-    """Parse JSON tracks array parameter.
-
-    Args:
-        tracks: JSON string like '[{"name":"Song","artist":"Artist"},...]'
-
-    Returns:
-        Tuple of (track_list, error_message)
-        - On success: (list of track dicts, None)
-        - On error: ([], error message string)
-    """
-    try:
-        track_list = json.loads(tracks)
-        if not isinstance(track_list, list):
-            return [], "Error: tracks must be a JSON array"
-        return track_list, None
-    except json.JSONDecodeError as e:
-        return [], f"Error: Invalid JSON - {e}"
-
-
-def _validate_track_object(track_obj: dict) -> tuple[str, str, str | None]:
-    """Validate and extract name/artist from a track object.
-
-    Args:
-        track_obj: Dict with 'name' and optional 'artist' fields
-
-    Returns:
-        Tuple of (name, artist, error_message)
-        - On success: (name, artist, None)
-        - On error: ("", "", error message)
-    """
-    if not isinstance(track_obj, dict):
-        return "", "", "Invalid track object (must be dict)"
-    name = track_obj.get("name", "")
-    if not name:
-        return "", "", "Track missing 'name' field"
-    artist = track_obj.get("artist", "")
-    return name, artist, None
-
-
 def _detect_id_type(id_str: str) -> str:
     """Detect the type of an Apple Music ID.
 
@@ -1305,11 +1253,6 @@ def _resolve_track(track: str, artist: str = "") -> list[ResolvedInput]:
 def _resolve_album(album: str, artist: str = "") -> list[ResolvedInput]:
     """Convenience wrapper for album resolution."""
     return _resolve_input(album, EntityType.ALBUM, artist)
-
-
-def _resolve_artist(artist: str) -> list[ResolvedInput]:
-    """Convenience wrapper for artist resolution."""
-    return _resolve_input(artist, EntityType.ARTIST, "")
 
 
 def _build_track_results(
