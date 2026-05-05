@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.2] - 2026-05-04
+
+### Changed
+
+- **`ui_add_to_library` rewritten with popover-canonical-match flow.** The previous Top Results-based approach was unreliable on macOS 26: Apple's Top Results ranking lottery sometimes surfaced only Album rows for our query, sometimes the Song row had no Add to Library button (only `[play]` + `[More]`), and "Hong Kong" by Gorillaz / Holocene by Bon Iver consistently failed to expose the per-row +. The new flow uses Music.app's autocomplete pop-over (the suggestions that appear as you type) which exposes structured `{Title}` + `Song · {Artist}` rows — canonical (name, artist) match, no ranking ambiguity. CoreGraphics-clicking the matched pop-over row navigates to the song's detail page where the per-row Add to Library button has stable accessibility description `"Add to Library"`. Validate-before-act at every step: pop-over visible, row matched, navigation completed (track group present in album section), button visible after hover with the EXACT expected description before clicking. Refuses to click anything else (Favorite, Download, More, Bon-Iver-artist-link). Signature change: `ui_add_to_library(name, artist="")` — artist is now a meaningful parameter for canonical disambiguation.
+- **`ui_add_to_playlist` removed its Top Results pre-search** — now goes straight to popover via the rewritten `ui_add_to_library`. Splits free-form `"Track - Artist"` queries automatically; strips trailing artist tokens when artist is supplied separately.
+
+### Fixed
+
+- **Mid-poll re-hover in `_hover_then_click_subelement`** to catch macOS 26 dropped `mouseMoved` events. The 2-pixel nudge wasn't always sufficient — empirically observed that hover-revealed buttons sometimes failed to appear within the 1.5s poll window. New behavior re-hovers halfway through the poll if the inner element still isn't visible.
+
+### Internal
+
+- **Live UI integration tests** (opt-in via `TEST_UI=1` + `-m ui`) — `TestUIFlowsLive` covers the full search → add-to-library → add-to-playlist chain. Candidate-track fallback (picks the first of several known-indexed tracks not already in your library AND surfacing as Song row in pop-over). Strict per-test cleanup removes the test track from playlist + library; `teardown_class` deletes `_UI_TEST_PLAYLIST_`. Verified 3 passed locally on macOS 26.
+- **Auto-release + auto-publish chain validated end-to-end** — pipeline landed in [#18](https://github.com/epheterson/mcp-applemusic/pull/18) and [#19](https://github.com/epheterson/mcp-applemusic/pull/19): pushing a version bump to `main` now auto-creates the matching tag + GitHub Release, then dispatches `publish.yml` which uploads the sdist/wheel to PyPI via Trusted Publishing. v0.10.2 is the proving release for the publish step.
+
 ## [0.10.1] - 2026-05-04
 
 ### Fixed

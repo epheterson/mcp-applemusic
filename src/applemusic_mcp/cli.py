@@ -4,7 +4,6 @@ import argparse
 import json
 import sys
 import time
-from pathlib import Path
 
 from .auth import (
     get_config_dir,
